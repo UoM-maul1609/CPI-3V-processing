@@ -1,0 +1,35 @@
+Brief:
+	*CPI3V processing code
+	*A collection of files to process the roi files from the CPI3V
+	*Extracts data blocks from *.roi files and saves
+	*Processes the image data to file particle properties, boundaries, etc.
+	*Writes images to png files for viewing
+	*Calculates time-series of concentrations, segregated by particle properties
+Running code:
+	*MATLAB: in the directory /matlab there is code for MATLAB
+	*edit the script batchProcess.m to point to the directory where the raw data are
+	 (look at the "path1" variable)
+	*edit the script batchProcess.m to point to the raw data files 
+	 (look at the "filename1" variable)
+	*type "batchProcess" at the MATLAB command prompt.
+Using code:
+    *The code has been written by Dr Paul Connolly, University of Manchester. 
+    *It is available for collaborative use.
+    *Please cite the original source of the code when using.
+Data output:
+	* a *.mat file is created for every *.roi processed and contain the image data in a
+	  nice format for doing later analysis
+	* a file called "full_backgrounds.mat" is also created, which contains all the 
+	 background images in the files. If none are found the code will crash.
+	* a folder with the date and "_gtxxx" will be created which contains images of 
+		particles
+	* a file called "timeseries.mat" will be created, which contains the processed
+	  timeseries data, which is a struct containing arrays of data:
+	  	 *conc2ar is the concentration binned by time, particle size and particle roundness
+	  	 *conc2 is the concentration binned by time and particle size 
+	  	 *conc is the concentration binned by time
+Contributing development:
+	* Plans is to add code so that the user can use the Python language
+	* Contact the code owner to contribute ideas. 
+	
+
