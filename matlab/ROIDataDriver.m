@@ -4,7 +4,7 @@ function [bytes,house,images,rois,ushort,Header,I,R,H,t_range]=...
 FULL_BG=[];
 t_min=1e9;
 t_max=0;
-save_files=false;
+save_files=true;
 
 disp('=========================1st sweep================================');
 for i=1:length(filename)
