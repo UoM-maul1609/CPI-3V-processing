@@ -21,7 +21,7 @@ for i=1:length(filename1)
     
     % save to file
     disp('Saving to file...');
-    save([path,strrep(filename{i},'.roi','.mat')],...
+    save([path1,strrep(filename1{i},'.roi','.mat')],...
         'dat','-append');
     disp('done');
 end
