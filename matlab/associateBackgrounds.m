@@ -23,7 +23,7 @@ for i=1:length(ROI_N.IMAGE)
     else
         Timecur=ROI_N.Time(i);
         %Times=ROI_N.Times(ind);
-        jj=interp1(FULL_BG.Time,ind,Timecur,'nearest');
+        jj=interp1(FULL_BG.Time,ind,Timecur,'nearest','extrap');
     end
     
     BG(i).BG(:,:)=...
