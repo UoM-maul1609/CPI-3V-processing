@@ -9,7 +9,7 @@ disp('====================calculating timeseries=========================');
 
 disp('Set-up arrays');
 dt2=dt/86400;
-timeser.Time=t_range(1):dt2:(t_range(2)+dt);
+timeser.Time=t_range(1):dt2:(t_range(2)+dt2);
 nt=length(timeser.Time);
 timeser.size1=0:ds:2300;
 timeser.size2=timeser.size1+ds;
@@ -98,7 +98,7 @@ for i=1:length(filename)
     % scale by sample volume
     dead=repmat(timeser.deadtimes,[1 nl na]);
     nimages=repmat(timeser.nimages,[1 nl na]);
-    timeser.conc2ar=timeser.conc2ar./((dt2-dead).*vel.*sa+nimages.*sv)
+    timeser.conc2ar=timeser.conc2ar./((dt-dead).*vel.*sa+nimages.*sv)
     
     timeser.conc2=sum(timeser.conc2ar,3);
     timeser.conc=sum(timeser.conc2,2);
