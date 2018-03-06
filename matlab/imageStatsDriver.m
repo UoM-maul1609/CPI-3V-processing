@@ -1,4 +1,4 @@
-function imageStatsDriver(path1,filename1)
+function imageStatsDriver(path1,filename1,find_particle_edges)
 
 disp('====================particle properties===========================');
 for i=1:length(filename1)
@@ -14,7 +14,7 @@ for i=1:length(filename1)
     
     % Particle properties +++++++++++++++++++++++++++++++++++++++++++++++++
     disp('calculating particle properties...');
-    dat=imageStats(ROI_N,BG);
+    dat=imageStats(ROI_N,BG,find_particle_edges);
     disp('done');
     %----------------------------------------------------------------------
     

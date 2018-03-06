@@ -1,4 +1,4 @@
-function dat=imageStats(ROI_N,BG)
+function dat=imageStats(ROI_N,BG,b_flag)
 
 warning off;
 ind=find(ROI_N.imageType==89);
@@ -71,7 +71,7 @@ for i=ind'
     dat.centroid(i,:)=STATS.Centroid;
     boundaries=boundary{k1};
     
-    foc=calculate_focus(boundaries,arr); % maybe focus less than 12?
+    foc=calculate_focus(boundaries,arr,b_flag); % maybe focus less than 12?
 
     dat.foc(i)=foc;
     
@@ -79,7 +79,7 @@ for i=ind'
 end
 close(h);
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-function foc=calculate_focus(boundaries,IM)
+function foc=calculate_focus(boundaries,IM,b_flag)
 persistent boundaries2 xs ys focus r c;
 
 
@@ -157,7 +157,9 @@ catch
 end
 % foc.foci=focus;
 foc.focus=nanmean(focus);
-% foc.xs=xs;
-% foc.ys=ys;
-% foc.boundaries=boundaries2;
+if b_flag
+   foc.xs=xs;
+   foc.ys=ys;
+   foc.boundaries=boundaries2;
+end
 % foc

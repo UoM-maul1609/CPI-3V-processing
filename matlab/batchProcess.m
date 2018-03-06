@@ -3,6 +3,7 @@ min_len=20; % minimum length for particle images
 dt=10;  % resolution on time-step for concentrations (take with a pince of salt)
 ds=10;  % resolution for size bins
 vel=100;    % air speed - assumed fixed, used in calcTimeseriesDriver
+find_particle_edges=false; % output the boundary of the particles
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/';
             % path to raw data
@@ -19,7 +20,7 @@ outputfile='timeseries.mat';
 
 %++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 % find image properties, edge detection, etc
-imageStatsDriver(path1,filename1);
+imageStatsDriver(path1,filename1,find_particle_edges);
 %--------------------------------------------------------------------------
 
 %++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
