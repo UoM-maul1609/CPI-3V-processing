@@ -8,9 +8,13 @@ dat.wid=zeros(l1,1);
 dat.area=zeros(l1,1);
 dat.round=zeros(l1,1);
 dat.centroid=zeros(l1,2);
-dat.foc=repmat(struct('focus',NaN),[l1 1]);
-% dat.foc=repmat(struct('focus',NaN,'xs',zeros(20,59),'ys',zeros(20,59), ...
-%     'boundaries',NaN.*zeros(60,2)),[l1 1]);
+if ~b_flag
+   dat.foc=repmat(struct('focus',NaN),[l1 1]);
+else
+   ld=3;
+   dat.foc=repmat(struct('focus',NaN,'xs',zeros(ld,59),'ys',zeros(ld,59), ...
+     'boundaries',NaN.*zeros(60,2)),[l1 1]);
+end
 dat.Time=ROI_N.Time';
 
 h = waitbar(0,'Please wait...');
