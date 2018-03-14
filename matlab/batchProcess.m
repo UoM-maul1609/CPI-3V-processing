@@ -1,5 +1,5 @@
 foc_crit=12; % critical value of focus for an image
-min_len=20; % minimum length for particle images
+min_len=100; % minimum length for particle images
 dt=10;  % resolution on time-step for concentrations (take with a pince of salt)
 ds=10;  % resolution for size bins
 vel=100;    % air speed - assumed fixed, used in calcTimeseriesDriver

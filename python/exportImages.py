@@ -93,7 +93,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
             
             if ((maxy<-interxy) or (daynew != dayold)):
                 h.remove()
-                time.sleep(1)
+                #time.sleep(1)
                 maxx=0.
                 maxy=1.
                 runx=0.
@@ -123,7 +123,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
                 str1=str(pytime.time())
                 hour1=pytime.hour
                 h.text(0,0.95,str1[0:12],ha='left',va='center', \
-                       transform=h.transAxes,fontsize=2.5)
+                       transform=h.transAxes,fontsize=2)
                 h.text(0,0.05,str('%d' % dat['len'][0,0][i,0])+ 'um', \
                        ha='left',va='center',transform=h.transAxes,fontsize=3)
 
@@ -141,7 +141,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
     if not os.path.exists(pathname + filename1[0:8]+'_pygt'+str(size_thresh)):
         os.makedirs(pathname + filename1[0:8]+'_pygt'+str(size_thresh))
     plt.savefig(pathname + filename1[0:8]+'_pygt'+\
-                str(size_thresh)+'/'+ filename1,dpi='figure')
+                str(size_thresh)+'/'+ filename1,dpi=300)
     plt.close()
     
     pbar.close()
