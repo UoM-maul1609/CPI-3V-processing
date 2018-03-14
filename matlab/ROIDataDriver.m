@@ -1,7 +1,8 @@
 function [bytes,house,images,rois,ushort,Header,I,R,H,t_range]=...
     ROIDataDriver(path,filename,dt)
 
-FULL_BG=[];
+FULL_BG.IMAGE=[];
+FULL_BG.Time=[];
 t_min=1e9;
 t_max=0;
 save_files=true;
@@ -86,7 +87,11 @@ for i=1:length(filename)
     %++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     % Backgrounds +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     disp('Getting backgrounds...');
-    FULL_BG=[FULL_BG,fullBackgrounds(ROI_N)]; % append here
+    FULL_BG1=fullBackgrounds(ROI_N);
+    if(length(FULL_BG1.Time))
+    	FULL_BG.IMAGE=[FULL_BG.IMAGE,FULL_BG1.IMAGE];
+    	FULL_BG.Time=[FULL_BG.Time,FULL_BG1.Time];
+    end
     disp('done');
     %--------------------------------------------------------------------------
 

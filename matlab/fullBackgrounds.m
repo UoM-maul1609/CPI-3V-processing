@@ -5,7 +5,8 @@ function FULL_BG=fullBackgrounds(ROI_N)
 ind=find(ROI_N.imageType==19);
 if(length(ind) == 0)
     disp('no backgrounds in this file');
-    FULL_BG=[];
+    FULL_BG.IMAGE=[];
+    FULL_BG.Time=[];
     return;
 end
 BG=ROI_N.IMAGE(ind);

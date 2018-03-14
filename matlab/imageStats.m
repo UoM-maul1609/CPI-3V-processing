@@ -12,8 +12,10 @@ if ~b_flag
    dat.foc=repmat(struct('focus',NaN),[l1 1]);
 else
    ld=3;
-   dat.foc=repmat(struct('focus',NaN,'xs',zeros(ld,59),'ys',zeros(ld,59), ...
-     'boundaries',NaN.*zeros(60,2)),[l1 1]);
+   dat.foc=repmat(struct('focus',NaN, ...
+     'boundaries',NaN.*zeros(30,2)),[l1 1]);
+%    dat.foc=repmat(struct('focus',NaN,'xs',zeros(ld,29),'ys',zeros(ld,29), ...
+%      'boundaries',NaN.*zeros(30,2)),[l1 1]);
 end
 dat.Time=ROI_N.Time';
 
@@ -162,8 +164,8 @@ end
 % foc.foci=focus;
 foc.focus=nanmean(focus);
 if b_flag
-   foc.xs=xs;
-   foc.ys=ys;
+   %foc.xs=xs;
+   %foc.ys=ys;
    foc.boundaries=boundaries2;
 end
 % foc

@@ -40,7 +40,7 @@ HOUSE.Time=(cat(1,H.TimeMSW).*16.^8+ ...
     cat(1,H.TimeISW).*16.^4+...
     cat(1,H.TimeLSW));
 Rdgs=cat(2,H.Readings1);
-HOUSE.deadtime=Rdgs(67,:);
+HOUSE.deadtime=Rdgs(67,:)*0.000341333;
 %--------------------------------------------------------------------------
 
 

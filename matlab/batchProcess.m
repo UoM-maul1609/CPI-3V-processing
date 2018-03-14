@@ -14,8 +14,8 @@ filename1={'20180109105546-2.roi',...
 outputfile='timeseries.mat';
 %++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 % extract ROI data from files and prcess with backgrounds
-[bytes,house,images,rois,ushort,Header,I,R,H,t_range]=...
-    ROIDataDriver(path1,filename1,dt);
+% [bytes,house,images,rois,ushort,Header,I,R,H,t_range]=...
+%     ROIDataDriver(path1,filename1,dt);
 %--------------------------------------------------------------------------
 
 %++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
