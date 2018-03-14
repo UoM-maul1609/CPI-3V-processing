@@ -4,10 +4,11 @@ dt=10  # resolution on time-step for concentrations (take with a pince of salt)
 ds=10  # resolution for size bins
 vel=100    # air speed - assumed fixed, used in calcTimeseriesDriver
 find_particle_edges=True # output the boundary of the particles
+command_line_path=True # use the commandline to define the path of files
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
             # path to raw data
-filename1=['20180109105546-2.roi', 
+filename1=['20180109105546.roi', 
     '20180109120515.roi']
             # list of filenames to process
 
@@ -18,6 +19,15 @@ from ROIDataDriver import ROIDataDriver
 from imageStatsDriver import imageStatsDriver
 from exportImagesDriver import exportImagesDriver
 from calcTimeseriesDriver import calcTimeseriesDriver
+
+# get the files / path from commandline input
+if command_line_path:
+    import sys
+    path1=sys.argv[1]
+    from os import listdir
+    #from os.path import isfile, join
+    filename1 = [f for f in listdir(path1) if f.endswith(".roi")]
+
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # extract ROI data from files and prcess with backgrounds

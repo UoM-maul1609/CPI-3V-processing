@@ -5,6 +5,11 @@ Running code:
 	*edit the script batchProcess.py to point to the raw data files 
 	 (look at the "filename1" variable)
 	*type "python batchProcess.py" at the command prompt.
+	****
+	*if command_line_path is set to True (in batchProcess.py), then you can put the rois that need processing
+	 in one directory and type *python batchProcess.py <path>* at the commandline. This should process the 
+	 files (note that I have not check if the paths work on a windows system (i.e. back-slashes instead of 
+	 forward slashes).
 Data output:
 	* a *.mat file is created for every *.roi processed and contain the image data in a
 	  nice format for doing later analysis

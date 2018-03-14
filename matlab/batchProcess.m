@@ -7,7 +7,7 @@ find_particle_edges=false; % output the boundary of the particles
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/';
             % path to raw data
-filename1={'20180109105546-2.roi',...
+filename1={'20180109105546.roi',...
     '20180109120515.roi'};
             % list of filenames to process
 
