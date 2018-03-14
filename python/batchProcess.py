@@ -31,14 +31,14 @@ if command_line_path:
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # extract ROI data from files and prcess with backgrounds
-#(bytes,house,images,rois,ushort,Header,I,R,H,t_range)= \
-#   ROIDataDriver(path1,filename1,dt)
+(bytes,house,images,rois,ushort,Header,I,R,H,t_range)= \
+   ROIDataDriver(path1,filename1,dt)
 #--------------------------------------------------------------------------
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # find image properties, edge detection, etc
-#imageStatsDriver(path1,filename1,find_particle_edges)
+imageStatsDriver(path1,filename1,find_particle_edges)
 #--------------------------------------------------------------------------
 
 
