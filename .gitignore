@@ -3,5 +3,6 @@
 .DS_Store
 __pycache__/
 *.py[cod]
-python
-*.py
+*.rem
+.ipynb_checkpoints/
+.ipynb_checkpoints/batchProcess-checkpoint.py
