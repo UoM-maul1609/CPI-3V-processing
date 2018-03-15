@@ -1,3 +1,6 @@
+Python modules needed:
+	*sys, os, numpy, struct, scipy, time, tqdm, datetime, matplotlib, copy, cv2, skimage
+	*tested on python3
 Running code:
 	*python: in the directory /python there is code for python
 	*edit the script batchProcess.py to point to the directory where the raw data are

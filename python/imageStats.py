@@ -51,7 +51,7 @@ def imageStats(ROI_N,BG,b_flag):
         inda_r,inda_c=np.where(arr<=-15)
         indb_r,indb_c=np.where(arr>-15)
         
-        if len(inda_r)<=3:
+        if len(inda_r)<=5:
             continue
         
         arr=(arr-np.min(arr))

@@ -89,7 +89,7 @@ def calcTimeseriesDriver(path1,filename1,foc_crit,t_range,dt,ds,vel,outputfile):
             twin=f(np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.]))
             indho,=np.where((HOUSE['Time'][0,0][0,:]  >=twin[0]) & \
                             (HOUSE['Time'][0,0][0,:]< twin[1]))
-            timeser['deadtimes'][j]=np.sum(HOUSE['deadtime'][0,0][indho,0])
+            timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
     
             timeser['nimages'][j]=len(indim)
             
@@ -125,8 +125,8 @@ def calcTimeseriesDriver(path1,filename1,foc_crit,t_range,dt,ds,vel,outputfile):
         nimages=np.transpose(np.tile(timeser['nimages'].T,(nl,na,1)), (2,0,1))
         timeser['conc2ar']=timeser['conc2ar']/((dt-dead)*vel*sa+nimages*sv)
         
-        timeser['conc2']=np.sum(timeser['conc2ar'],axis=2)
-        timeser['conc']=np.sum(timeser['conc2'],axis=1)
+        timeser['conc2']=np.nansum(timeser['conc2ar'],axis=2)
+        timeser['conc']=np.nansum(timeser['conc2'],axis=1)
         
         
         
