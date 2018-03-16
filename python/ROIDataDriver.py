@@ -138,7 +138,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
               FULL_BG['IMAGE'][0,0]=np.append(FULL_BG['IMAGE'][0,0], \
                  FULL_BG1['IMAGE'][0,0],axis=1)
               FULL_BG['Time'][0,0]=np.append(FULL_BG['Time'][0,0], \
-                     FULL_BG1['Time'][0,0],axis=1)
+                     FULL_BG1['Time'][0,0],axis=0)
       print('done')
       #--------------------------------------------------------------------------
 
