@@ -10,12 +10,16 @@ import numpy as np
 import os
 from scipy.interpolate import interp1d
 
-def calcTimeseriesDriver(path1,filename1,foc_crit,t_range,dt,ds,vel,outputfile):
+def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile):
     
     # note, numpy.histogramdd might be better
     save_files=True
     sa=1280.*1024./np.sqrt(2.)*2.3e-6**2  # sample area of image perp to flow
     sv=sa*np.sqrt(2.)*3e-3             # sample volume of one image
+
+    dataload=sio.loadmat(path1 + 'full_backgrounds.mat',\
+                         variable_names=['t_range'])
+    t_range=dataload['t_range']
 
     print('====================calculating timeseries=========================')
 

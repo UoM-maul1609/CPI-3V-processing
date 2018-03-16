@@ -7,6 +7,7 @@ find_particle_edges=True # output the boundary of the particles
 command_line_path=True # use the commandline to define the path of files
 process_sweep1_if_exist=False # if the *.roi files have been extracted once,
                               #still do if True
+process_roi_driver=False
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
             # path to raw data
@@ -35,13 +36,14 @@ if command_line_path:
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# extract ROI data from files and prcess with backgrounds
-(bytes1,house,images,rois,ushort,Header,I,R,H,t_range)= \
-   ROIDataDriver(path1,filename1,dt,process_sweep1_if_exist)
-del bytes1, house, images, rois, ushort, Header, I, R, H
-# Garbage collection:
-gc.collect()
-del gc.garbage[:]
+if process_roi_driver:
+    # extract ROI data from files and prcess with backgrounds
+    (bytes1,house,images,rois,ushort,Header,I,R,H,t_range)= \
+       ROIDataDriver(path1,filename1,dt,process_sweep1_if_exist)
+    del bytes1, house, images, rois, ushort, Header, I, R, H
+    # Garbage collection:
+    gc.collect()
+    del gc.garbage[:]
 #--------------------------------------------------------------------------
 
 
@@ -59,5 +61,5 @@ exportImagesDriver(path1,filename1,foc_crit,min_len)
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # calculate number concentrations one day at a time?
-calcTimeseriesDriver(path1,filename1,foc_crit,t_range[0],dt,ds,vel,outputfile)
+calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile)
 #--------------------------------------------------------------------------
