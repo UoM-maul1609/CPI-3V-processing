@@ -24,6 +24,7 @@ from calcTimeseriesDriver import calcTimeseriesDriver
 if command_line_path:
     import sys
     path1=sys.argv[1]
+    #path1='/tmp/cpi_struct/'
     from os import listdir
     #from os.path import isfile, join
     filename1 = [f for f in listdir(path1) if f.endswith(".roi")]
@@ -31,7 +32,7 @@ if command_line_path:
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # extract ROI data from files and prcess with backgrounds
-(bytes,house,images,rois,ushort,Header,I,R,H,t_range)= \
+(bytes1,house,images,rois,ushort,Header,I,R,H,t_range)= \
    ROIDataDriver(path1,filename1,dt)
 #--------------------------------------------------------------------------
 

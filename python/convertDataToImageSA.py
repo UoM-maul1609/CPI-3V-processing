@@ -1,6 +1,6 @@
 import numpy as np
 import struct
-def convertDataToImageSA(bytes,ushort,order,images):
+def convertDataToImageSA(bytes1,ushort,order,images):
     # https://stackoverflow.com/questions/3648442/how-to-define-a-structure-like-in-c
     #https://stackoverflow.com/questions/5824530/python-struct-arrays
     #https://docs.scipy.org/doc/numpy-1.9.3/user/basics.rec.html
@@ -106,16 +106,16 @@ def convertDataToImageSA(bytes,ushort,order,images):
                        # but this has been taken into account in the indexing
         # although ulong, it appears uint is needed here:
         #https://docs.python.org/2/library/struct.html
-        # ulong would be 8 bytes
-        I['ulItemSize'][i],=struct.unpack('I', bytes[im+2:im+2+4]) 
+        # ulong would be 8 bytes1
+        I['ulItemSize'][i],=struct.unpack('I', bytes1[im+2:im+2+4]) 
         I['usVersion'][i]=ushort[images[i]+3]
         I['usROIsCount'][i]=ushort[images[i]+4]
-        I['ulTotROISize'][i],=struct.unpack('I', bytes[im+10:im+10+4]) 
+        I['ulTotROISize'][i],=struct.unpack('I', bytes1[im+10:im+10+4]) 
         
-        I['day'][i]=bytes[im+14]
-        I['hour'][i]=bytes[im+15]
-        I['minute'][i]=bytes[im+16]
-        I['second'][i]=bytes[im+17]
+        I['day'][i]=bytes1[im+14]
+        I['hour'][i]=bytes1[im+15]
+        I['minute'][i]=bytes1[im+16]
+        I['second'][i]=bytes1[im+17]
 
         I['msecond'][i]=ushort[images[i]+9]
         I['ImageType'][i]=ushort[images[i]+10]
@@ -127,37 +127,37 @@ def convertDataToImageSA(bytes,ushort,order,images):
         I['BGRate'][i]=ushort[images[i]+15]
         I['usBkgPDSThresh'][i]=ushort[images[i]+16]
         
-        I['ulFrmsProc'][i],=struct.unpack('I', bytes[im+34:im+34+4]) 
+        I['ulFrmsProc'][i],=struct.unpack('I', bytes1[im+34:im+34+4]) 
         
-        I['IThreshold'][i]=bytes[im+38]
-        I['ROIError'][i]=bytes[im+39]
+        I['IThreshold'][i]=bytes1[im+38]
+        I['ROIError'][i]=bytes1[im+39]
         
         I['ROIMinSize'][i]=ushort[images[i]+20]
         
-        I['ROIAspectRatio'][i],=struct.unpack('f', bytes[im+42:im+42+4]) 
-        I['ROIFillRatio'][i],=struct.unpack('f', bytes[im+46:im+46+4]) 
+        I['ROIAspectRatio'][i],=struct.unpack('f', bytes1[im+42:im+42+4]) 
+        I['ROIFillRatio'][i],=struct.unpack('f', bytes1[im+46:im+46+4]) 
         
-        I['ROIFCount'][i],=struct.unpack('I', bytes[im+50:im+50+4]) 
+        I['ROIFCount'][i],=struct.unpack('I', bytes1[im+50:im+50+4]) 
         
-        I['ucImgMean'][i]=bytes[im+54]
-        I['ucBkgMean'][i]=bytes[im+55]
+        I['ucImgMean'][i]=bytes1[im+54]
+        I['ucBkgMean'][i]=bytes1[im+55]
         
         I['Spare1'][i]=ushort[images[i]+28]
         I['ROIXPad'][i]=ushort[images[i]+29]
         I['ROIYPad'][i]=ushort[images[i]+30]
         
-        I['ulStrobeCount'][i],=struct.unpack('I', bytes[im+62:im+62+4]) 
-        I['ulFrmsSaved'][i],=struct.unpack('I', bytes[im+66:im+66+4]) 
+        I['ulStrobeCount'][i],=struct.unpack('I', bytes1[im+62:im+62+4]) 
+        I['ulFrmsSaved'][i],=struct.unpack('I', bytes1[im+66:im+66+4]) 
 
-        I['ImgMinVal'][i]=bytes[im+70]
-        I['ImgMaxVal'][i]=bytes[im+71]
+        I['ImgMinVal'][i]=bytes1[im+70]
+        I['ImgMaxVal'][i]=bytes1[im+71]
     
-        I['ulROIsSaved'][i],=struct.unpack('I', bytes[im+72:im+72+4]) 
+        I['ulROIsSaved'][i],=struct.unpack('I', bytes1[im+72:im+72+4]) 
 
         I['usPDSChkSumFlag'][i]=ushort[images[i]+38]
         I['usPDSHead'][i]=np.reshape(ushort[images[i]+39:images[i]+41+1],(3,1))
         
-        I['ulTime'][i],=struct.unpack('I', bytes[im+84:im+84+4]) 
+        I['ulTime'][i],=struct.unpack('I', bytes1[im+84:im+84+4]) 
         I['ArrivalTime1'][i]=ushort[images[i]+43]
         I['ArrivalTime2'][i]=ushort[images[i]+44]
 

@@ -2,7 +2,7 @@ import numpy as np
 import struct
 from datetime import datetime
 from datetime import timedelta
-def postProcess(bytes,rois,R,H,I,Header):
+def postProcess(bytes1,rois,R,H,I,Header):
     # use dictionaries for storing info
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # image times in hk format
@@ -69,7 +69,7 @@ def postProcess(bytes,rois,R,H,I,Header):
         numberOfChars=X*Y
     
         chars1=bytearray(
-                bytes[(rois[i]+1)*2-1+33*2-14+1:(rois[i]+1)*2-1+33*2-14+1+numberOfChars])
+                bytes1[(rois[i]+1)*2-1+33*2-14+1:(rois[i]+1)*2-1+33*2-14+1+numberOfChars])
         #IM=np.reshape(chars1,(X,Y))
         ROI_N['IMAGE'][i]['IM']=np.transpose(np.reshape(chars1,(Y,X)))
         

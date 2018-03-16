@@ -1,5 +1,5 @@
 Python modules needed:
-	*sys, os, numpy, struct, scipy, time, tqdm, datetime, matplotlib, copy, cv2, skimage
+	*sys, os, numpy, struct, scipy, time, tqdm, datetime, matplotlib, copy, cv2 / opencv-python, skimage
 	*tested on python3
 Running code:
 	*python: in the directory /python there is code for python

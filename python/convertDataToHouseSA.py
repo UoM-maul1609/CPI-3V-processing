@@ -1,6 +1,6 @@
 import numpy as np
 import struct
-def convertDataToHouseSA(bytes,ushort,order,house):
+def convertDataToHouseSA(bytes1,ushort,order,house):
     # https://stackoverflow.com/questions/3648442/how-to-define-a-structure-like-in-c
     #https://stackoverflow.com/questions/5824530/python-struct-arrays
     #https://docs.scipy.org/doc/numpy-1.9.3/user/basics.rec.html

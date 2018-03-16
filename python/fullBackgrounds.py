@@ -25,7 +25,7 @@ def fullBackgrounds(ROI_N):
     
     #https://stackoverflow.com/questions/16475384/rename-a-dictionary-key
     for i in range(len(FULL_BG['Time'])):
-        FULL_BG['IMAGE'][i]['BG']=ROI_N['IMAGE'][i]['IM']
+        FULL_BG['IMAGE'][i]['BG']=ROI_N['IMAGE'][ind[i]]['IM']
     #--------------------------------------------------------------------------
     
     
