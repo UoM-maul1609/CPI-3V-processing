@@ -190,7 +190,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
       #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
       # Assocate backgrounds ++++++++++++++++++++++++++++++++++++++++++++++++
-      print('Associate backgrounds...')
+      print('Associate backgrounds...' + filename1[i])
       BG=associateBackgrounds(ROI_N,FULL_BG)
       print('done')
       #----------------------------------------------------------------------
