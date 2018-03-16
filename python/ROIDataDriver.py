@@ -10,6 +10,8 @@ from associateBackgrounds import associateBackgrounds
 import scipy.io as sio
 import gc
 import os.path
+import tempfile
+
 
 def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
    t_min=1e9
@@ -22,6 +24,14 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
    for i in range(0,len(filename)):
       if (os.path.isfile(path1 + filename[i].replace('.roi','.mat')) 
           and not(process_sweep1_if_exist)):
+          
+          dataload=sio.loadmat(path1+'full_backgrounds.mat', \
+                               variable_names=['FULL_BG','t_range'])
+          FULL_BG=dataload['FULL_BG']
+          t_range1=dataload['t_range']
+          t_min=t_range1[0,0]
+          t_max=t_range1[0,1]
+          
           print("Skipping file..." + filename[i])
           bytes1,house,images,rois,ushort,Header,I,R,H = \
               False, False, False, False, False, False, False, False, False
@@ -30,7 +40,6 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
       fid = open(path1 + filename[i], "rb")
       print("Reading file..." + filename[i])
       bytes1=fid.read()
-      fid.close()
       print("done")
       
       lb=len(bytes1)
@@ -116,8 +125,20 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
       print('Getting backgrounds...')
       FULL_BG1=fullBackgrounds(ROI_N) # append here
       if len(FULL_BG1['Time']):
-          FULL_BG['IMAGE']=np.append(FULL_BG['IMAGE'],FULL_BG1['IMAGE'])
-          FULL_BG['Time']=np.append(FULL_BG['Time'],FULL_BG1['Time'])
+          temp_name=tempfile.mktemp()
+          sio.savemat(temp_name,{'FULL_BG':FULL_BG1})
+          dataload=sio.loadmat(temp_name,variable_names=['FULL_BG'])
+          FULL_BG1=dataload['FULL_BG']
+          
+          
+          r=np.shape(FULL_BG['IMAGE'])
+          if len(r)==1:
+              FULL_BG=FULL_BG1
+          else: # append
+              FULL_BG['IMAGE'][0,0]=np.append(FULL_BG['IMAGE'][0,0], \
+                 FULL_BG1['IMAGE'][0,0],axis=1)
+              FULL_BG['Time'][0,0]=np.append(FULL_BG['Time'][0,0], \
+                     FULL_BG1['Time'][0,0],axis=1)
       print('done')
       #--------------------------------------------------------------------------
 

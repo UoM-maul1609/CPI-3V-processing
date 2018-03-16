@@ -1,6 +1,6 @@
 import numpy as np
 import copy
-
+ 
 def fullBackgrounds(ROI_N):
 
     #https://docs.scipy.org/doc/numpy-1.9.3/user/basics.rec.html
@@ -27,6 +27,7 @@ def fullBackgrounds(ROI_N):
     for i in range(len(FULL_BG['Time'])):
         FULL_BG['IMAGE'][i]['BG']=ROI_N['IMAGE'][ind[i]]['IM']
     #--------------------------------------------------------------------------
+    
     
     
     return FULL_BG
