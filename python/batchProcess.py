@@ -6,6 +6,7 @@ vel=100    # air speed - assumed fixed, used in calcTimeseriesDriver
 find_particle_edges=True # output the boundary of the particles
 command_line_path=True # use the commandline to define the path of files
 
+
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
             # path to raw data
 filename1=['20180109105546.roi', 

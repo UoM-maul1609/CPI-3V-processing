@@ -13,7 +13,7 @@ import os
 from datetime import datetime
 from datetime import timedelta
 import tqdm
-
+import gc
 
 def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
 
@@ -135,7 +135,11 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
                 runy=maxy
                 maxy=1.
 
-            
+        del ROI_N, dat
+        # Garbage collection:
+        gc.collect()
+        del gc.garbage[:]
+    
 
     # file output
     if not os.path.exists(pathname + filename1[0:8]+'_pygt'+str(size_thresh)):

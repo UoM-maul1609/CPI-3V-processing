@@ -16,7 +16,7 @@ def associateBackgrounds(ROI_N,FULL_BG):
        if len(ind)==1:
            jj=int(ind)
        else:
-          Timecur=ROI_N['Time'][0,0][0,i]
+          Timecur=ROI_N['Time'][0,0][i,0]
           #https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.interp1d.html
           f=interp1d(FULL_BG['Time'],ind,kind='nearest',fill_value='extrapolate')
           jj=int(f(Timecur))

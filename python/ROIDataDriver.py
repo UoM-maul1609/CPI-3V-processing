@@ -8,6 +8,7 @@ from postProcess import postProcess
 from fullBackgrounds import fullBackgrounds
 from associateBackgrounds import associateBackgrounds
 import scipy.io as sio
+import gc
 
 def ROIDataDriver(path1,filename,dt):
    t_min=1e9
@@ -21,6 +22,7 @@ def ROIDataDriver(path1,filename,dt):
       fid = open(path1 + filename[i], "rb")
       print("Reading file..." + filename[i])
       bytes1=fid.read()
+      fid.close()
       print("done")
       
       lb=len(bytes1)
@@ -38,9 +40,12 @@ def ROIDataDriver(path1,filename,dt):
       
       # append the two tuples
       ushort=ushort1+ushort2
+      
+      del ushort1, ushort2
       # append two nmpy arrays
       order=np.append(order1,order2)
-      
+
+      del order1, order2
       
       bytes1=struct.pack('H'*int(lb), *ushort) # the H means ushort int
       
@@ -67,6 +72,12 @@ def ROIDataDriver(path1,filename,dt):
       fid.close()
       #--------------------------------------------------------------------------
       
+      # Garbage collection:
+      # https://stackoverflow.com/questions/1316767/how-can-i-explicitly-free-memory-in-python
+      gc.collect()
+      del gc.garbage[:]
+      
+      
       #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
       #convert the bytes1 to Header, Images and ROI structs +++++++++++++++++++++
       print('Post-processing data, stage 1...')
@@ -78,6 +89,7 @@ def ROIDataDriver(path1,filename,dt):
       #--------------------------------------------------------------------------
       
       
+
       #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
       # extract the images, times, etc ++++++++++++++++++++++++++++++++++++++++++
       print('Post-processing data, stage 2...')
@@ -85,6 +97,10 @@ def ROIDataDriver(path1,filename,dt):
       print('done')
       #--------------------------------------------------------------------------
 
+
+      # Garbage collection:
+      gc.collect()
+      del gc.garbage[:]
 
 
       #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -115,6 +131,11 @@ def ROIDataDriver(path1,filename,dt):
           sio.savemat(path1 + 'full_backgrounds.mat',
                       {'FULL_BG':FULL_BG,'t_range':t_range})
           print('done')
+          
+      del ROI_N, HOUSE, IMAGE1
+      # Garbage collection:
+      gc.collect()
+      del gc.garbage[:]
 
 
    print('=========================2nd sweep================================')
@@ -151,7 +172,11 @@ def ROIDataDriver(path1,filename,dt):
 
 
 
-      
+      del ROI_N, HOUSE, IMAGE1, BG
+    
+      # Garbage collection:
+      gc.collect()
+      del gc.garbage[:]
 
    return (bytes1,house,images,rois,ushort,Header,I,R,H,t_range)
       

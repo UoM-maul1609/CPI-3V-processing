@@ -1,6 +1,6 @@
 Python modules needed:
 	*sys, os, numpy, struct, scipy, time, tqdm, datetime, matplotlib, copy, cv2 / opencv-python, skimage
-	*tested on python3
+	*tested on python3.6 (3.4 did not work, kept having Memory errors when using struct.pack)
 Running code:
 	*python: in the directory /python there is code for python
 	*edit the script batchProcess.py to point to the directory where the raw data are
