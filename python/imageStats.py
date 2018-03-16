@@ -119,7 +119,7 @@ def calculate_focus(boundaries,IM,b_flag):
         foc=np.zeros(1, dtype=[('focus', 'float')])
     else:
         foc=np.zeros(1, dtype=[('focus', 'float'),
-                                 ('boundaries','(30,2)float') ])
+                                 ('boundaries','(30,2)float32') ])
         #foc=np.zeros(1, dtype=[('focus', 'float'),
         #                         ('xs','('+str(ld)+',29)float'),
         #                         ('ys','('+str(ld)+',29)float'),
