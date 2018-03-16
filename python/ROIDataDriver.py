@@ -9,8 +9,9 @@ from fullBackgrounds import fullBackgrounds
 from associateBackgrounds import associateBackgrounds
 import scipy.io as sio
 import gc
+import os.path
 
-def ROIDataDriver(path1,filename,dt):
+def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
    t_min=1e9
    t_max=0.;
    save_files=True
@@ -19,6 +20,13 @@ def ROIDataDriver(path1,filename,dt):
    
    print("=========================1st sweep================================")
    for i in range(0,len(filename)):
+      if (os.path.isfile(path1 + filename[i].replace('.roi','.mat')) 
+          and not(process_sweep1_if_exist)):
+          print("Skipping file..." + filename[i])
+          bytes1,house,images,rois,ushort,Header,I,R,H = \
+              False, False, False, False, False, False, False, False, False
+          continue
+       
       fid = open(path1 + filename[i], "rb")
       print("Reading file..." + filename[i])
       bytes1=fid.read()
@@ -138,7 +146,12 @@ def ROIDataDriver(path1,filename,dt):
       del gc.garbage[:]
 
 
+
    print('=========================2nd sweep================================')
+   dataload=sio.loadmat(path1 + 'full_backgrounds.mat',
+                           variable_names=['FULL_BG','t_range'])
+   FULL_BG=dataload['FULL_BG']
+   t_range=dataload['t_range']
    for i in range(0,len(filename)):
       # load from file
       print('Loading from file...')
@@ -149,6 +162,7 @@ def ROIDataDriver(path1,filename,dt):
       ROI_N=dataload['ROI_N']
       HOUSE=dataload['HOUSE']
       IMAGE1=dataload['IMAGE1']
+      
       print('done')
 
 
