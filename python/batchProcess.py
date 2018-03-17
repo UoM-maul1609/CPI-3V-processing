@@ -34,17 +34,17 @@ if command_line_path:
     from os import listdir
     #from os.path import isfile, join
     filename1 = [f for f in listdir(path1) if f.endswith(".roi")]
-
+    del sys, listdir
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 if process_roi_driver:
     # extract ROI data from files and prcess with backgrounds
-    (bytes1,house,images,rois,ushort,Header,I,R,H,t_range)= \
+    (t_range)= \
        ROIDataDriver(path1,filename1,dt,process_sweep1_if_exist)
-    del bytes1, house, images, rois, ushort, Header, I, R, H
     # Garbage collection:
     gc.collect()
     del gc.garbage[:]
+del ROIDataDriver
 #--------------------------------------------------------------------------
 
 
@@ -52,12 +52,15 @@ if process_roi_driver:
 if process_image_stats:
     # find image properties, edge detection, etc
     imageStatsDriver(path1,filename1,find_particle_edges)
+
+del imageStatsDriver
 #--------------------------------------------------------------------------
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # export images
 exportImagesDriver(path1,filename1,foc_crit,min_len)
+del exportImagesDriver
 #--------------------------------------------------------------------------
 
 

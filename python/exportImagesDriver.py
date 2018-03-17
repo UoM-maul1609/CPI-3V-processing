@@ -19,7 +19,7 @@ def exportImagesDriver(path1,filename1,foc_crit,min_len):
     exportImages(path1,filename1,foc_crit,min_len,MAP2)
     print('done')
     #--------------------------------------------------------------------------
-        
+    del dataload, MAP2
 
     return
     

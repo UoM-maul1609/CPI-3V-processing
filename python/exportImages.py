@@ -41,6 +41,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
                            variable_names=['ROI_N','dat'])
         ROI_N=dataload['ROI_N']
         dat=dataload['dat']
+        del dataload
 
         ind,=np.where( (dat['len'][0,0][:,0]>size_thresh) & \
                       (dat['foc'][0,0]['focus'][0,:] >foc_crit) )

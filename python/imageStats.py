@@ -10,7 +10,7 @@ import cv2
 import scipy.signal as signal
 from skimage import measure
 from matplotlib import path
-from scipy.interpolate import interp2d
+#from scipy.interpolate import interp2d
 from scipy.interpolate import RectBivariateSpline
 import tqdm
 
@@ -29,7 +29,7 @@ def imageStats(ROI_N,BG,b_flag):
         foc1=np.zeros(l1, dtype=[('focus', 'float')])
         foc1.fill(np.nan)
     else:
-        ld=3
+        #ld=3
         foc1=np.zeros(l1, dtype=[('focus', 'float'),
                                  ('boundaries','(30,2)float32') ])
         #foc1=np.zeros(l1, dtype=[('focus', 'float'),

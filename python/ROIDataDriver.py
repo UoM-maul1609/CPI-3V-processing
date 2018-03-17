@@ -27,10 +27,13 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
           
           dataload=sio.loadmat(path1+'full_backgrounds.mat', \
                                variable_names=['FULL_BG','t_range'])
+          del dataload
           FULL_BG=dataload['FULL_BG']
           t_range1=dataload['t_range']
           t_min=t_range1[0,0]
           t_max=t_range1[0,1]
+          
+          del dataload
           
           print("{0}{1}".format("Skipping file...", filename[i]))
           bytes1,house,images,rois,ushort,Header,I,R,H = \
@@ -131,7 +134,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
           sio.savemat(temp_name,{'FULL_BG':FULL_BG1})
           dataload=sio.loadmat(temp_name,variable_names=['FULL_BG'])
           FULL_BG1=dataload['FULL_BG']
-          
+          del dataload
           
           r=np.shape(FULL_BG['IMAGE'])
           if len(r)==1:
@@ -169,12 +172,13 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
       del gc.garbage[:]
 
 
-
+       
    print('=========================2nd sweep================================')
    dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),
                            variable_names=['FULL_BG','t_range'])
    FULL_BG=dataload['FULL_BG']
    t_range=dataload['t_range']
+   del dataload
    for i in range(0,len(filename)):
       # load from file
       print('Loading from file...')
@@ -185,6 +189,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
       ROI_N=dataload['ROI_N']
       HOUSE=dataload['HOUSE']
       IMAGE1=dataload['IMAGE1']
+      del dataload
       
       print('done')
 
@@ -209,12 +214,13 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
 
 
-      del ROI_N, HOUSE, IMAGE1, BG
+      del ROI_N, HOUSE, IMAGE1, BG, Header, I, R, H, bytes1, house, \
+          images, rois, ushort
     
       # Garbage collection:
       gc.collect()
       del gc.garbage[:]
 
-   return (bytes1,house,images,rois,ushort,Header,I,R,H,t_range)
+   return (t_range)
       
 

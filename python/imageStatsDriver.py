@@ -41,7 +41,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges):
         sio.savemat("{0}{1}".format(path1, filename1[i].replace('.roi','.mat')),
          {'ROI_N':ROI_N, 'HOUSE':HOUSE,'IMAGE1':IMAGE1,'BG':BG,'dat':dat})
 
-        del dat, ROI_N, HOUSE, IMAGE1, BG
+        del dat, ROI_N, HOUSE, IMAGE1, BG, dataload
     
         # Garbage collection:
         gc.collect()
