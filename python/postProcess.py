@@ -99,11 +99,11 @@ def calc_datetime(year,mon,day,hour,mins,sec,msec):
         mtime[i]=datetime2matlabdn(d)
         
         # http://strftime.org
-        str1=datetime.strftime(d,'%d') + '-' + \
-            datetime.strftime(d,'%b') + '-' + \
-            datetime.strftime(d,'%Y') + ' ' + \
-            datetime.strftime(d,'%X') + '.' + \
-            datetime.strftime(d,'%f')[0:3]
+        str1="{0}{1}{2}{3}{4}{5}{6}{7}{8}".format(datetime.strftime(d,'%d'), '-', \
+            datetime.strftime(d,'%b'), '-', \
+            datetime.strftime(d,'%Y'), ' ', \
+            datetime.strftime(d,'%X'), '.', \
+            datetime.strftime(d,'%f')[0:3])
         mtimestr[i]=str1
         
     return (mtime,mtimestr)

@@ -5,9 +5,10 @@ ds=10  # resolution for size bins
 vel=100    # air speed - assumed fixed, used in calcTimeseriesDriver
 find_particle_edges=True # output the boundary of the particles
 command_line_path=True # use the commandline to define the path of files
-process_sweep1_if_exist=False # if the *.roi files have been extracted once,
+process_sweep1_if_exist=True # if the *.roi files have been extracted once,
                               #still do if True
-process_roi_driver=False
+process_roi_driver=True
+process_image_stats=True
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
             # path to raw data
@@ -27,8 +28,8 @@ import gc
 # get the files / path from commandline input
 if command_line_path:
     import sys
-    path1=sys.argv[1]
-    #path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
+    #path1=sys.argv[1]
+    path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
     #/tmp/cpi_struct/'
     from os import listdir
     #from os.path import isfile, join
@@ -48,8 +49,9 @@ if process_roi_driver:
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# find image properties, edge detection, etc
-imageStatsDriver(path1,filename1,find_particle_edges)
+if process_image_stats:
+    # find image properties, edge detection, etc
+    imageStatsDriver(path1,filename1,find_particle_edges)
 #--------------------------------------------------------------------------
 
 

@@ -37,7 +37,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
     for l in range(len(filenames)):
 
    
-        dataload=sio.loadmat(pathname + filenames[l].replace('.roi','.mat'),
+        dataload=sio.loadmat("{0}{1}".format(pathname, filenames[l].replace('.roi','.mat')),
                            variable_names=['ROI_N','dat'])
         ROI_N=dataload['ROI_N']
         dat=dataload['dat']
@@ -69,9 +69,9 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
                      timedelta(days = 366)
                 str1=str(pytime.time())
                 hour1=pytime.hour
-                filename1=datetime.strptime(str(pytime.date()), '%Y-%m-%d').strftime('%m_%d_%y') + \
-                    '_' + str(pytime.time())[0:8].replace(':','_') + '.' + \
-                    str('%03d' % int(pytime.microsecond/1000)) + '.png'
+                filename1="{0}{1}{2}{3}{4}{5}".format(datetime.strptime(str(pytime.date()), '%Y-%m-%d').strftime('%m_%d_%y'), \
+                    '_', str(pytime.time())[0:8].replace(':','_'), '.', \
+                    str('%03d' % int(pytime.microsecond/1000)), '.png')
                 
 
 
@@ -100,10 +100,11 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
                 runy=1.   
                 
                 # file output
-                if not os.path.exists(pathname + filename1[0:8]+'_pygt'+str(size_thresh)):
-                    os.makedirs(pathname + filename1[0:8]+'_pygt'+str(size_thresh))
-                plt.savefig(pathname + filename1[0:8]+'_pygt'+\
-                            str(size_thresh)+'/'+ filename1,dpi=300)
+                if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh))):
+                    os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh)))
+                plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_pygt', \
+                            str(size_thresh), '/', filename1),dpi=300)
+
                 plt.close()
                 plt.figure(figsize=(1024/200, 1280/200))
                 j=1
@@ -124,7 +125,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
                 hour1=pytime.hour
                 h.text(0,0.95,str1[0:12],ha='left',va='center', \
                        transform=h.transAxes,fontsize=2)
-                h.text(0,0.05,str('%d' % dat['len'][0,0][i,0])+ 'um', \
+                h.text(0,0.05,"{0}{1}".format(str('%d' % dat['len'][0,0][i,0]), 'um'), \
                        ha='left',va='center',transform=h.transAxes,fontsize=3)
 
                 i=i+1
@@ -142,10 +143,10 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
     
 
     # file output
-    if not os.path.exists(pathname + filename1[0:8]+'_pygt'+str(size_thresh)):
-        os.makedirs(pathname + filename1[0:8]+'_pygt'+str(size_thresh))
-    plt.savefig(pathname + filename1[0:8]+'_pygt'+\
-                str(size_thresh)+'/'+ filename1,dpi=300)
+    if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh))):
+        os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh)))
+    plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_pygt', \
+                str(size_thresh), '/', filename1),dpi=300)
     plt.close()
     
     pbar.close()

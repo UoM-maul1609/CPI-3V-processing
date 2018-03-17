@@ -15,7 +15,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges):
     for i in range(len(filename1)):
         # load from file
         print('Loading from file...')
-        dataload=sio.loadmat(path1 + filename1[i].replace('.roi','.mat'),
+        dataload=sio.loadmat("{0}{1}".format(path1, filename1[i].replace('.roi','.mat')),
                            variable_names=['ROI_N','HOUSE','IMAGE1','BG'])
         ROI_N=dataload['ROI_N']
         HOUSE=dataload['HOUSE']
@@ -38,7 +38,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges):
         print('Saving to file...')
         #with open(path1 + filename1[i].replace('.roi','.mat'),'ab') as f:
         #    sio.savemat(f, {'dat':dat})
-        sio.savemat(path1 + filename1[i].replace('.roi','.mat'),
+        sio.savemat("{0}{1}".format(path1, filename1[i].replace('.roi','.mat')),
          {'ROI_N':ROI_N, 'HOUSE':HOUSE,'IMAGE1':IMAGE1,'BG':BG,'dat':dat})
 
         del dat, ROI_N, HOUSE, IMAGE1, BG

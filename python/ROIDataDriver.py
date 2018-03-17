@@ -22,7 +22,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
    
    print("=========================1st sweep================================")
    for i in range(0,len(filename)):
-      if (os.path.isfile(path1 + filename[i].replace('.roi','.mat')) 
+      if (os.path.isfile("{0}{1}".format(path1 ,filename[i].replace('.roi','.mat'))) 
           and not(process_sweep1_if_exist)):
           
           dataload=sio.loadmat(path1+'full_backgrounds.mat', \
@@ -32,13 +32,13 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
           t_min=t_range1[0,0]
           t_max=t_range1[0,1]
           
-          print("Skipping file..." + filename[i])
+          print("{0}{1}".format("Skipping file...", filename[i]))
           bytes1,house,images,rois,ushort,Header,I,R,H = \
               False, False, False, False, False, False, False, False, False
           continue
        
-      fid = open(path1 + filename[i], "rb")
-      print("Reading file..." + filename[i])
+      fid = open("{0}{1}".format(path1, filename[i]), "rb")
+      print("{0}{1}".format("Reading file...", filename[i]))
       bytes1=fid.read()
       print("done")
       
@@ -52,10 +52,12 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
       # https://stackoverflow.com/questions/45187101/converting-bytearray-to-short-int-in-python
       ushort1=struct.unpack('H'*int(lb/2), bytes1) # the H means ushort int
       order1=order
-      ushort2=struct.unpack('H'*int((lb)/2), bytes1[1:len(bytes1)]+b'1') # append a byte
+      ushort2=struct.unpack('H'*int((lb)/2), bytes1[1:len(bytes1)] + b'1') # append a byte
       order2=order[1:len(order)+1]
       
       # append the two tuples
+      #http://datos.io/2016/10/04/python-memory-issues-tips-and-tricks/
+      #ushort="{0}{1}".format(ushort1,ushort2)
       ushort=ushort1+ushort2
       
       del ushort1, ushort2
@@ -155,9 +157,9 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
       if save_files:
           #https://docs.scipy.org/doc/scipy/reference/tutorial/io.html
           print('Saving to file...')
-          sio.savemat(path1 + filename[i].replace('.roi','.mat'),
+          sio.savemat("{0}{1}".format(path1, filename[i].replace('.roi','.mat')),
                       {'ROI_N':ROI_N, 'HOUSE':HOUSE,'IMAGE1':IMAGE1})
-          sio.savemat(path1 + 'full_backgrounds.mat',
+          sio.savemat("{0}{1}".format(path1, 'full_backgrounds.mat'),
                       {'FULL_BG':FULL_BG,'t_range':t_range})
           print('done')
           
@@ -169,7 +171,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
 
    print('=========================2nd sweep================================')
-   dataload=sio.loadmat(path1 + 'full_backgrounds.mat',
+   dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),
                            variable_names=['FULL_BG','t_range'])
    FULL_BG=dataload['FULL_BG']
    t_range=dataload['t_range']
@@ -177,7 +179,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
       # load from file
       print('Loading from file...')
       #https://stackoverflow.com/questions/7008608/scipy-io-loadmat-nested-structures-i-e-dictionaries      
-      dataload=sio.loadmat(path1 + filename[i].replace('.roi','.mat'),
+      dataload=sio.loadmat("{0}{1}".format(path1, filename[i].replace('.roi','.mat')),
                            variable_names=['ROI_N','HOUSE','IMAGE1'])
       #dataload['ROI_N']['StartX'][0,0][0,:]
       ROI_N=dataload['ROI_N']
@@ -190,7 +192,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
       #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
       # Assocate backgrounds ++++++++++++++++++++++++++++++++++++++++++++++++
-      print('Associate backgrounds...' + filename[i])
+      print("{0}{1}".format('Associate backgrounds...', filename[i]))
       BG=associateBackgrounds(ROI_N,FULL_BG)
       print('done')
       #----------------------------------------------------------------------
@@ -199,7 +201,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
       if save_files:
           #https://docs.scipy.org/doc/scipy/reference/tutorial/io.html
           print('Saving to file...')
-          sio.savemat(path1 + filename[i].replace('.roi','.mat'),
+          sio.savemat("{0}{1}".format(path1, filename[i].replace('.roi','.mat')),
                       {'ROI_N':ROI_N, 'HOUSE':HOUSE,'IMAGE1':IMAGE1,'BG':BG})
           #with open(path1 + filename[i].replace('.roi','.mat'),'ab') as f:
           #   sio.savemat(f, {'BG':BG})
