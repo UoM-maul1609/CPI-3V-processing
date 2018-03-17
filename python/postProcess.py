@@ -1,5 +1,4 @@
 import numpy as np
-import struct
 from datetime import datetime
 from datetime import timedelta
 def postProcess(bytes1,rois,R,H,I,Header):

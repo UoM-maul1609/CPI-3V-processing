@@ -12,7 +12,7 @@ import time
 import os
 from datetime import datetime
 from datetime import timedelta
-import tqdm
+from tqdm import tqdm
 import gc
 
 def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
@@ -52,7 +52,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
         # loop over all the images in this file
         i=0
         #https://stackoverflow.com/questions/45808140/using-tqdm-progress-bar-in-a-while-loop
-        pbar=tqdm.tqdm(total=len(dat['foc'][0,0]['focus'][0]))
+        pbar=tqdm(total=len(dat['foc'][0,0]['focus'][0]))
         
         while(i<len(dat['foc'][0,0]['focus'][0])):
             pbar.update(1)

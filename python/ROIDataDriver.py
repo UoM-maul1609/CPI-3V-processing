@@ -1,5 +1,5 @@
 import numpy as np
-import struct
+from struct import pack, unpack
 from convertDataToHeaderSA import convertDataToHeaderSA
 from convertDataToImageSA import convertDataToImageSA
 from convertDataToROISA import convertDataToROISA
@@ -53,9 +53,9 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
          
       order=np.mgrid[0:int(len(bytes1)/2)]
       # https://stackoverflow.com/questions/45187101/converting-bytearray-to-short-int-in-python
-      ushort1=struct.unpack('H'*int(lb/2), bytes1) # the H means ushort int
+      ushort1=unpack('H'*int(lb/2), bytes1) # the H means ushort int
       order1=order
-      ushort2=struct.unpack('H'*int((lb)/2), bytes1[1:len(bytes1)] + b'1') # append a byte
+      ushort2=unpack('H'*int((lb)/2), bytes1[1:len(bytes1)] + b'1') # append a byte
       order2=order[1:len(order)+1]
       
       # append the two tuples
@@ -69,7 +69,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
       del order1, order2
       
-      bytes1=struct.pack('H'*int(lb), *ushort) # the H means ushort int
+      bytes1=pack('H'*int(lb), *ushort) # the H means ushort int
       
       
       ushort=np.asarray(ushort)
@@ -173,6 +173,8 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
 
        
+   del Header, I, R, H, bytes1, house, images, rois, ushort
+   
    print('=========================2nd sweep================================')
    dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),
                            variable_names=['FULL_BG','t_range'])
@@ -214,9 +216,9 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
 
 
-      del ROI_N, HOUSE, IMAGE1, BG, Header, I, R, H, bytes1, house, \
-          images, rois, ushort
     
+      del ROI_N, HOUSE, IMAGE1, BG
+
       # Garbage collection:
       gc.collect()
       del gc.garbage[:]

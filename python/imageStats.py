@@ -12,7 +12,7 @@ from skimage import measure
 from matplotlib import path
 #from scipy.interpolate import interp2d
 from scipy.interpolate import RectBivariateSpline
-import tqdm
+from tqdm import tqdm
 
 def imageStats(ROI_N,BG,b_flag):
     pix=2.3
@@ -45,7 +45,7 @@ def imageStats(ROI_N,BG,b_flag):
     dat['Time'] = ROI_N['Time'][0,0][:,0]
     
     
-    for i in tqdm.tqdm(ind):
+    for i in tqdm(ind):
         arr=ROI_N['IMAGE'][0,0][0,i]['IM'][0,0].astype(int)-BG[0,i]['BG'][0,0].astype(int)
      
         inda_r,inda_c=np.where(arr<=-15)

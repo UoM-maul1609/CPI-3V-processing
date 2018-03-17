@@ -19,10 +19,6 @@ filename1=['20180109105546.roi',
 outputfile='timeseries.mat'
 
 
-from ROIDataDriver import ROIDataDriver
-from imageStatsDriver import imageStatsDriver
-from exportImagesDriver import exportImagesDriver
-from calcTimeseriesDriver import calcTimeseriesDriver
 import gc
 
 # get the files / path from commandline input
@@ -38,27 +34,30 @@ if command_line_path:
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 if process_roi_driver:
-    # extract ROI data from files and prcess with backgrounds
+    from ROIDataDriver import ROIDataDriver
+   # extract ROI data from files and prcess with backgrounds
     (t_range)= \
        ROIDataDriver(path1,filename1,dt,process_sweep1_if_exist)
     # Garbage collection:
     gc.collect()
     del gc.garbage[:]
-del ROIDataDriver
+    del ROIDataDriver
 #--------------------------------------------------------------------------
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 if process_image_stats:
+    from imageStatsDriver import imageStatsDriver
     # find image properties, edge detection, etc
     imageStatsDriver(path1,filename1,find_particle_edges)
 
-del imageStatsDriver
+    del imageStatsDriver
 #--------------------------------------------------------------------------
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # export images
+from exportImagesDriver import exportImagesDriver
 exportImagesDriver(path1,filename1,foc_crit,min_len)
 del exportImagesDriver
 #--------------------------------------------------------------------------
@@ -66,5 +65,6 @@ del exportImagesDriver
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # calculate number concentrations one day at a time?
+from calcTimeseriesDriver import calcTimeseriesDriver
 calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile)
 #--------------------------------------------------------------------------
