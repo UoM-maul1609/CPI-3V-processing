@@ -13,21 +13,22 @@ import os.path
 import tempfile
 from multiprocessing import Pool
 
-t_min=1e9
-t_max=0.;
-save_files=True
-FULL_BG={'Time':np.array([]),'IMAGE':np.array([]) }
 
 def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
-   
+   t_min=1e9
+   t_max=0.
+   FULL_BG={'Time':np.array([]),'IMAGE':np.array([]) }
+ 
+   save_files=True
    
    print("=========================1st sweep================================")
    for i in range(0,len(filename)):
        p=Pool(processes=1)
 
-       p.apply_async(mult_job,\
-                (path1,filename[i],dt,save_files,\
+       result=p.apply_async(mult_job,\
+                (path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,\
                  process_sweep1_if_exist))
+       (FULL_BG,t_min,t_max)=result.get()
 
        p.close()
        p.join()
@@ -59,9 +60,8 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
 
 
-def mult_job(path1,filename1,dt,save_files,\
+def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
              process_sweep1_if_exist):   
-   global t_min, t_max, FULL_BG
 
    if (os.path.isfile("{0}{1}".format(path1 ,filename1.replace('.roi','.mat'))) 
       and not(process_sweep1_if_exist)):
@@ -79,7 +79,7 @@ def mult_job(path1,filename1,dt,save_files,\
        print("{0}{1}".format("Skipping file...", filename1))
        bytes1,house,images,rois,ushort,Header,I,R,H = \
            False, False, False, False, False, False, False, False, False
-       return
+       return (FULL_BG,t_min,t_max)
        
    fid = open("{0}{1}".format(path1, filename1), "rb")
    print("{0}{1}".format("Reading file...", filename1))
@@ -209,7 +209,7 @@ def mult_job(path1,filename1,dt,save_files,\
    gc.collect()
    del gc.garbage[:]
        
-   return 
+   return (FULL_BG,t_min,t_max)
     
    
 def mult_job2(path1,filename1,FULL_BG,save_files):
