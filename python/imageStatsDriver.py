@@ -17,7 +17,9 @@ def imageStatsDriver(path1,filename1,find_particle_edges):
     for i in range(len(filename1)):
         p=Pool(processes=1)
 
-        p.apply_async(mult_job,(path1,filename1[i],find_particle_edges))
+        # do synchronous while I am deleting in loop
+        #p.apply_async(mult_job,(path1,filename1[i],find_particle_edges))
+        p.apply(mult_job,(path1,filename1[i],find_particle_edges))
 
         p.close()
         p.join()
