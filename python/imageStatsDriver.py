@@ -13,6 +13,7 @@ from multiprocessing import Pool
 
 def imageStatsDriver(path1,filename1,find_particle_edges):
     print('====================particle properties===========================')
+    #https://stackoverflow.com/questions/5442910/python-multiprocessing-pool-map-for-multiple-arguments
     for i in range(len(filename1)):
         p=Pool(processes=1)
 

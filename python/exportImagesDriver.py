@@ -8,6 +8,7 @@ Created on Mon Mar 12 10:05:02 2018
 import scipy.io as sio
 from exportImages import exportImages
 
+
 def exportImagesDriver(path1,filename1,foc_crit,min_len):
     
     print('====================exporting images =============================')

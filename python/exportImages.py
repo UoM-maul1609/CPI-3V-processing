@@ -21,7 +21,6 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
     maxx=0.
     maxy=1.
     j=1
-    flag=True
 
     plt.ioff()
     plt.figure(figsize=(1024/200, 1280/200))
@@ -142,15 +141,15 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
         gc.collect()
         del gc.garbage[:]
     
-
-    # file output
-    if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh))):
-        os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh)))
-    plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_pygt', \
-                str(size_thresh), '/', filename1),dpi=300)
-    plt.close()
-    
-    pbar.close()
+        if((l+1)==len(filenames)):
+            # file output
+            if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh))):
+                os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh)))
+            plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_pygt', \
+                        str(size_thresh), '/', filename1),dpi=300)
+            plt.close()
+            
+            pbar.close()
 
     
     return

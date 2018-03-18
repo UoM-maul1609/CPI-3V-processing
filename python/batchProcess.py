@@ -7,7 +7,7 @@ find_particle_edges=True # output the boundary of the particles
 command_line_path=True # use the commandline to define the path of files
 process_sweep1_if_exist=True # if the *.roi files have been extracted once,
                               #still do if True
-process_roi_driver=False
+process_roi_driver=True
 process_image_stats=True
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
