@@ -52,30 +52,37 @@ def imageStats(ROI_N,BG,b_flag):
         inda_r,inda_c=np.where(arr<=-15)
         indb_r,indb_c=np.where(arr>-15)
         
-        if len(inda_r)<=5:
+        if len(inda_r)<=7:
             continue
         
         arr=(arr-np.min(arr))
-        mx=np.max(arr)
-        arr=arr*255/mx
+        #mx=np.max(arr)
+        #arr=arr*255/mx
+        #arr=arr/255
     
         (r,c)=np.shape(arr)
 
         #https://docs.opencv.org/2.4/doc/tutorials/imgproc/threshold/threshold.html        
         #https://docs.opencv.org/2.4/modules/imgproc/doc/miscellaneous_transformations.html?highlight=threshold#threshold
-        dx=cv2.Sobel(arr.astype(float),cv2.CV_64F,1,0,ksize=1)
+        """dx=cv2.Sobel(arr.astype(float),cv2.CV_64F,1,0,ksize=1)
         dy=cv2.Sobel(arr.astype(float),cv2.CV_64F,0,1,ksize=1)
         mag=np.sqrt(dx**2+dy**2)
-        (th,level)=cv2.threshold(mag.astype('H'),30,255,cv2.THRESH_BINARY)
+        (th,level)=cv2.threshold(mag.astype('H'),50,255,cv2.THRESH_BINARY)
+        """
+        (th,level)=cv2.threshold(arr.astype('H'),38,255,cv2.THRESH_BINARY)
         
-        BW2=signal.medfilt2d(level.astype('B'),(3,3))
-        
+
+        BW2=level
+        BW2[1:-1,1:-1]=signal.medfilt2d(level.astype('B'),(3,3))[1:-1,1:-1]
+       
+        # fairly insensitive to the 0.4 choice
         contours=measure.find_contours((BW2-np.min(BW2))/255,0.4)
         if not(len(contours)):
             continue
-            
+        
+        
         contour=contours[0]
-    
+        
         # https://stackoverflow.com/questions/3654289/scipy-create-2d-polygon-mask
         x, y = np.meshgrid(np.arange(r), np.arange(c))
         x, y = x.flatten(), y.flatten()

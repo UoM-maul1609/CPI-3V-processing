@@ -25,10 +25,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
    for i in range(0,len(filename)):
        p=Pool(processes=1)
 
-       """result=p.apply_async(mult_job,\
-                (path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,\
-                 process_sweep1_if_exist))"""
-       result=p.apply(mult_job,\
+       result=p.apply_async(mult_job,\
                 (path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,\
                  process_sweep1_if_exist))
        (FULL_BG,t_min,t_max)=result.get()
