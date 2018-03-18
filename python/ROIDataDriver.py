@@ -71,7 +71,6 @@ def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
        
        dataload=sio.loadmat(path1+'full_backgrounds.mat', \
                             variable_names=['FULL_BG','t_range'])
-       del dataload
        FULL_BG=dataload['FULL_BG']
        t_range1=dataload['t_range']
        t_min=t_range1[0,0]
