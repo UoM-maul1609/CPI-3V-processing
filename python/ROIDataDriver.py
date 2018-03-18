@@ -61,7 +61,8 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
 def mult_job(path1,filename1,dt,save_files,\
              process_sweep1_if_exist):   
-    
+   global t_min, t_max, FULL_BG
+
    if (os.path.isfile("{0}{1}".format(path1 ,filename1.replace('.roi','.mat'))) 
       and not(process_sweep1_if_exist)):
        
@@ -186,16 +187,13 @@ def mult_job(path1,filename1,dt,save_files,\
              FULL_BG1['Time'][0,0],axis=0)
    print('done')
    #--------------------------------------------------------------------------
-    
-    
-    
+   
    #https://stackoverflow.com/questions/10012788/python-find-min-max-of-two-lists
    t_min=np.minimum(np.min(ROI_N['Time']),t_min)
    t_max=np.maximum(np.max(ROI_N['Time']),t_max)
-      
+   
    t_range=np.array([np.floor(t_min*86400/dt)*dt/86400, 
                      np.ceil(t_max*86400/dt)*dt/86400])
-    
     
    if save_files:
        #https://docs.scipy.org/doc/scipy/reference/tutorial/io.html
