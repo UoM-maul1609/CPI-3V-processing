@@ -102,13 +102,13 @@ def imageStats(ROI_N,BG,b_flag):
         
         
         dat['len'][i]=stats[0].major_axis_length*pix
-        try:
-            dat['wid'][i]=stats[0].minor_axis_length*pix
-        except ValueError:
+        dat['area'][i]=stats[0].filled_area*pix*pix
+        if(dat['area'][i] <= pix*pix):
             print('Problem with this particle in regionprops')
             continue
+        dat['wid'][i]=stats[0].minor_axis_length*pix
+
         
-        dat['area'][i]=stats[0].filled_area*pix*pix
         dat['round'][i]=stats[0].filled_area/(np.pi/4.*stats[0].major_axis_length**2)
         dat['centroid'][i,:]=stats[0].centroid
             
