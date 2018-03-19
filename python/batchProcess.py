@@ -9,6 +9,7 @@ process_sweep1_if_exist=True # if the *.roi files have been extracted once,
                               #still do if True
 process_roi_driver=True
 process_image_stats=True
+num_cores=4
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
             # path to raw data
@@ -49,7 +50,7 @@ if process_roi_driver:
 if process_image_stats:
     from imageStatsDriver import imageStatsDriver
     # find image properties, edge detection, etc
-    imageStatsDriver(path1,filename1,find_particle_edges)
+    imageStatsDriver(path1,filename1,find_particle_edges,num_cores=num_cores)
 
     del imageStatsDriver
 #--------------------------------------------------------------------------
