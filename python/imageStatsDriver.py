@@ -38,7 +38,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
         for j in range(nc): # number of files in a chunk
             if (i+1)*(j+1) > lf:
                 continue
-            fn=filename1[i+j*fpc]
+            fn=filename1[j+i*nc]
             p.apply_async(mult_job,(path1,fn,find_particle_edges))
 
         p.close()
