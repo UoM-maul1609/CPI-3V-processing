@@ -30,7 +30,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
     runx=0.
     runy=1.
     
-    
+    tqdm.monitor_interval = 0
 
     
     for l in range(len(filenames)):

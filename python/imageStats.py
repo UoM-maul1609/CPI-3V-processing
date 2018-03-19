@@ -45,7 +45,7 @@ def imageStats(ROI_N,BG,b_flag):
     
     dat['Time'] = ROI_N['Time'][0,0][:,0]
     
-    
+    tqdm.monitor_interval = 0
     for i in tqdm(ind):
         arr=ROI_N['IMAGE'][0,0][0,i]['IM'][0,0].astype(int)-BG[0,i]['BG'][0,0].astype(int)
      
@@ -102,7 +102,12 @@ def imageStats(ROI_N,BG,b_flag):
         
         
         dat['len'][i]=stats[0].major_axis_length*pix
-        dat['wid'][i]=stats[0].minor_axis_length*pix
+        try:
+            dat['wid'][i]=stats[0].minor_axis_length*pix
+        except ValueError:
+            print('Problem with this particle in regionprops')
+            continue
+        
         dat['area'][i]=stats[0].filled_area*pix*pix
         dat['round'][i]=stats[0].filled_area/(np.pi/4.*stats[0].major_axis_length**2)
         dat['centroid'][i,:]=stats[0].centroid
