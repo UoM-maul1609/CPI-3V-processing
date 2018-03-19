@@ -80,7 +80,8 @@ def imageStats(ROI_N,BG,b_flag):
         if not(len(contours)):
             continue
         
-        
+        # put longest list first
+        contours.sort(key=len,reverse=True)
         contour=contours[0]
         
         # https://stackoverflow.com/questions/3654289/scipy-create-2d-polygon-mask
