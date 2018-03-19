@@ -1,6 +1,8 @@
 Python modules needed:
-	*sys, os, numpy, struct, scipy, time, tqdm, datetime, matplotlib, copy, cv2 / opencv-python, skimage
+	*sys, os, numpy, struct, scipy, time, tqdm, datetime, matplotlib, copy, cv2 / opencv-python, skimage, gc, multiprocessing
 	*tested on python3.6 (3.4 did not work, kept having Memory errors when using struct.pack)
+	*The above issue is due to Python's memory management. Farming repetitive,intensive work out to 'workers' seems to have resolved 
+	 this issue, but it requires the use of the multiprocessing package.
 Running code:
 	*python: in the directory /python there is code for python
 	*edit the script batchProcess.py to point to the directory where the raw data are
