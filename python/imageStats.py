@@ -93,7 +93,7 @@ def imageStats(ROI_N,BG,b_flag):
         
         
         p=path.Path(contour)
-        mask=p.contains_points(points, radius=5)
+        mask=p.contains_points(points, radius=1)
         IN = mask.reshape((c,r)).T
         
         #http://scikit-image.org/docs/dev/auto_examples/segmentation/plot_regionprops.html
