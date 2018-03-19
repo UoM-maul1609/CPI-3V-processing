@@ -72,9 +72,10 @@ def imageStats(ROI_N,BG,b_flag):
         (th,level)=cv2.threshold(arr.astype('H'),38,255,cv2.THRESH_BINARY)
         
 
-        BW2=level
+        BW2=level.astype('B')
         BW2[1:-1,1:-1]=signal.medfilt2d(level.astype('B'),(3,3))[1:-1,1:-1]
        
+
         # fairly insensitive to the 0.4 choice
         contours=measure.find_contours((BW2-np.min(BW2))/255,0.4)
         if not(len(contours)):
@@ -84,6 +85,7 @@ def imageStats(ROI_N,BG,b_flag):
         contours.sort(key=len,reverse=True)
         contour=contours[0]
         
+
         # https://stackoverflow.com/questions/3654289/scipy-create-2d-polygon-mask
         x, y = np.meshgrid(np.arange(r), np.arange(c))
         x, y = x.flatten(), y.flatten()
@@ -91,8 +93,9 @@ def imageStats(ROI_N,BG,b_flag):
         
         
         p=path.Path(contour)
-        mask=p.contains_points(points)
+        mask=p.contains_points(points, radius=5)
         IN = mask.reshape((c,r)).T
+        
         #http://scikit-image.org/docs/dev/auto_examples/segmentation/plot_regionprops.html
         stats=measure.regionprops(IN.astype('B'))
         if not(len(stats)):
