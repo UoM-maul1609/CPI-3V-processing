@@ -12,6 +12,7 @@ from multiprocessing import Pool, cpu_count
 import time
 import numpy as np
 
+results = []
 
 def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     print('====================particle properties===========================')
@@ -39,7 +40,8 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
             if (i+1)*(j+1) > lf:
                 continue
             fn=filename1[j+i*nc]
-            p.apply_async(mult_job,(path1,fn,find_particle_edges))
+            p.apply_async(mult_job,args=(path1,fn,find_particle_edges), 
+                          callback=collect_results)
 
         p.close()
         p.join()
@@ -47,6 +49,12 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     
     
     return
+
+#https://sedeh.github.io/python-pandas-multiprocessing-workaround.html
+def collect_results(result):
+    """Uses apply_async's callback to setup up a separate Queue for each process"""
+    results.extend(result)
+
 
 def mult_job(path1,filename1,find_particle_edges):
     # load from file
