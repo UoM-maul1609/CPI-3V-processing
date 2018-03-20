@@ -12,7 +12,6 @@ from multiprocessing import Pool, cpu_count
 import time
 import numpy as np
 
-results = []
 
 def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     print('====================particle properties===========================')
@@ -32,7 +31,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     nc=num_cores
     fpc=np.ceil(lf/nc).astype(int)
     
-    for i in range(fpc): # number of chunks
+    """for i in range(fpc): # number of chunks
         p=Pool(processes=nc)
         
         # farm out to processors:
@@ -40,23 +39,35 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
             if (i+1)*(j+1) > lf:
                 continue
             fn=filename1[j+i*nc]
-            p.apply_async(mult_job,args=(path1,fn,find_particle_edges), 
-                          callback=collect_results)
+            p.apply_async(mult_job,args=(path1,fn,find_particle_edges))
 
         p.close()
         p.join()
         del p
-    
+    """
+
+    p=Pool(processes=nc)
+
+    # build the list / transpose    
+    list1=[[path1]*len(filename1),filename1,[find_particle_edges]*len(filename1)]
+    list1=list(map(list,zip(*list1)))
+    # farm out to processors:
+    #https://stackoverflow.com/questions/6473679/transpose-list-of-lists
+    p.map(mult_job,list1)
+
+    p.close()
+    p.join()
+    del p
+
     
     return
 
-#https://sedeh.github.io/python-pandas-multiprocessing-workaround.html
-def collect_results(result):
-    """Uses apply_async's callback to setup up a separate Queue for each process"""
-    results.extend(result)
 
 
-def mult_job(path1,filename1,find_particle_edges):
+def mult_job(list1): # path1, filename1, find_particle_edges
+    path1=list1[0]
+    filename1=list1[1]
+    find_particle_edges=list1[2]
     # load from file
     print('Loading from file...')
     dataload=sio.loadmat("{0}{1}".format(path1, filename1.replace('.roi','.mat')),
@@ -93,4 +104,4 @@ def mult_job(path1,filename1,find_particle_edges):
 
     print('done')
     
-    return
+    return 1
