@@ -9,6 +9,8 @@ process_sweep1_if_exist=True # if the *.roi files have been extracted once,
                               #still do if True
 process_roi_driver=True
 process_image_stats=True
+export_images=True
+output_timeseries=True
 num_cores=4
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
@@ -57,15 +59,17 @@ if process_image_stats:
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# export images
-from exportImagesDriver import exportImagesDriver
-exportImagesDriver(path1,filename1,foc_crit,min_len)
-del exportImagesDriver
+if export_images:
+    # export images
+    from exportImagesDriver import exportImagesDriver
+    exportImagesDriver(path1,filename1,foc_crit,min_len)
+    del exportImagesDriver
 #--------------------------------------------------------------------------
 
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# calculate number concentrations one day at a time?
-from calcTimeseriesDriver import calcTimeseriesDriver
-calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile)
+if output_timeseries:
+    # calculate number concentrations one day at a time?
+    from calcTimeseriesDriver import calcTimeseriesDriver
+    calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile)
 #--------------------------------------------------------------------------
