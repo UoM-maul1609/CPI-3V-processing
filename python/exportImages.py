@@ -30,7 +30,6 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
     runx=0.
     runy=1.
     
-    tqdm.monitor_interval = 0
 
     
     for l in range(len(filenames)):
@@ -51,8 +50,8 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
         # loop over all the images in this file
         i=0
         #https://stackoverflow.com/questions/45808140/using-tqdm-progress-bar-in-a-while-loop
+        tqdm.monitor_interval = 0
         pbar=tqdm(total=len(dat['foc'][0,0]['focus'][0]))
-        
         while(i<len(dat['foc'][0,0]['focus'][0])):
             pbar.update(1)
             # check to see if criteria are met
@@ -141,6 +140,9 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
         gc.collect()
         del gc.garbage[:]
     
+        pbar.close()
+        del pbar
+        
         if((l+1)==len(filenames)):
             # file output
             if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh))):
@@ -149,7 +151,6 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
                         str(size_thresh), '/', filename1),dpi=300)
             plt.close()
             
-            pbar.close()
 
     
     return

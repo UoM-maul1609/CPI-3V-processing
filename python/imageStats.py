@@ -13,6 +13,7 @@ from matplotlib import path
 #from scipy.interpolate import interp2d
 from scipy.interpolate import RectBivariateSpline
 from tqdm import tqdm
+import sys
 
 def imageStats(ROI_N,BG,b_flag):
     
@@ -108,6 +109,7 @@ def imageStats(ROI_N,BG,b_flag):
         dat['area'][i]=stats[0].filled_area*pix*pix
         if(dat['area'][i] <= pix*pix):
             print('Problem with this particle in regionprops')
+            sys.stdout.flush()
             continue
         dat['wid'][i]=stats[0].minor_axis_length*pix
 
