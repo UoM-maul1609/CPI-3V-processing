@@ -93,35 +93,35 @@ for i=1:length(filename)
     end
     %----------------------------------------------------------------------
     
-    
-    
-    % scale by sample volume
-    dead=repmat(timeser.deadtimes,[1 nl na]);
-    nimages=repmat(timeser.nimages,[1 nl na]);
-    timeser.conc2ar=timeser.conc2ar./((dt-dead).*vel.*sa+nimages.*sv)
-    
-    timeser.conc2=sum(timeser.conc2ar,3);
-    timeser.conc=sum(timeser.conc2,2);
-    
-    
-    
-    
-    disp('done');
-    %----------------------------------------------------------------------
-    
-    
-    if save_files
-        % save to file
-        disp('Saving to file...');
-        if(exist([path,outputfile],'file'))
-            save([path,outputfile],...
-                'timeser','-append');
-        else
-            save([path,outputfile],...
-                'timeser');            
-        end
-        disp('done');
-    end
 end
+    
+% scale by sample volume
+dead=repmat(timeser.deadtimes,[1 nl na]);
+nimages=repmat(timeser.nimages,[1 nl na]);
+timeser.conc2ar=timeser.conc2ar./((dt-dead).*vel.*sa+nimages.*sv)
+
+timeser.conc2=sum(timeser.conc2ar,3);
+timeser.conc=sum(timeser.conc2,2);
+
+
+
+
+disp('done');
+%----------------------------------------------------------------------
+
+
+if save_files
+    % save to file
+    disp('Saving to file...');
+    if(exist([path,outputfile],'file'))
+        save([path,outputfile],...
+            'timeser','-append');
+    else
+        save([path,outputfile],...
+            'timeser');            
+    end
+    disp('done');
+end
+
 
 
