@@ -42,6 +42,9 @@ for i=1:length(filename)
     % Calculate timeseries ++++++++++++++++++++++++++++++++++++++++++++++++
     disp('Calculate timeseries...');
     ind=find(ROI_N.imageType==89 & cat(1,dat.foc.focus) > foc_crit);
+    if(isempty(ind))
+        continue;
+    end
     tmin=min(ROI_N.Time(ind));
     tmax=max(ROI_N.Time(ind));
     ilow=find(timeser.Time>=tmin);ilow=ilow(1);
@@ -98,7 +101,7 @@ end
 % scale by sample volume
 dead=repmat(timeser.deadtimes,[1 nl na]);
 nimages=repmat(timeser.nimages,[1 nl na]);
-timeser.conc2ar=timeser.conc2ar./((dt-dead).*vel.*sa+nimages.*sv)
+timeser.conc2ar=timeser.conc2ar./((dt-dead).*vel.*sa+nimages.*sv);
 
 timeser.conc2=sum(timeser.conc2ar,3);
 timeser.conc=sum(timeser.conc2,2);
