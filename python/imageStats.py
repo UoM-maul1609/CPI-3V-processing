@@ -94,7 +94,7 @@ def imageStats(ROI_N,BG,b_flag):
         
         
         p=path.Path(contour)
-        mask=p.contains_points(points, radius=1)
+        mask=p.contains_points(points, radius=2)
         IN = mask.reshape((c,r)).T
         
         #http://scikit-image.org/docs/dev/auto_examples/segmentation/plot_regionprops.html
@@ -102,6 +102,10 @@ def imageStats(ROI_N,BG,b_flag):
         if not(len(stats)):
             continue
         if stats[0].major_axis_length==0:
+            continue
+        
+        if stats[0].eccentricity > 0.9999:
+            print("Eccentricity too high")
             continue
         
         

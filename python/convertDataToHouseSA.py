@@ -28,15 +28,16 @@ def convertDataToHouseSA(bytes1,ushort,order,house):
     
     
     for i in range(len(house)):
-        H['BlockNum'][i]=ushort[house[i]+0]
-        H['ulItemSize'][i]=ushort[house[i]+1]
-        H['Readings1'][i]=np.reshape(ushort[house[i]+2:house[i]+2+70],(70,1))
-        H['TimeMSW'][i]=ushort[house[i]+72]
-        H['TimeISW'][i]=ushort[house[i]+73]
-        H['TimeLSW'][i]=ushort[house[i]+74]
-        H['Readings'][i]=np.reshape(ushort[house[i]+75:house[i]+75+8],(8,1))   
-        H['order'][i]=order[house[i]]
-       
+        if (ushort[house[i]+1] == 83):
+            H['BlockNum'][i]=ushort[house[i]+0]
+            H['ulItemSize'][i]=ushort[house[i]+1]
+            H['Readings1'][i]=np.reshape(ushort[house[i]+2:house[i]+2+70],(70,1))
+            H['TimeMSW'][i]=ushort[house[i]+72]
+            H['TimeISW'][i]=ushort[house[i]+73]
+            H['TimeLSW'][i]=ushort[house[i]+74]
+            H['Readings'][i]=np.reshape(ushort[house[i]+75:house[i]+75+8],(8,1))   
+            H['order'][i]=order[house[i]]
+        
     
     
     ver=H['ulItemSize']
