@@ -4,11 +4,11 @@ dt=10  # resolution on time-step for concentrations (take with a pince of salt)
 ds=10  # resolution for size bins
 vel=100    # air speed - assumed fixed, used in calcTimeseriesDriver
 find_particle_edges=True # output the boundary of the particles
-command_line_path=True # use the commandline to define the path of files
+command_line_path=False # use the commandline to define the path of files
 process_sweep1_if_exist=True # if the *.roi files have been extracted once,
                               #still do if True
-process_roi_driver=True
-process_image_stats=True
+process_roi_driver=False
+process_image_stats=False
 export_images=True
 output_timeseries=True
 num_cores=4
@@ -33,6 +33,7 @@ if command_line_path:
     from os import listdir
     #from os.path import isfile, join
     filename1 = [f for f in listdir(path1) if f.endswith(".roi")]
+    filename1.sort()
     del sys, listdir
 
 #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

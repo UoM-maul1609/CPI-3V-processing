@@ -17,6 +17,7 @@ import gc
 
 def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
 
+    prefix='_pytgt'
     interxy=0.01
     maxx=0.
     maxy=1.
@@ -40,6 +41,8 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
         ROI_N=dataload['ROI_N']
         dat=dataload['dat']
         del dataload
+        
+        
 
         ind,=np.where( (dat['len'][0,0][:,0]>size_thresh) & \
                       (dat['foc'][0,0]['focus'][0,:] >foc_crit) )
@@ -99,9 +102,9 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
                 runy=1.   
                 
                 # file output
-                if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh))):
-                    os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh)))
-                plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_pygt', \
+                if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
+                    os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
+                plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
                             str(size_thresh), '/', filename1),dpi=300)
 
                 plt.close()
@@ -143,13 +146,12 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
         pbar.close()
         del pbar
         
-        if((l+1)==len(filenames)):
-            # file output
-            if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh))):
-                os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_pygt',str(size_thresh)))
-            plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_pygt', \
-                        str(size_thresh), '/', filename1),dpi=300)
-            plt.close()
+    # file output
+    if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
+        os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
+    plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
+                str(size_thresh), '/', filename1),dpi=300)
+    plt.close()
             
 
     

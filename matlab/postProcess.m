@@ -75,17 +75,18 @@ imageTypeROIs(ind)=imageType(i);
 
 %++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 % associate variables with each ROI++++++++++++++++++++++++++++++++++++++++
+[a,b]=sort(timeROIs);
 for i=1:length(rois)
-    StartX=R(i).StartX;
-    StartY=R(i).StartY;
-    EndX=R(i).EndX;
-    EndY=R(i).EndY;
+    StartX=R(b(i)).StartX;
+    StartY=R(b(i)).StartY;
+    EndX=R(b(i)).EndX;
+    EndY=R(b(i)).EndY;
     
     X=(EndX-StartX+1);
     Y=(EndY-StartY+1);
     numberOfChars=X*Y;
 
-    chars1=bytes(rois(i)*2+33*2-14+[1:numberOfChars]);
+    chars1=bytes(rois(b(i))*2+33*2-14+[1:numberOfChars]);
     ROI_N.IMAGE(i).IM=reshape(chars1,[X,Y]);
 end
 ROI_N.Time=timeROIs;
@@ -95,6 +96,32 @@ ROI_N.StartY=cat(1,R.StartY);
 ROI_N.EndX=cat(1,R.EndX);
 ROI_N.EndY=cat(1,R.EndY);
 %--------------------------------------------------------------------------
+
+
+% sort
+[a,b]=sort(ROI_N.Time);
+ROI_N.Time(:)=ROI_N.Time(b);
+ROI_N.imageType(:)=ROI_N.imageType(b);
+ROI_N.StartX(:)=ROI_N.StartX(b);
+ROI_N.StartY(:)=ROI_N.StartY(b);
+ROI_N.EndX(:)=ROI_N.EndX(b);
+ROI_N.EndY(:)=ROI_N.EndY(b);
+%ROI_N.IMAGE(:)=ROI_N.IMAGE(b);
+
+% sort
+[a,b]=sort(HOUSE.Time);
+HOUSE.Time(:)=HOUSE.Time(b);
+HOUSE.deadtime(:)=HOUSE.deadtime(b);
+
+% sort
+[a,b]=sort(IMAGE1.Time);
+IMAGE1.Time(:)=IMAGE1.Time(b);
+IMAGE1.Time1(:)=IMAGE1.Time1(b);
+IMAGE1.Timestr(:,:)=IMAGE1.Timestr(b,:);
+IMAGE1.imageType(:)=IMAGE1.imageType(b);
+
+
+
 
 
 

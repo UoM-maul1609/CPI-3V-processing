@@ -55,20 +55,22 @@ def postProcess(bytes1,rois,R,H,I,Header):
 
     #https://stackoverflow.com/questions/2397754/how-can-i-create-an-array-list-of-dictionaries-in-python
     ROI_N={'Time' : timeROIs,  'IMAGE' : [dict() for x in range(len(rois))] }    
+    indroi=np.argsort(ROI_N['Time'][:,0])
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # associate variables with each ROI++++++++++++++++++++++++++++++++++++++++
     for i in range(len(rois)):
-        StartX=R['StartX'][i]
-        StartY=R['StartY'][i]
-        EndX=R['EndX'][i]
-        EndY=R['EndY'][i]
+        StartX=R['StartX'][indroi[i]]
+        StartY=R['StartY'][indroi[i]]
+        EndX=R['EndX'][indroi[i]]
+        EndY=R['EndY'][indroi[i]]
         
         X=(EndX-StartX+1)
         Y=(EndY-StartY+1)
         numberOfChars=X*Y
     
         chars1=bytearray(
-                bytes1[(rois[i]+1)*2-1+33*2-14+1:(rois[i]+1)*2-1+33*2-14+1+numberOfChars])
+                bytes1[(rois[indroi[i]]+1)*2-1+33*2-14+1:\
+                       (rois[indroi[i]]+1)*2-1+33*2-14+1+numberOfChars])
         #IM=np.reshape(chars1,(X,Y))
         ROI_N['IMAGE'][i]['IM']=np.transpose(np.reshape(chars1,(Y,X)))
         
@@ -80,9 +82,27 @@ def postProcess(bytes1,rois,R,H,I,Header):
     ROI_N['EndY']=R['EndY']
     #--------------------------------------------------------------------------
 
-
-
-
+    # sort
+    indroi=np.argsort(ROI_N['Time'][:,0])
+    ROI_N['Time'][:,:]=ROI_N['Time'][indroi,:]
+    ROI_N['imageType'][:]=ROI_N['imageType'][indroi]
+    ROI_N['StartX'][:]=ROI_N['StartX'][indroi]
+    ROI_N['StartY'][:]=ROI_N['StartY'][indroi]
+    ROI_N['EndX'][:]=ROI_N['EndX'][indroi]
+    ROI_N['EndY'][:]=ROI_N['EndY'][indroi]
+    #ROI_N['IMAGE'][:]=ROI_N['IMAGE'][indroi]
+    # sort
+    indhouse=np.argsort(HOUSE['Time'])
+    HOUSE['Time'][:]=HOUSE['Time'][indhouse]
+    HOUSE['deadtime'][:]=HOUSE['deadtime'][indhouse]
+    
+    # sort
+    indimage=np.argsort(IMAGE1['Time'][:])
+    IMAGE1['Time'][:]=IMAGE1['Time'][indimage]
+    IMAGE1['Time1'][:,:]=IMAGE1['Time1'][indimage,:]
+    IMAGE1['Timestr'][:]=IMAGE1['Timestr'][indimage]
+    IMAGE1['imageType'][:]=IMAGE1['imageType'][indimage]
+    
     return (ROI_N,HOUSE,IMAGE1)
 
 
