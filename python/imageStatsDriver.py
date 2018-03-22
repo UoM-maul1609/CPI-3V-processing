@@ -13,6 +13,7 @@ import time
 import numpy as np
 import sys
 from tqdm import tqdm
+import os
 
 def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     print('====================particle properties===========================')
@@ -47,7 +48,9 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
         p.join()
         del p
     """
-
+    if os.path.exists("{0}{1}".format(path1,'output1.txt')):
+        os.remove("{0}{1}".format(path1,'output1.txt'))
+        
     p=Pool(processes=nc)
 
     # build the list / transpose    
@@ -56,7 +59,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
            np.arange(lf)]
     list1=list(map(list,zip(*list1)))
     # farm out to processors:
-    r=list(p.map(mult_job,iterable=list1))
+    list(p.map(mult_job,iterable=list1))
 
     p.close()
     del p
@@ -72,7 +75,7 @@ def mult_job(list1): # path1, filename1, find_particle_edges
     find_particle_edges=list1[2]
     position=list1[3]
     # load from file
-    print("{0}{1}".format('Loading from file...',filename1))
+    #print("{0}{1}".format('Loading from file...',filename1))
     sys.stdout.flush()
     dataload=sio.loadmat("{0}{1}".format(path1, filename1.replace('.roi','.mat')),
                        variable_names=['ROI_N','HOUSE','IMAGE1','BG'])
@@ -80,23 +83,23 @@ def mult_job(list1): # path1, filename1, find_particle_edges
     HOUSE=dataload['HOUSE']
     IMAGE1=dataload['IMAGE1']
     BG=dataload['BG']
-    print("{0}{1}".format('Loaded ',filename1))
+    #print("{0}{1}".format('Loaded ',filename1))
     sys.stdout.flush()
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     
     
     
     # Particle properties +++++++++++++++++++++++++++++++++++++++++++++++++
-    print("{0}{1}".format('calculating particle properties...',filename1))
+    #print("{0}{1}".format('calculating particle properties...',filename1))
     sys.stdout.flush()
     dat=imageStats(ROI_N,BG,find_particle_edges,position)
-    print('done')
+    #print('done')
     sys.stdout.flush()
     #----------------------------------------------------------------------
     
     
     # save to file
-    print("{0}{1}".format('Saving to file... ',filename1))
+    #print("{0}{1}".format('Saving to file... ',filename1))
     sys.stdout.flush()
     #with open(path1 + filename1[i].replace('.roi','.mat'),'ab') as f:
     #    sio.savemat(f, {'dat':dat})
@@ -109,7 +112,7 @@ def mult_job(list1): # path1, filename1, find_particle_edges
     gc.collect()
     del gc.garbage[:]
 
-    print("{0}{1}".format('Saved ',filename1))
+    #print("{0}{1}".format('Saved ',filename1))
     sys.stdout.flush()
     
     return 1

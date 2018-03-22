@@ -47,6 +47,7 @@ def imageStats(ROI_N,BG,b_flag,position):
     dat['Time'] = ROI_N['Time'][0,0][:,0]
     
     tqdm.monitor_interval = 0
+    #https://stackoverflow.com/questions/45742888/tqdm-using-multiple-bars
     pbar=tqdm(total=len(ind), position=position)
     for i in ind:
         pbar.update(1)
@@ -107,7 +108,7 @@ def imageStats(ROI_N,BG,b_flag,position):
             continue
         
         if stats[0].eccentricity > 0.9999:
-            print("Eccentricity too high")
+            #print("Eccentricity too high")
             sys.stdout.flush()
             continue
         
@@ -115,7 +116,7 @@ def imageStats(ROI_N,BG,b_flag,position):
         dat['len'][i]=stats[0].major_axis_length*pix
         dat['area'][i]=stats[0].filled_area*pix*pix
         if(dat['area'][i] <= pix*pix):
-            print('Problem with this particle in regionprops')
+            #print('Problem with this particle in regionprops')
             sys.stdout.flush()
             continue
         dat['wid'][i]=stats[0].minor_axis_length*pix
