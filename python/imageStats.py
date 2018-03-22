@@ -78,7 +78,7 @@ def imageStats(ROI_N,BG,b_flag):
        
 
         # fairly insensitive to the 0.4 choice
-        contours=measure.find_contours((BW2-np.min(BW2))/255,0.9)
+        contours=measure.find_contours((BW2-np.min(BW2))/255,0.4)
         if not(len(contours)):
             continue
         
