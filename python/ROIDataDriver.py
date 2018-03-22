@@ -18,6 +18,12 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
    t_min=1e9
    t_max=0.
    FULL_BG={'Time':np.array([]),'IMAGE':np.array([]) }
+   temp_name=tempfile.mktemp()
+   sio.savemat(temp_name,{'FULL_BG':FULL_BG})
+   dataload=sio.loadmat(temp_name,variable_names=['FULL_BG'])
+   FULL_BG=dataload['FULL_BG']
+   #FULL_BGinit=FULL_BG.copy()
+   del dataload
  
    save_files=True
    
@@ -176,14 +182,14 @@ def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
        FULL_BG1=dataload['FULL_BG']
        del dataload
       
-       r=np.shape(FULL_BG['IMAGE'])
-       if len(r)==1:
-           FULL_BG=FULL_BG1
-       else: # append
+       r=len(FULL_BG['IMAGE'][0,0])
+       if r>0:
            FULL_BG['IMAGE'][0,0]=np.append(FULL_BG['IMAGE'][0,0], \
              FULL_BG1['IMAGE'][0,0],axis=1)
            FULL_BG['Time'][0,0]=np.append(FULL_BG['Time'][0,0], \
              FULL_BG1['Time'][0,0],axis=0)
+       else: # append
+           FULL_BG=FULL_BG1
    print('done')
    #--------------------------------------------------------------------------
    

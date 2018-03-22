@@ -29,7 +29,7 @@ if command_line_path:
     import sys
     path1=sys.argv[1]
     #path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
-    #/tmp/cpi_struct/'
+    #path1='/tmp/cpi-test/'
     from os import listdir
     #from os.path import isfile, join
     filename1 = [f for f in listdir(path1) if f.endswith(".roi")]
