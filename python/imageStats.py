@@ -15,7 +15,7 @@ from scipy.interpolate import RectBivariateSpline
 from tqdm import tqdm
 import sys
 
-def imageStats(ROI_N,BG,b_flag):
+def imageStats(ROI_N,BG,b_flag,position):
     
     pix=2.3
     ind,=np.where(ROI_N['imageType'][0,0][:,0] == 89)
@@ -47,7 +47,9 @@ def imageStats(ROI_N,BG,b_flag):
     dat['Time'] = ROI_N['Time'][0,0][:,0]
     
     tqdm.monitor_interval = 0
-    for i in tqdm(ind):
+    pbar=tqdm(total=len(ind), position=position)
+    for i in ind:
+        pbar.update(1)
         arr=ROI_N['IMAGE'][0,0][0,i]['IM'][0,0].astype(int)-BG[0,i]['BG'][0,0].astype(int)
      
         inda_r,inda_c=np.where(arr<=-15)

@@ -12,6 +12,7 @@ from multiprocessing import Pool, cpu_count
 import time
 import numpy as np
 import sys
+from tqdm import tqdm
 
 def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     print('====================particle properties===========================')
@@ -28,7 +29,8 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     
     lf=len(filename1)
     #nc=cpu_count()
-    nc=num_cores
+    nc=min([num_cores, lf])
+    
     fpc=np.ceil(lf/nc).astype(int)
     
     """for i in range(fpc): # number of chunks
@@ -50,10 +52,11 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
 
     # build the list / transpose    
     #https://stackoverflow.com/questions/6473679/transpose-list-of-lists
-    list1=[[path1]*len(filename1),filename1,[find_particle_edges]*len(filename1)]
+    list1=[[path1]*len(filename1),filename1,[find_particle_edges]*len(filename1),
+           np.arange(lf)]
     list1=list(map(list,zip(*list1)))
     # farm out to processors:
-    p.map(mult_job,iterable=list1)
+    r=list(p.map(mult_job,iterable=list1))
 
     p.close()
     del p
@@ -67,8 +70,9 @@ def mult_job(list1): # path1, filename1, find_particle_edges
     path1=list1[0]
     filename1=list1[1]
     find_particle_edges=list1[2]
+    position=list1[3]
     # load from file
-    print('Loading from file...')
+    print("{0}{1}".format('Loading from file...',filename1))
     sys.stdout.flush()
     dataload=sio.loadmat("{0}{1}".format(path1, filename1.replace('.roi','.mat')),
                        variable_names=['ROI_N','HOUSE','IMAGE1','BG'])
@@ -76,7 +80,7 @@ def mult_job(list1): # path1, filename1, find_particle_edges
     HOUSE=dataload['HOUSE']
     IMAGE1=dataload['IMAGE1']
     BG=dataload['BG']
-    print('done')
+    print("{0}{1}".format('Loaded ',filename1))
     sys.stdout.flush()
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     
@@ -85,14 +89,14 @@ def mult_job(list1): # path1, filename1, find_particle_edges
     # Particle properties +++++++++++++++++++++++++++++++++++++++++++++++++
     print("{0}{1}".format('calculating particle properties...',filename1))
     sys.stdout.flush()
-    dat=imageStats(ROI_N,BG,find_particle_edges)
+    dat=imageStats(ROI_N,BG,find_particle_edges,position)
     print('done')
     sys.stdout.flush()
     #----------------------------------------------------------------------
     
     
     # save to file
-    print('Saving to file...')
+    print("{0}{1}".format('Saving to file... ',filename1))
     sys.stdout.flush()
     #with open(path1 + filename1[i].replace('.roi','.mat'),'ab') as f:
     #    sio.savemat(f, {'dat':dat})
@@ -105,7 +109,7 @@ def mult_job(list1): # path1, filename1, find_particle_edges
     gc.collect()
     del gc.garbage[:]
 
-    print('done')
+    print("{0}{1}".format('Saved ',filename1))
     sys.stdout.flush()
     
     return 1
