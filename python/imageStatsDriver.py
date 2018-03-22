@@ -89,7 +89,7 @@ def mult_job(path1, filename1, find_particle_edges,position):
     # Particle properties +++++++++++++++++++++++++++++++++++++++++++++++++
     #print("{0}{1}".format('calculating particle properties...',filename1))
     sys.stdout.flush()
-    dat=imageStats(ROI_N,BG,find_particle_edges,position)
+    dat=imageStats(ROI_N,BG,find_particle_edges,position,filename1)
     #print('done')
     sys.stdout.flush()
     #----------------------------------------------------------------------

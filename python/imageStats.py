@@ -15,7 +15,7 @@ from scipy.interpolate import RectBivariateSpline
 from tqdm import tqdm
 import sys
 
-def imageStats(ROI_N,BG,b_flag,position):
+def imageStats(ROI_N,BG,b_flag,position,desc):
     
     pix=2.3
     ind,=np.where(ROI_N['imageType'][0,0][:,0] == 89)
@@ -49,6 +49,7 @@ def imageStats(ROI_N,BG,b_flag,position):
     tqdm.monitor_interval = 0
     #https://stackoverflow.com/questions/45742888/tqdm-using-multiple-bars
     pbar=tqdm(total=len(ind), position=position)
+    pbar.set_description("%s %d" % (desc,position))
     for i in ind:
         pbar.update(1)
         arr=ROI_N['IMAGE'][0,0][0,i]['IM'][0,0].astype(int)-BG[0,i]['BG'][0,0].astype(int)
