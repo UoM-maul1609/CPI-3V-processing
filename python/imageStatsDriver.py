@@ -34,21 +34,17 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     
     fpc=np.ceil(lf/nc).astype(int)
     
-    """for i in range(fpc): # number of chunks
-        p=Pool(processes=nc)
-        
+    p=Pool(processes=nc)
+    for i in range(lf): 
         # farm out to processors:
-        for j in range(nc): # number of files in a chunk
-            if (i+1)*(j+1) > lf:
-                continue
-            fn=filename1[j+i*nc]
-            p.apply_async(mult_job,args=(path1,fn,find_particle_edges))
+        fn=filename1[i]
+        p.apply_async(mult_job,args=(path1,fn,find_particle_edges,i))
 
-        p.close()
-        p.join()
-        del p
-    """
-    if os.path.exists("{0}{1}".format(path1,'output1.txt')):
+    p.close()
+    p.join()
+    del p
+    
+    """if os.path.exists("{0}{1}".format(path1,'output1.txt')):
         os.remove("{0}{1}".format(path1,'output1.txt'))
         
     p=Pool(processes=nc)
@@ -62,18 +58,19 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     list(p.map(mult_job,iterable=list1))
 
     p.close()
-    del p
+    del p"""
 
     
     return
 
 
 
-def mult_job(list1): # path1, filename1, find_particle_edges
-    path1=list1[0]
+#def mult_job(list1): # path1, filename1, find_particle_edges
+def mult_job(path1, filename1, find_particle_edges,position):
+    """path1=list1[0]
     filename1=list1[1]
     find_particle_edges=list1[2]
-    position=list1[3]
+    position=list1[3]"""
     # load from file
     #print("{0}{1}".format('Loading from file...',filename1))
     sys.stdout.flush()
