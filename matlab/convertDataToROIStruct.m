@@ -21,22 +21,23 @@ R=repmat(R,[length(rois) 1]); % replicate the matrix
 for i=1:length(rois)
     R(i).ulItemSize=double(typecast(uint16(bytes(rois(i)+[1 2])),'uint32'));
     R(i).usVersion=bytes(rois(i)+3);
-    R(i).StartX=bytes(rois(i)+4);
-    R(i).StartY=bytes(rois(i)+5);
-    R(i).EndX=bytes(rois(i)+6);
-    R(i).EndY=bytes(rois(i)+7);
-    R(i).PixBytes=double(typecast(uint16(bytes(rois(i)+8)),'int16'));;
-    R(i).usROIFlags=bytes(rois(i)+9);
+    if(R(i).usVersion==25)
+        R(i).StartX=bytes(rois(i)+4);
+        R(i).StartY=bytes(rois(i)+5);
+        R(i).EndX=bytes(rois(i)+6);
+        R(i).EndY=bytes(rois(i)+7);
+        R(i).PixBytes=double(typecast(uint16(bytes(rois(i)+8)),'int16'));;
+        R(i).usROIFlags=bytes(rois(i)+9);
+
+        R(i).fLength=double(typecast(uint16(bytes(rois(i)+[10 11])),'single'));
+        R(i).ulStartLen=double(typecast(uint16(bytes(rois(i)+[12 13])),'uint32'));
+        R(i).ulEndLen=double(typecast(uint16(bytes(rois(i)+[14 15])),'uint32'));
+
+        R(i).fWidth=double(typecast(uint16(bytes(rois(i)+[16 17])),'single'));
+        R(i).Spare=double(typecast(uint16(bytes(rois(i)+[18:18+9-1])),'int8'));
+        R(i).order=order(rois(i));
     
-    R(i).fLength=double(typecast(uint16(bytes(rois(i)+[10 11])),'single'));
-    R(i).ulStartLen=double(typecast(uint16(bytes(rois(i)+[12 13])),'uint32'));
-    R(i).ulEndLen=double(typecast(uint16(bytes(rois(i)+[14 15])),'uint32'));
-   
-    R(i).fWidth=double(typecast(uint16(bytes(rois(i)+[16 17])),'single'));
-    R(i).Spare=double(typecast(uint16(bytes(rois(i)+[18:18+9-1])),'int8'));
-    R(i).order=order(rois(i));
-    
-    
+    end    
 end
 
 ver=cat(1,R.usVersion);
