@@ -45,27 +45,28 @@ def convertDataToROISA(bytes1,ushort,order,rois):
         # although ulong, it appears uint is needed here:
         #https://docs.python.org/2/library/struct.html
         # ulong would be 8 bytes1
+        
         R['ulItemSize'][i],=struct.unpack('I', bytes1[ro+2:ro+2+4]) 
         R['usVersion'][i]=ushort[rois[i]+3]
-                
-        R['StartX'][i]=ushort[rois[i]+4]
-        R['StartY'][i]=ushort[rois[i]+5]
-        R['EndX'][i]=ushort[rois[i]+6]
-        R['EndY'][i]=ushort[rois[i]+7]
-        R['PixBytes'][i],=struct.unpack('h', bytes1[ro+16:ro+16+2]) 
-        R['usROIFlags'][i]=ushort[rois[i]+9]
-        
-        R['fLength'][i],=struct.unpack('f', bytes1[ro+20:ro+20+4]) 
-
-        R['ulStartLen'][i],=struct.unpack('I', bytes1[ro+24:ro+24+4]) 
-        R['ulEndLen'][i],=struct.unpack('I', bytes1[ro+28:ro+28+4]) 
-        
-        R['fWidth'][i],=struct.unpack('f', bytes1[ro+32:ro+32+4]) 
-
-        R['Spare'][i]=np.reshape(bytearray(bytes1[ro+36:ro+36+18]),(18,1))
-
-        
-        R['order'][i]=order[rois[i]]
+        if(R['usVersion'][i]==25):
+            R['StartX'][i]=ushort[rois[i]+4]
+            R['StartY'][i]=ushort[rois[i]+5]
+            R['EndX'][i]=ushort[rois[i]+6]
+            R['EndY'][i]=ushort[rois[i]+7]
+            R['PixBytes'][i],=struct.unpack('h', bytes1[ro+16:ro+16+2]) 
+            R['usROIFlags'][i]=ushort[rois[i]+9]
+            
+            R['fLength'][i],=struct.unpack('f', bytes1[ro+20:ro+20+4]) 
+    
+            R['ulStartLen'][i],=struct.unpack('I', bytes1[ro+24:ro+24+4]) 
+            R['ulEndLen'][i],=struct.unpack('I', bytes1[ro+28:ro+28+4]) 
+            
+            R['fWidth'][i],=struct.unpack('f', bytes1[ro+32:ro+32+4]) 
+    
+            R['Spare'][i]=np.reshape(bytearray(bytes1[ro+36:ro+36+18]),(18,1))
+    
+            
+            R['order'][i]=order[rois[i]]
        
     
     

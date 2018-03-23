@@ -109,67 +109,69 @@ def convertDataToImageSA(bytes1,ushort,order,images):
         # ulong would be 8 bytes1
         I['ulItemSize'][i],=struct.unpack('I', bytes1[im+2:im+2+4]) 
         I['usVersion'][i]=ushort[images[i]+3]
-        I['usROIsCount'][i]=ushort[images[i]+4]
-        I['ulTotROISize'][i],=struct.unpack('I', bytes1[im+10:im+10+4]) 
         
-        I['day'][i]=bytes1[im+14]
-        I['hour'][i]=bytes1[im+15]
-        I['minute'][i]=bytes1[im+16]
-        I['second'][i]=bytes1[im+17]
-
-        I['msecond'][i]=ushort[images[i]+9]
-        I['ImageType'][i]=ushort[images[i]+10]
-        
-        I['StartX'][i]=ushort[images[i]+11]
-        I['StartY'][i]=ushort[images[i]+12]
-        I['EndX'][i]=ushort[images[i]+13]
-        I['EndY'][i]=ushort[images[i]+14]
-        I['BGRate'][i]=ushort[images[i]+15]
-        I['usBkgPDSThresh'][i]=ushort[images[i]+16]
-        
-        I['ulFrmsProc'][i],=struct.unpack('I', bytes1[im+34:im+34+4]) 
-        
-        I['IThreshold'][i]=bytes1[im+38]
-        I['ROIError'][i]=bytes1[im+39]
-        
-        I['ROIMinSize'][i]=ushort[images[i]+20]
-        
-        I['ROIAspectRatio'][i],=struct.unpack('f', bytes1[im+42:im+42+4]) 
-        I['ROIFillRatio'][i],=struct.unpack('f', bytes1[im+46:im+46+4]) 
-        
-        I['ROIFCount'][i],=struct.unpack('I', bytes1[im+50:im+50+4]) 
-        
-        I['ucImgMean'][i]=bytes1[im+54]
-        I['ucBkgMean'][i]=bytes1[im+55]
-        
-        I['Spare1'][i]=ushort[images[i]+28]
-        I['ROIXPad'][i]=ushort[images[i]+29]
-        I['ROIYPad'][i]=ushort[images[i]+30]
-        
-        I['ulStrobeCount'][i],=struct.unpack('I', bytes1[im+62:im+62+4]) 
-        I['ulFrmsSaved'][i],=struct.unpack('I', bytes1[im+66:im+66+4]) 
-
-        I['ImgMinVal'][i]=bytes1[im+70]
-        I['ImgMaxVal'][i]=bytes1[im+71]
+        if(I['usVersion'][i]==40):
+            I['usROIsCount'][i]=ushort[images[i]+4]
+            I['ulTotROISize'][i],=struct.unpack('I', bytes1[im+10:im+10+4]) 
+            
+            I['day'][i]=bytes1[im+14]
+            I['hour'][i]=bytes1[im+15]
+            I['minute'][i]=bytes1[im+16]
+            I['second'][i]=bytes1[im+17]
     
-        I['ulROIsSaved'][i],=struct.unpack('I', bytes1[im+72:im+72+4]) 
-
-        I['usPDSChkSumFlag'][i]=ushort[images[i]+38]
-        I['usPDSHead'][i]=np.reshape(ushort[images[i]+39:images[i]+41+1],(3,1))
+            I['msecond'][i]=ushort[images[i]+9]
+            I['ImageType'][i]=ushort[images[i]+10]
+            
+            I['StartX'][i]=ushort[images[i]+11]
+            I['StartY'][i]=ushort[images[i]+12]
+            I['EndX'][i]=ushort[images[i]+13]
+            I['EndY'][i]=ushort[images[i]+14]
+            I['BGRate'][i]=ushort[images[i]+15]
+            I['usBkgPDSThresh'][i]=ushort[images[i]+16]
+            
+            I['ulFrmsProc'][i],=struct.unpack('I', bytes1[im+34:im+34+4]) 
+            
+            I['IThreshold'][i]=bytes1[im+38]
+            I['ROIError'][i]=bytes1[im+39]
+            
+            I['ROIMinSize'][i]=ushort[images[i]+20]
+            
+            I['ROIAspectRatio'][i],=struct.unpack('f', bytes1[im+42:im+42+4]) 
+            I['ROIFillRatio'][i],=struct.unpack('f', bytes1[im+46:im+46+4]) 
+            
+            I['ROIFCount'][i],=struct.unpack('I', bytes1[im+50:im+50+4]) 
+            
+            I['ucImgMean'][i]=bytes1[im+54]
+            I['ucBkgMean'][i]=bytes1[im+55]
+            
+            I['Spare1'][i]=ushort[images[i]+28]
+            I['ROIXPad'][i]=ushort[images[i]+29]
+            I['ROIYPad'][i]=ushort[images[i]+30]
+            
+            I['ulStrobeCount'][i],=struct.unpack('I', bytes1[im+62:im+62+4]) 
+            I['ulFrmsSaved'][i],=struct.unpack('I', bytes1[im+66:im+66+4]) 
+    
+            I['ImgMinVal'][i]=bytes1[im+70]
+            I['ImgMaxVal'][i]=bytes1[im+71]
         
-        I['ulTime'][i],=struct.unpack('I', bytes1[im+84:im+84+4]) 
-        I['ArrivalTime1'][i]=ushort[images[i]+43]
-        I['ArrivalTime2'][i]=ushort[images[i]+44]
-
-        I['TransitTime'][i]=ushort[images[i]+46]
-        I['usStrobes'][i]=ushort[images[i]+47]
-        I['PulseInt45'][i]=ushort[images[i]+48]
-        I['PulseInt90'][i]=ushort[images[i]+49]
-        I['PDSChkSum'][i]=ushort[images[i]+50]
-        I['ProbeMode'][i]=ushort[images[i]+51]
-
-        
-        I['order'][i]=order[images[i]]
+            I['ulROIsSaved'][i],=struct.unpack('I', bytes1[im+72:im+72+4]) 
+    
+            I['usPDSChkSumFlag'][i]=ushort[images[i]+38]
+            I['usPDSHead'][i]=np.reshape(ushort[images[i]+39:images[i]+41+1],(3,1))
+            
+            I['ulTime'][i],=struct.unpack('I', bytes1[im+84:im+84+4]) 
+            I['ArrivalTime1'][i]=ushort[images[i]+43]
+            I['ArrivalTime2'][i]=ushort[images[i]+44]
+    
+            I['TransitTime'][i]=ushort[images[i]+46]
+            I['usStrobes'][i]=ushort[images[i]+47]
+            I['PulseInt45'][i]=ushort[images[i]+48]
+            I['PulseInt90'][i]=ushort[images[i]+49]
+            I['PDSChkSum'][i]=ushort[images[i]+50]
+            I['ProbeMode'][i]=ushort[images[i]+51]
+    
+            
+            I['order'][i]=order[images[i]]
        
     
     
