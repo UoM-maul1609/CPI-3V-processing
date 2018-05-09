@@ -110,7 +110,7 @@ def convertDataToImageSA(bytes1,ushort,order,images):
         I['ulItemSize'][i],=struct.unpack('I', bytes1[im+2:im+2+4]) 
         I['usVersion'][i]=ushort[images[i]+3]
         
-        if(I['usVersion'][i]==40):
+        if((I['usVersion'][i]==40) or (I['usVersion'][i]==25)):
             I['usROIsCount'][i]=ushort[images[i]+4]
             I['ulTotROISize'][i],=struct.unpack('I', bytes1[im+10:im+10+4]) 
             
@@ -176,7 +176,7 @@ def convertDataToImageSA(bytes1,ushort,order,images):
     
     
     ver=I['usVersion']
-    ind,=np.where(ver==40)
+    ind,=np.where((ver==40) | (ver==25) )
     I=I[ind]
     images=images[ind]
 

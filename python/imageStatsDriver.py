@@ -38,7 +38,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores=cpu_count()):
     for i in range(lf): 
         # farm out to processors:
         fn=filename1[i]
-        p.apply_async(mult_job,args=(path1,fn,find_particle_edges,i))
+        p.apply_async(mult_job,args=(path1,fn,find_particle_edges,np.mod(i+1,nc)))
 
     p.close()
     p.join()

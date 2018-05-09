@@ -35,6 +35,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
                 (path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,\
                  process_sweep1_if_exist))
        (FULL_BG,t_min,t_max)=result.get()
+       #(FULL_BG,t_min,t_max)=mult_job(path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,process_sweep1_if_exist)
 
        p.close()
        p.join()
