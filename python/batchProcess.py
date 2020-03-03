@@ -11,7 +11,7 @@ process_roi_driver=True
 process_image_stats=True
 export_images=True
 output_timeseries=True
-num_cores=4
+num_cores=8
 
 path1='/Users/mccikpc2/Dropbox (The University of Manchester)/data/'
             # path to raw data

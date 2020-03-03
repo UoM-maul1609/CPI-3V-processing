@@ -74,7 +74,7 @@ def imageStats(ROI_N,BG,b_flag,position,desc):
         mag=np.sqrt(dx**2+dy**2)
         (th,level)=cv2.threshold(mag.astype('H'),50,255,cv2.THRESH_BINARY)
         """
-        (th,level)=cv2.threshold(arr.astype('H'),38,255,cv2.THRESH_BINARY)
+        (th,level)=cv2.threshold(np.float32(arr.astype('H')),38,255,cv2.THRESH_BINARY)
         
 
         BW2=level.astype('B')

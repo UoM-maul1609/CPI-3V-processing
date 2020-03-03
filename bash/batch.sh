@@ -1,13 +1,24 @@
 #!/bin/bash
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C072/3V-CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C072/3V-CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C073/3V-CPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C073/3V-CPI/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C074/3VCPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C074/3VCPI/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C075/3VCPI/3VCPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C075/3VCPI/3VCPI/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C076/3VCPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C076/3VCPI/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C077/3V-CPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C077/3V-CPI/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C078/3VCPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C078/3VCPI/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C079/3VCPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C079/3VCPI/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C080/3vcpi/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C080/3vcpi/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C081/3VCPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C081/3VCPI/CPI/python.out &
-python36 python/batchProcess.py /mnt/mobile4/Database6/PICASSO/rawData/C082/3VCPI/CPI/ #> /mnt/mobile4/Database6/PICASSO/rawData/C082/3VCPI/CPI/python.out &
+echo 'C072'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C072/3VCPI/ > /models/mccikpc2/CPI-analysis/C072/3VCPI/python.out 
+echo 'C073'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C073/3VCPI/ > /models/mccikpc2/CPI-analysis/C073/3VCPI/python.out 
+echo 'C074'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C074/3VCPI/ > /models/mccikpc2/CPI-analysis/C074/3VCPI/python.out 
+echo 'C075'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C075/3VCPI/ > /models/mccikpc2/CPI-analysis/C075/3VCPI/python.out 
+echo 'C076'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C076/3VCPI/ > /models/mccikpc2/CPI-analysis/C076/3VCPI/python.out 
+echo 'C077'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C077/3VCPI/ > /models/mccikpc2/CPI-analysis/C077/3VCPI/python.out 
+echo 'C078'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C078/3VCPI/ > /models/mccikpc2/CPI-analysis/C078/3VCPI/python.out 
+echo 'C079'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C079/3VCPI/ > /models/mccikpc2/CPI-analysis/C079/3VCPI/python.out 
+echo 'C080'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C080/3VCPI/ > /models/mccikpc2/CPI-analysis/C080/3VCPI/python.out 
+echo 'C081'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C081/3VCPI/ > /models/mccikpc2/CPI-analysis/C081/3VCPI/python.out 
+echo 'C082'
+python3.6 batchProcess.py /models/mccikpc2/CPI-analysis/C082/3VCPI/ > /models/mccikpc2/CPI-analysis/C082/3VCPI/python.out 
 
