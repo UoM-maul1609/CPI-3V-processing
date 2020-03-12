@@ -96,11 +96,13 @@ def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile):
             indim,=np.where((IMAGE1['Time1'][0,0][:,0]>=(timeser['Time'][j]-dt2/2.)) & \
                       (IMAGE1['Time1'][0,0][:,0]<(timeser['Time'][j]+dt2/2.)))
             # interpolation:
-            twin=f(np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.]))
-            indho,=np.where((HOUSE['Time'][0,0][0,:]  >=twin[0]) & \
-                            (HOUSE['Time'][0,0][0,:]< twin[1]))
-            timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
-    
+            try:
+                twin=f(np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.]))
+                indho,=np.where((HOUSE['Time'][0,0][0,:]  >=twin[0]) & \
+                                (HOUSE['Time'][0,0][0,:]< twin[1]))
+                timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
+            except:
+                timeser['deadtimes'][j]=0.0
             timeser['nimages'][j]=len(indim)
             
             

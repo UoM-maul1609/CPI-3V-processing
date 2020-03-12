@@ -30,16 +30,25 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
    print("=========================1st sweep================================")
    for i in range(0,len(filename)):
        p=Pool(processes=1)
-
+       
        result=p.apply_async(mult_job,\
                 (path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,\
                  process_sweep1_if_exist))
        (FULL_BG,t_min,t_max)=result.get()
-       #(FULL_BG,t_min,t_max)=mult_job(path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,process_sweep1_if_exist)
-
+       del FULL_BG
+       dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),
+                               variable_names=['FULL_BG'])
+       FULL_BG=dataload['FULL_BG']
+       del dataload 
+       del result
+#       (FULL_BG,t_min,t_max)=mult_job(path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,process_sweep1_if_exist)
+        # Garbage collection:
+       gc.collect()
+       del gc.garbage[:]
+       
        p.close()
        p.join()
-       del p
+
 
        
    print('=========================2nd sweep================================')
@@ -49,13 +58,17 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
    t_range=dataload['t_range']
    del dataload
    for i in range(0,len(filename)):
-       p=Pool(processes=1)
 
+       p=Pool(processes=1)
        p.apply_async(mult_job2,\
                 (path1,filename[i],FULL_BG,save_files))
+#       mult_job2(path1,filename[i],FULL_BG,save_files)
+        # Garbage collection:
+       gc.collect()
+       del gc.garbage[:]
        p.close()
        p.join()
-       del p
+#   del p
 
 
    return (t_range)
@@ -113,7 +126,7 @@ def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
    del ushort1, ushort2
    # append two nmpy arrays
    order=np.append(order1,order2)
-
+       
    del order1, order2
       
    bytes1=pack('H'*int(lb), *ushort) # the H means ushort int

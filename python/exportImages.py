@@ -56,7 +56,12 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
         tqdm.monitor_interval = 0
         pbar=tqdm(total=len(dat['foc'][0,0]['focus'][0]))
         while(i<len(dat['foc'][0,0]['focus'][0])):
-            pbar.update(1)
+            if np.mod(i+1,10)==0:
+                pbar.update(10)
+            elif i+1==len(dat['foc'][0,0]['focus'][0]):
+                pbar.n=len(dat['foc'][0,0]['focus'][0])
+                pbar.update()
+                
             # check to see if criteria are met
             if ((dat['len'][0,0][i,0]<size_thresh) or 
                 (np.asscalar(dat['foc'][0,0]['focus'][0,i]) <=foc_crit) ):

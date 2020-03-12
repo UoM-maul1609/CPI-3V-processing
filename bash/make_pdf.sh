@@ -16,6 +16,7 @@ for i in `ls $1/*.png`
   foo=${string#$prefix}
   foo=${foo%$suffix}
   echo $i
+  echo $foo
   convert $i /tmp/${foo}pdf
 done
 

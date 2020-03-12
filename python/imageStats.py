@@ -5,18 +5,33 @@ Created on Mon Mar 12 10:05:02 2018
 
 @author: mccikpc2
 """
-import numpy as np
-import cv2
-import scipy.signal as signal
-from skimage import measure
-from matplotlib import path
-#from scipy.interpolate import interp2d
-from scipy.interpolate import RectBivariateSpline
-from tqdm import tqdm
-import sys
 
-def imageStats(ROI_N,BG,b_flag,position,desc):
+
+#from scipy.interpolate import interp2d
+#import matplotlib.pyplot as plt
+#import globalLock as gb
+
+
+def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
+    import numpy as np
+    from scipy import signal
+
+    import sys
+    #import numpy as np
+    import cv2
+    from skimage import measure
+    from matplotlib import path
+    #from tqdm import tqdm
+    #import scipy.signal as signal
+    import time
+    import gc
+    from tqdm import tqdm
+    import traceback
+    #import globalLock as gb
+
     
+    NB=30
+    ld=3
     pix=2.3
     ind,=np.where(ROI_N['imageType'][0,0][:,0] == 89)
     l1=len(ROI_N['IMAGE'][0,0][0,:])
@@ -42,107 +57,177 @@ def imageStats(ROI_N,BG,b_flag,position,desc):
     
     dat['foc']=foc1
         
-        
+     
     
     dat['Time'] = ROI_N['Time'][0,0][:,0]
     
-    tqdm.monitor_interval = 0
+    if len(ind)==0:
+        return dat
+    
     #https://stackoverflow.com/questions/45742888/tqdm-using-multiple-bars
-    pbar=tqdm(total=len(ind), position=position)
-    pbar.set_description("%s %d" % (desc,position))
+    flag=True
+    while flag:
+	    gl=globalLock.acquire(timeout=1)
+	    if gl:
+		    pbar = tqdm(total=len(ind), position=position,leave=True) #mininterval=5, maxinterval=10)
+		    pbar.monitor_interval = 0
+		    pbar.set_description("%s %d" % (desc,position))
+		    sys.stdout.flush()
+		    sys.stderr.flush()
+		    globalLock.release()
+		    flag=False
+
     for i in ind:
-        pbar.update(1)
-        arr=ROI_N['IMAGE'][0,0][0,i]['IM'][0,0].astype(int)-BG[0,i]['BG'][0,0].astype(int)
-     
-        inda_r,inda_c=np.where(arr<=-15)
-        indb_r,indb_c=np.where(arr>-15)
-        
-        if len(inda_r)<=7:
-            continue
-        
-        arr=(arr-np.min(arr))
-        #mx=np.max(arr)
-        #arr=arr*255/mx
-        #arr=arr/255
-    
-        (r,c)=np.shape(arr)
-
-        #https://docs.opencv.org/2.4/doc/tutorials/imgproc/threshold/threshold.html        
-        #https://docs.opencv.org/2.4/modules/imgproc/doc/miscellaneous_transformations.html?highlight=threshold#threshold
-        """dx=cv2.Sobel(arr.astype(float),cv2.CV_64F,1,0,ksize=1)
-        dy=cv2.Sobel(arr.astype(float),cv2.CV_64F,0,1,ksize=1)
-        mag=np.sqrt(dx**2+dy**2)
-        (th,level)=cv2.threshold(mag.astype('H'),50,255,cv2.THRESH_BINARY)
-        """
-        (th,level)=cv2.threshold(np.float32(arr.astype('H')),38,255,cv2.THRESH_BINARY)
-        
-
-        BW2=level.astype('B')
-        BW2[1:-1,1:-1]=signal.medfilt2d(level.astype('B'),(3,3))[1:-1,1:-1]
-       
-
-        # fairly insensitive to the 0.4 choice
-        contours=measure.find_contours((BW2-np.min(BW2))/255,0.4)
-        if not(len(contours)):
-            continue
-        
-        # put longest list first
-        contours.sort(key=len,reverse=True)
-        contour=contours[0]
-        
-
-        # https://stackoverflow.com/questions/3654289/scipy-create-2d-polygon-mask
-        x, y = np.meshgrid(np.arange(r), np.arange(c))
-        x, y = x.flatten(), y.flatten()
-        points = np.vstack((x,y)).T
-        
-        
-        p=path.Path(contour)
-        mask=p.contains_points(points, radius=2)
-        IN = mask.reshape((c,r)).T
-        
-        #http://scikit-image.org/docs/dev/auto_examples/segmentation/plot_regionprops.html
-        stats=measure.regionprops(IN.astype('B'))
-        if not(len(stats)):
-            continue
-        if stats[0].major_axis_length==0:
-            continue
-        
-        if stats[0].eccentricity > 0.9999:
-            #print("Eccentricity too high")
-            sys.stdout.flush()
-            continue
-        
-        
-        dat['len'][i]=stats[0].major_axis_length*pix
-        dat['area'][i]=stats[0].filled_area*pix*pix
-        if(dat['area'][i] <= pix*pix):
-            #print('Problem with this particle in regionprops')
-            sys.stdout.flush()
-            continue
-        dat['wid'][i]=stats[0].minor_axis_length*pix
-
-        
-        dat['round'][i]=stats[0].filled_area/(np.pi/4.*stats[0].major_axis_length**2)
-        dat['centroid'][i,:]=stats[0].centroid
             
-        boundaries=contour
+        if np.mod(i+1,50)==0:
+            gl=globalLock.acquire(timeout=1)
+            if gl:
+                pbar.update(50)
+                sys.stdout.flush()
+                sys.stderr.flush()
+                globalLock.release()
+                time.sleep(0.01)
+
+        elif (i+1)==len(ind):
+            gl=globalLock.acquire(timeout=1)
+            if gl:
+                pbar.n=i
+                pbar.update()
+                sys.stdout.flush()
+                sys.stderr.flush()
+                globalLock.release()
+                time.sleep(0.01)
+        try:
+            #pbar.update(1)
+            arr=ROI_N['IMAGE'][0,0][0,i]['IM'][0,0].astype(int)-BG[0,i]['BG'][0,0].astype(int)
+         
+            inda_r,inda_c=np.where(arr<=-15)
+            indb_r,indb_c=np.where(arr>-15)
+            
+            if len(inda_r)<=20:
+                continue
+            
+            arr=(arr-np.min(arr))
+            #mx=np.max(arr)
+            #arr=arr*255/mx
+            #arr=arr/255
         
-        
-        foc=calculate_focus(boundaries,arr,b_flag) # maybe focus less than 12?
+            (r,c)=np.shape(arr)
+            if r <= 15 and c <=15:
+                continue
     
-        dat['foc'][i]=foc
-        
+            #https://docs.opencv.org/2.4/doc/tutorials/imgproc/threshold/threshold.html        
+            #https://docs.opencv.org/2.4/modules/imgproc/doc/miscellaneous_transformations.html?highlight=threshold#threshold
+            """dx=cv2.Sobel(arr.astype(float),cv2.CV_64F,1,0,ksize=1)
+            dy=cv2.Sobel(arr.astype(float),cv2.CV_64F,0,1,ksize=1)
+            mag=np.sqrt(dx**2+dy**2)
+            (th,level)=cv2.threshold(mag.astype('H'),50,255,cv2.THRESH_BINARY)
+            """
+            (th,level)=cv2.threshold(np.float32(arr.astype('H')),38,255,cv2.THRESH_BINARY)
+            
     
+            BW2=level.astype('B')
+            BW2[1:-1,1:-1]=signal.medfilt2d(level.astype('B'),(3,3))[1:-1,1:-1]
+    
+            # fairly insensitive to the 0.4 choice
+            contours=measure.find_contours((BW2-np.min(BW2))/255,0.4)
+            if not(len(contours)):
+                continue
+            
+            # put longest list first
+            contours.sort(key=len,reverse=True)
+            contour=contours[0]
+            
+    
+            # https://stackoverflow.com/questions/3654289/scipy-create-2d-polygon-mask
+            x, y = np.meshgrid(np.arange(r), np.arange(c))
+            x, y = x.flatten(), y.flatten()
+            points = np.vstack((x,y)).T
+            
+            
+            p=path.Path(contour)
+            if len(contour) > 10000:
+                continue
+            """
+            print(' ')
+            print(np.shape(contour))
+            plt.imshow(arr)
+            plt.plot(contour[:,1],contour[:,0])
+            plt.savefig('/tmp/test.png')
+            """
+            mask=p.contains_points(points, radius=2)
+            IN = mask.reshape((c,r)).T
+            
+            #http://scikit-image.org/docs/dev/auto_examples/segmentation/plot_regionprops.html
+            stats=measure.regionprops(IN.astype('B'))
+            if not(len(stats)):
+                continue
+            if stats[0].major_axis_length==0:
+                continue
+            
+            if stats[0].eccentricity > 0.9999:
+                #print("Eccentricity too high")
+                #sys.stdout.flush()
+                continue
+            
+            
+            dat['len'][i]=stats[0].major_axis_length*pix
+            dat['area'][i]=stats[0].filled_area*pix*pix
+            if(dat['area'][i] <= pix*pix):
+                #print('Problem with this particle in regionprops')
+                #sys.stdout.flush()
+                continue
+            dat['wid'][i]=stats[0].minor_axis_length*pix
+    
+            
+            dat['round'][i]=stats[0].filled_area/(np.pi/4.*stats[0].major_axis_length**2)
+            dat['centroid'][i,:]=stats[0].centroid
+                
+            boundaries=contour
+            
+            foc=calculate_focus(boundaries,arr,b_flag) # maybe focus less than 12?
+    
+            dat['foc'][i]=foc
+            
+            del boundaries, contour, contours, IN, BW2, level, th, mask, stats
+            gc.collect()
+            del gc.garbage[:]
+        except:
+            gl=globalLock.acquire(timeout=1)
+            #print("Unexpected error")
+            #print(traceback.format_exc())
+            if gl:
+                globalLock.release()
+    
+    time.sleep(0.01)
+    
+    flag=True
+    while flag:
+        gl=globalLock.acquire(timeout=1)
+        if gl:
+            pbar.last_print_n=0
+            pbar.n=len(ind)-1
+            pbar.update()
+            pbar.close()
+            sys.stdout.flush()
+            sys.stderr.flush()
+            globalLock.release()
+            flag=False
+
+
     return dat
 
 
 
 
 def calculate_focus(boundaries,IM,b_flag):
+    import numpy as np
+    from scipy.interpolate import RectBivariateSpline
+    from scipy import signal
+    
+    NB=30
     ld=3
-    
-    
+
     if not(b_flag):
         foc=np.zeros(1, dtype=[('focus', 'float')])
     else:
@@ -155,24 +240,26 @@ def calculate_focus(boundaries,IM,b_flag):
 
     foc['focus'][0]=np.nan
 
-    ind1=np.linspace(1,30,len(boundaries[:,0]))
-    ind2=np.linspace(1,ind1[-1],30);
+    ind1=np.linspace(1,NB,len(boundaries[:,0]))
+    ind2=np.linspace(1,ind1[-1],NB);
     if not(len(ind2)):
         return foc
         
     
     
     
-    #if not boundaries2:
         
-    boundaries2=np.zeros((len(ind2),2)) 
-    (r,c)=np.shape(boundaries2)
+    #boundaries2=np.zeros((len(NB),2)) 
+    #xs=np.zeros((ld,NB-1))
+    #ys=np.zeros((ld,NB-1))
+    #focus=np.zeros((NB-1,1))
+    #intensity=np.zeros(ld)
     
-    xs=np.zeros((ld,r-1))
-    ys=np.zeros((ld,r-1))
-    focus=np.zeros((r-1,1))
+    boundaries2=np.zeros((NB,2))
+    xs=np.zeros((ld,NB-1))
+    ys=np.zeros((ld,NB-1))
+    focus=np.zeros((NB-1,1))
     intensity=np.zeros(ld)
-    
     
     
     if len(boundaries[:,0])>9:
@@ -204,7 +291,7 @@ def calculate_focus(boundaries,IM,b_flag):
     deltay=(boundaries2[1:len(boundaries2),1]-boundaries2[0:-1,1])
     
     
-    for i in range(r-1):
+    for i in range(NB-1):
         xs[:,i]=np.linspace(midpointx[i]+dx1[i],midpointx[i]+dx2[i],ld)
         ys[:,i]=np.linspace(midpointy[i]-dy1[i],midpointy[i]-dy2[i],ld)
         
@@ -228,16 +315,14 @@ def calculate_focus(boundaries,IM,b_flag):
         #intensity=griddata(xs[:,i],ys[:,i],(rr,cc),method='nearest')
         #f=interp2d(rr,cc,IM,bounds_error=False,method='linear')
         f=RectBivariateSpline(rr,cc,IM)
-        for i in range(0,r-1):
+        for i in range(0,NB-1):
             for j in range(ld):
                 intensity[j]=f(xs[j,i],ys[j,i]) 
             focus[i]=np.abs(np.gradient(intensity,edge_order=2)[1])
             foc['focus'][0]=np.nanmean(focus)/2.
-            
-            
+        del f, xs, ys, RectBivariateSpline
     except:
         foc['focus'][0]=np.nan
-    
         
     if b_flag:
        #foc['xs'][0]=xs
