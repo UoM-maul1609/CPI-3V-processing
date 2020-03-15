@@ -6,49 +6,81 @@ Created on Mon Mar 12 10:05:02 2018
 @author: mccikpc2
 """
 
+"""
+from os import environ
+environ["OMP_NUM_THREADS"]="1"
+environ["OPENBLAS_NUM_THREADS"]="1"
+environ["MKL_NUM_THREADS"]="1"
+environ["VECLIB_MAXIMUM_THREADS"]="1"
+environ["NUMEXPR_NUM_THREADS"]="1"
 
-#from scipy.interpolate import interp2d
-#import matplotlib.pyplot as plt
-#import globalLock as gb
+from cv2 import setNumThreads
+from cv2 import threshold
+from cv2 import THRESH_BINARY
+from skimage import measure
+from matplotlib import path
+from time import sleep
+import gc
+from tqdm import tqdm
 
+import numpy as np
+from scipy.interpolate import RectBivariateSpline
+from scipy import signal
+"""
+NB=30
+ld=3
+from numpy import zeros
+boundaries2=zeros((NB,2),dtype='float')
+xs=zeros((ld,NB-1),dtype='float')
+ys=zeros((ld,NB-1),dtype='float')
+focus=zeros((NB-1,1),dtype='float')
+intensity=zeros(ld,dtype='float')
 
 def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
-    import numpy as np
-    from scipy import signal
 
     import sys
-    #import numpy as np
-    import cv2
+    """
+    from os import environ
+    environ["OMP_NUM_THREADS"]="1"
+    environ["OPENBLAS_NUM_THREADS"]="1"
+    environ["MKL_NUM_THREADS"]="1"
+    environ["VECLIB_MAXIMUM_THREADS"]="1"
+    environ["NUMEXPR_NUM_THREADS"]="1"
+    """
+    from cv2 import setNumThreads
+    from cv2 import threshold
+    from cv2 import THRESH_BINARY
     from skimage import measure
     from matplotlib import path
-    #from tqdm import tqdm
-    #import scipy.signal as signal
-    import time
+    from time import sleep
     import gc
     from tqdm import tqdm
-    import traceback
-    #import globalLock as gb
 
+    import numpy as np
+    from scipy.interpolate import RectBivariateSpline
+    from scipy import signal
+
+    setNumThreads(1)
     
-    NB=30
-    ld=3
+    
+    global NB, ld
     pix=2.3
     ind,=np.where(ROI_N['imageType'][0,0][:,0] == 89)
     l1=len(ROI_N['IMAGE'][0,0][0,:])
     
     # define data structured array:
-    dat={'len': np.zeros((l1,1)),
-         'wid': np.zeros((l1,1)),
-         'area': np.zeros((l1,1)),
-         'round': np.zeros((l1,1)),
-         'centroid': np.zeros((l1,2))}
+    dat={'len': np.zeros((l1,1),dtype='float'),
+         'wid': np.zeros((l1,1),dtype='float'),
+         'area': np.zeros((l1,1),dtype='float'),
+         'round': np.zeros((l1,1),dtype='float'),
+         'centroid': np.zeros((l1,2),dtype='float')}
     if not(b_flag):
         foc1=np.zeros(l1, dtype=[('focus', 'float')])
         foc1.fill(np.nan)
     else:
         #ld=3
         foc1=np.zeros(l1, dtype=[('focus', 'float'),
-                                 ('boundaries','(30,2)float32') ])
+                                 ('boundaries','(30,2)float') ])
         #foc1=np.zeros(l1, dtype=[('focus', 'float'),
         #                         ('xs','('+str(ld)+',29)float'),
         #                         ('ys','('+str(ld)+',29)float'),
@@ -64,40 +96,38 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
     if len(ind)==0:
         return dat
     
+         
     #https://stackoverflow.com/questions/45742888/tqdm-using-multiple-bars
-    flag=True
-    while flag:
-	    gl=globalLock.acquire(timeout=1)
-	    if gl:
-		    pbar = tqdm(total=len(ind), position=position,leave=True) #mininterval=5, maxinterval=10)
-		    pbar.monitor_interval = 0
-		    pbar.set_description("%s %d" % (desc,position))
-		    sys.stdout.flush()
-		    sys.stderr.flush()
-		    globalLock.release()
-		    flag=False
-
-    for i in ind:
+    
+    with tqdm(total=len(ind), position=position,leave=True) as pbar:
+        with globalLock:
+            pbar.monitor_interval = 0
+            pbar.set_description("%s %d" % (desc,position))
+            sys.stdout.flush()
+            sys.stderr.flush()
+            sleep(0.1)
+    
+        j=0
+        for i in ind:
+            j += 1    
             
-        if np.mod(i+1,50)==0:
-            gl=globalLock.acquire(timeout=1)
-            if gl:
-                pbar.update(50)
-                sys.stdout.flush()
-                sys.stderr.flush()
-                globalLock.release()
-                time.sleep(0.01)
+            if np.mod(j,50) == 0:
+                with globalLock:
+                    pbar.n=j-1
+                    pbar.update()
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    sleep(0.1)
 
-        elif (i+1)==len(ind):
-            gl=globalLock.acquire(timeout=1)
-            if gl:
-                pbar.n=i
-                pbar.update()
-                sys.stdout.flush()
-                sys.stderr.flush()
-                globalLock.release()
-                time.sleep(0.01)
-        try:
+            elif j == len(ind):
+                with globalLock:
+                    pbar.n=j-1
+                    pbar.update()
+                    sys.stdout.flush()
+                    sys.stderr.flush()
+                    sleep(0.1)
+            
+                    
             #pbar.update(1)
             arr=ROI_N['IMAGE'][0,0][0,i]['IM'][0,0].astype(int)-BG[0,i]['BG'][0,0].astype(int)
          
@@ -108,9 +138,6 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
                 continue
             
             arr=(arr-np.min(arr))
-            #mx=np.max(arr)
-            #arr=arr*255/mx
-            #arr=arr/255
         
             (r,c)=np.shape(arr)
             if r <= 15 and c <=15:
@@ -123,19 +150,23 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
             mag=np.sqrt(dx**2+dy**2)
             (th,level)=cv2.threshold(mag.astype('H'),50,255,cv2.THRESH_BINARY)
             """
-            (th,level)=cv2.threshold(np.float32(arr.astype('H')),38,255,cv2.THRESH_BINARY)
+            (th,level)=threshold(np.float32(arr.astype('H')),38,255,THRESH_BINARY)
             
     
             BW2=level.astype('B')
             BW2[1:-1,1:-1]=signal.medfilt2d(level.astype('B'),(3,3))[1:-1,1:-1]
     
             # fairly insensitive to the 0.4 choice
+            #continue
             contours=measure.find_contours((BW2-np.min(BW2))/255,0.4)
+            #temp=(BW2-np.min(BW2))
+            #contours, hierarchy = cv2.findContours(temp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE) 
             if not(len(contours)):
                 continue
             
             # put longest list first
-            contours.sort(key=len,reverse=True)
+            if len(contours) > 1:
+                contours.sort(key=len,reverse=True)
             contour=contours[0]
             
     
@@ -144,7 +175,9 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
             x, y = x.flatten(), y.flatten()
             points = np.vstack((x,y)).T
             
-            
+            if len(contour) <= 5:
+                continue
+
             p=path.Path(contour)
             if len(contour) > 10000:
                 continue
@@ -183,62 +216,67 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
             dat['round'][i]=stats[0].filled_area/(np.pi/4.*stats[0].major_axis_length**2)
             dat['centroid'][i,:]=stats[0].centroid
                 
-            boundaries=contour
             
-            foc=calculate_focus(boundaries,arr,b_flag) # maybe focus less than 12?
-    
-            dat['foc'][i]=foc
+            #dat['foc'][i]['focus'][0]=np.nan
             
-            del boundaries, contour, contours, IN, BW2, level, th, mask, stats
+            boundaries = contour
+            dat['foc'][i]=calculate_focus(boundaries,arr,b_flag,dat['foc'][i]) # maybe focus less than 12?
+            #dat['foc'][i]=foc
+            
+            del contour, contours, IN, BW2, level, th, mask, stats
             gc.collect()
             del gc.garbage[:]
-        except:
-            gl=globalLock.acquire(timeout=1)
-            #print("Unexpected error")
-            #print(traceback.format_exc())
-            if gl:
-                globalLock.release()
-    
-    time.sleep(0.01)
-    
-    flag=True
-    while flag:
-        gl=globalLock.acquire(timeout=1)
-        if gl:
-            pbar.last_print_n=0
+        
+        sleep(0.01)
+        
+        with globalLock:
             pbar.n=len(ind)-1
             pbar.update()
-            pbar.close()
             sys.stdout.flush()
             sys.stderr.flush()
-            globalLock.release()
-            flag=False
-
-
+        
     return dat
 
 
 
 
-def calculate_focus(boundaries,IM,b_flag):
+def calculate_focus(boundaries,IM,b_flag,foc):
+    """
+    from os import environ
+    environ["OMP_NUM_THREADS"]="1"
+    environ["OPENBLAS_NUM_THREADS"]="1"
+    environ["MKL_NUM_THREADS"]="1"
+    environ["VECLIB_MAXIMUM_THREADS"]="1"
+    environ["NUMEXPR_NUM_THREADS"]="1"
+    """
+    from cv2 import setNumThreads
+    from cv2 import threshold
+    from cv2 import THRESH_BINARY
+    from skimage import measure
+    from matplotlib import path
+    from time import sleep
+    import gc
+    from tqdm import tqdm
+
     import numpy as np
     from scipy.interpolate import RectBivariateSpline
     from scipy import signal
     
-    NB=30
-    ld=3
 
-    if not(b_flag):
-        foc=np.zeros(1, dtype=[('focus', 'float')])
-    else:
-        foc=np.zeros(1, dtype=[('focus', 'float'),
-                                 ('boundaries','(30,2)float32') ])
+    global boundaries2, xs, ys, focus, intensity, NB, ld
+    
+#    if not(b_flag):
+#        foc=np.zeros(1, dtype=[('focus', 'float')])
+#    else:
+#        foc=np.zeros(1, dtype=[('focus', 'float'),
+#                                 ('boundaries','(30,2)float') ])
         #foc=np.zeros(1, dtype=[('focus', 'float'),
         #                         ('xs','('+str(ld)+',29)float'),
         #                         ('ys','('+str(ld)+',29)float'),
         #                         ('boundaries','(30,2)float') ])
 
     foc['focus'][0]=np.nan
+    
 
     ind1=np.linspace(1,NB,len(boundaries[:,0]))
     ind2=np.linspace(1,ind1[-1],NB);
@@ -255,11 +293,11 @@ def calculate_focus(boundaries,IM,b_flag):
     #focus=np.zeros((NB-1,1))
     #intensity=np.zeros(ld)
     
-    boundaries2=np.zeros((NB,2))
-    xs=np.zeros((ld,NB-1))
-    ys=np.zeros((ld,NB-1))
-    focus=np.zeros((NB-1,1))
-    intensity=np.zeros(ld)
+    #boundaries2=np.zeros((NB,2),dtype='float')
+    #xs=np.zeros((ld,NB-1),dtype='float16')
+    #ys=np.zeros((ld,NB-1),dtype='float16')
+    #focus=np.zeros((NB-1,1),dtype='float16')
+    #intensity=np.zeros(ld,dtype='float16')
     
     
     if len(boundaries[:,0])>9:
@@ -320,10 +358,13 @@ def calculate_focus(boundaries,IM,b_flag):
                 intensity[j]=f(xs[j,i],ys[j,i]) 
             focus[i]=np.abs(np.gradient(intensity,edge_order=2)[1])
             foc['focus'][0]=np.nanmean(focus)/2.
-        del f, xs, ys, RectBivariateSpline
     except:
         foc['focus'][0]=np.nan
-        
+    finally:
+        pass
+        #del xs, ys, RectBivariateSpline
+
+
     if b_flag:
        #foc['xs'][0]=xs
        #foc['ys'][0]=ys

@@ -5,7 +5,7 @@ ds=10  # resolution for size bins
 vel=100    # air speed - assumed fixed, used in calcTimeseriesDriver
 find_particle_edges=True # output the boundary of the particles
 command_line_path=True # use the commandline to define the path of files
-process_sweep1_if_exist=True # if the *.roi files have been extracted once,
+process_sweep1_if_exist=False # if the *.roi files have been extracted once,
                               #still do if True
 process_roi_driver=False
 process_image_stats=True
@@ -13,20 +13,29 @@ export_images=True
 output_timeseries=True
 num_cores=50
 
-path1='/models/mccikpc2/CPI-analysis/C073/3VCPI/'
+path1='/models/mccikpc2/CPI-analysis/C081/3VCPI/'
             # path to raw data
-filename1=['20180109105546.roi','20180109130642.roi']
+filename1=['20180213065852.roi','20180213092819.roi','20180213055057.roi','20180213060933.roi']
             # list of filenames to process
 
+filename1=['20180213025037.roi']        
+        
 outputfile='timeseries.mat'
 
 
+from os import environ
+environ["OMP_NUM_THREADS"]="1"
+environ["OPENBLAS_NUM_THREADS"]="1"
+environ["MKL_NUM_THREADS"]="1"
+environ["VECLIB_MAXIMUM_THREADS"]="1"
+environ["NUMEXPR_NUM_THREADS"]="1"
 import gc
 from multiprocessing import set_start_method, Pool, Manager
 from multiprocessing.pool import ThreadPool
 
-def runJobs(p,m,l):
-
+def runJobs():
+    global path1
+    global filename1
     # get the files / path from commandline input
     if command_line_path:
         import sys
@@ -51,12 +60,12 @@ def runJobs(p,m,l):
         del gc.garbage[:]
     #--------------------------------------------------------------------------
 
-
+    
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     if process_image_stats:
         from imageStatsDriver import imageStatsDriver
         # find image properties, edge detection, etc
-        imageStatsDriver(path1,filename1,find_particle_edges,num_cores,p,m,l)
+        imageStatsDriver(path1,filename1,find_particle_edges,num_cores)
 
         #del imageStatsDriver
     #--------------------------------------------------------------------------
@@ -78,15 +87,19 @@ def runJobs(p,m,l):
         calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile)
     #--------------------------------------------------------------------------
 
+    
+
 if __name__ == "__main__":
+
 
     print("Setting context")
     set_start_method('spawn',force=True)
 
-    p=Pool(processes=num_cores, maxtasksperchild=1)
-    m = Manager()
-    l = m.Lock()
+    #p=Pool(processes=num_cores, maxtasksperchild=1)
+    #m = Manager()
+    #l = m.Lock()
     
     
-    runJobs(p,m,l)
+    runJobs()
+
 
