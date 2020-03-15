@@ -60,7 +60,7 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
     from scipy.interpolate import RectBivariateSpline
     from scipy import signal
 
-    setNumThreads(1)
+    #setNumThreads(1)
     
     
     global NB, ld
@@ -127,7 +127,7 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
                     sys.stderr.flush()
                     sleep(0.1)
             
-                    
+               
             #pbar.update(1)
             arr=ROI_N['IMAGE'][0,0][0,i]['IM'][0,0].astype(int)-BG[0,i]['BG'][0,0].astype(int)
          
@@ -220,10 +220,10 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
             #dat['foc'][i]['focus'][0]=np.nan
             
             boundaries = contour
-            dat['foc'][i]=calculate_focus(boundaries,arr,b_flag,dat['foc'][i]) # maybe focus less than 12?
-            #dat['foc'][i]=foc
+            foc=calculate_focus(boundaries,arr,b_flag) # maybe focus less than 12?
+            dat['foc'][i]=foc
             
-            del contour, contours, IN, BW2, level, th, mask, stats
+            del boundaries, contour, contours, IN, BW2, level, th, mask, stats
             gc.collect()
             del gc.garbage[:]
         
@@ -240,7 +240,7 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
 
 
 
-def calculate_focus(boundaries,IM,b_flag,foc):
+def calculate_focus(boundaries,IM,b_flag):
     """
     from os import environ
     environ["OMP_NUM_THREADS"]="1"
@@ -249,14 +249,8 @@ def calculate_focus(boundaries,IM,b_flag,foc):
     environ["VECLIB_MAXIMUM_THREADS"]="1"
     environ["NUMEXPR_NUM_THREADS"]="1"
     """
-    from cv2 import setNumThreads
-    from cv2 import threshold
-    from cv2 import THRESH_BINARY
-    from skimage import measure
-    from matplotlib import path
     from time import sleep
     import gc
-    from tqdm import tqdm
 
     import numpy as np
     from scipy.interpolate import RectBivariateSpline
@@ -265,11 +259,11 @@ def calculate_focus(boundaries,IM,b_flag,foc):
 
     global boundaries2, xs, ys, focus, intensity, NB, ld
     
-#    if not(b_flag):
-#        foc=np.zeros(1, dtype=[('focus', 'float')])
-#    else:
-#        foc=np.zeros(1, dtype=[('focus', 'float'),
-#                                 ('boundaries','(30,2)float') ])
+    if not(b_flag):
+        foc=np.zeros(1, dtype=[('focus', 'float')])
+    else:
+        foc=np.zeros(1, dtype=[('focus', 'float'),
+                                 ('boundaries','(30,2)float') ])
         #foc=np.zeros(1, dtype=[('focus', 'float'),
         #                         ('xs','('+str(ld)+',29)float'),
         #                         ('ys','('+str(ld)+',29)float'),

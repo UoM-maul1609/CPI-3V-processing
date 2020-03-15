@@ -51,7 +51,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores):
     log=[None]*nc
     submission=[None]*nc
     for i in range(nc):
-        p[i] = subprocess.Popen('', shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        p[i] = subprocess.Popen('', shell=True)
     time.sleep(1)
 
     """
@@ -64,29 +64,32 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores):
         # go through all cores
         for j in range(nc):
             # submit a new run
-            if p[j].poll() != None and i < lf:
-                if iter1 > 0:
+            if p[j].poll() == 0 and i < lf:
+                #if iter1 > 0:
                     # close file
-                    log[j].close()
+                #    log[j].close()
                 
-                log[j] = open('/tmp/' + filename1[i].replace('.roi','.out'),'wb')
-                log[j].flush()
+                #log[j] = open('/tmp/' + filename1[i].replace('.roi','.out'),'wb')
+                #log[j].flush()
                 # run command
                 runs=sys.executable + ' ' + os.path.abspath(__file__) + ' ' + path1 + ' ' + \
                     filename1[i] + ' ' + str(find_particle_edges) + ' ' + str(i)  
                 submission[j]=runs
                 print(runs)
                 # submit the job
-                p[j]=subprocess.Popen(submission[j], shell=True,stdout=log[j],stderr=log[j])                
-                #p[j]=subprocess.Popen(runs, shell=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+                #p[j]=subprocess.Popen(submission[j], shell=True,stdout=log[j],stderr=log[j])                
+                p[j]=subprocess.Popen(runs, shell=True)
                 i += 1
 
             # check if runs are still going
             runsProcessing = runsProcessing or (p[j].poll() != 0)
         
             # resubmit if it didn't work
-            if p[j].poll() != 0 and p[j].poll() != None:
-                p[j]=subprocess.Popen(submission[j], shell=True,stdout=log[j],stderr=log[j])
+            if (p[j].poll() != 0) and (p[j].poll() != None):
+                print('resubmitting')
+                p[j].terminate()
+                #p[j]=subprocess.Popen(submission[j], shell=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,stdout=log[j],stderr=log[j])
+                p[j]=subprocess.Popen(submission[j], shell=True)
 
 
         # break out if the runs are not processing and we are past the last file
