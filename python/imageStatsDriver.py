@@ -81,8 +81,6 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores):
                 p[j]=subprocess.Popen(runs, shell=True)
                 i += 1
 
-            # check if runs are still going
-            runsProcessing = runsProcessing or (p[j].poll() != 0)
         
             # resubmit if it didn't work
             if (p[j].poll() != 0) and (p[j].poll() != None):
@@ -91,6 +89,8 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores):
                 #p[j]=subprocess.Popen(submission[j], shell=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,stdout=log[j],stderr=log[j])
                 p[j]=subprocess.Popen(submission[j], shell=True)
 
+            # check if runs are still going
+            runsProcessing = runsProcessing or (p[j].poll() != 0)
 
         # break out if the runs are not processing and we are past the last file
         if not(runsProcessing) and (i>=lf):
