@@ -73,6 +73,7 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
          'wid': np.zeros((l1,1),dtype='float'),
          'area': np.zeros((l1,1),dtype='float'),
          'round': np.zeros((l1,1),dtype='float'),
+         'orientation': np.zeros((l1,1),dtype='float'),
          'centroid': np.zeros((l1,2),dtype='float')}
     if not(b_flag):
         foc1=np.zeros(l1, dtype=[('focus', 'float')])
@@ -215,6 +216,7 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
             
             dat['round'][i]=stats[0].filled_area/(np.pi/4.*stats[0].major_axis_length**2)
             dat['centroid'][i,:]=stats[0].centroid
+            dat['orientation'][i]=stats[0].orientation
                 
             
             #dat['foc'][i]['focus'][0]=np.nan
