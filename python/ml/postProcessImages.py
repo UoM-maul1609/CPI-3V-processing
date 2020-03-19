@@ -26,12 +26,13 @@ data=sio.loadmat(filename1, \
 
 # find all data with a focus greater than foc_crit
 ind,=np.where(data['dat'][0,0]['foc'][0]['focus'] > foc_crit)
-
+#ind=np.linspace(0,len(data['dat'][0,0]['foc'][0])-1,len(data['dat'][0,0]['foc'][0]))
 i=591
-#i=1
+#i,=np.where(data['dat'][0,0]['len'] == np.max(data['dat'][0,0]['len']))
+#i=822
 #i=600
-i=ind[i]
-bound=data['dat'][0,0]['foc'][0]['boundaries'][i]
+i=ind[i].astype(int)
+#bound=data['dat'][0,0]['foc'][0]['boundaries'][i]
 
 
 
@@ -105,8 +106,8 @@ res1=cv2.warpAffine(image1,M,(cols,rows))
 """
     4. take pixels off all sides
 """
-remove=maxdim*np.cos(theta_r)*np.sin(theta_r)*\
-    (np.cos(theta_r)+np.cos(theta_r))
+remove=np.ceil(maxdim*np.cos(theta_r)*np.sin(theta_r)*\
+    (np.cos(theta_r)+np.cos(theta_r)))
 remove=remove.astype(int)
 (newrow,newcol)=res1.shape
 res2=res1[remove:newrow-remove,remove:newrow-remove]
