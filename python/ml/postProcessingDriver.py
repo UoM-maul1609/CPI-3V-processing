@@ -10,6 +10,10 @@ from postProcessImages import postProcessing
 from os import listdir
 from os import path
 from tqdm import tqdm
+import hdf5storage
+import h5py
+import pickle
+
 def postProcessingDriver(path1,outputfile,foc_crit,min_len):
     """
         1. loop over all paths
@@ -41,9 +45,9 @@ def postProcessingDriver(path1,outputfile,foc_crit,min_len):
             """
                 & append
             """
-            imagePP.append(imagePP1)
-            lensPP.append(lensPP1)
-            timesPP.append(timesPP1)
+            imagePP.extend(imagePP1)
+            lensPP.extend(lensPP1)
+            timesPP.extend(timesPP1)
             
     """
         -----------------------------------------------------------------------
@@ -53,5 +57,9 @@ def postProcessingDriver(path1,outputfile,foc_crit,min_len):
     """
         3. save output file
     """
-    sio.savemat(outputfile,\
-                {'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP})
+    #h5py.get_config().default_file_mode='w'
+#    hdf5storage.savemat(outputfile,\
+#                {'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP})    
+    mydict={'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP}
+    with open(outputfile,'wb') as out:
+        pickle.dump(mydict, out)
