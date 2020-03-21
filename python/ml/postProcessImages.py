@@ -14,7 +14,7 @@ import cv2
 
 def postProcessing(filename1='/tmp/20180213071742.mat',\
                    background_file='/tmp/full_backgrounds.mat',\
-                   foc_crit=12):
+                   foc_crit=12,min_len=50):
     """
         loop through all images full filling criteria
         process them so they are all the same size and rotated to same 
@@ -34,7 +34,10 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
     
     
     # find all data with a focus greater than foc_crit
-    ind,=np.where(data['dat'][0,0]['foc'][0]['focus'] > foc_crit)
+    ind1=[(data['dat'][0,0]['foc'][0,i]['focus'][0][0] > foc_crit) \
+          and (data['dat']['len'][0,0][i,0] >min_len)  \
+          for i in range(len(data['dat']['len'][0,0][:,0]))]
+    ind,=np.where(ind1)
     
 #    l1=len(ind)
     
@@ -42,6 +45,7 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
     #     'times': np.zeros((l1,1),dtype='float')}
     
     imagePP=[]
+    lensPP=[]
     timesPP=[]
     for j in range(len(ind)):
         i=ind[j].astype(int)
@@ -175,6 +179,6 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
     #    postP['images'][j]=res
     #    postP['times'][j]=data['dat']['Time'][0,0][0,j]
         imagePP.append(res)
-        timesPP.append(data['dat']['Time'][0,0][0,j])
-        
-    return (imagePP,timesPP)
+        timesPP.append(data['dat'][0,0]['Time'][0,j])
+        lensPP.append(data['dat'][0,0]['len'][j,0])
+    return (imagePP,lensPP,timesPP)
