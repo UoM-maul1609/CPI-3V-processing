@@ -17,7 +17,7 @@ path1=['/models/mccikpc2/CPI-analysis/C072/3VCPI/' , \
        '/models/mccikpc2/CPI-analysis/C097/3VCPI/' , \
        '/models/mccikpc2/CPI-analysis/C098/3VCPI/' ]
 
-outputfile='/models/mccikpc2/CPI-analysis/postProcessed_l50.dictionary'
+outputfile='/models/mccikpc2/CPI-analysis/postProcessed_l50.pkl'
 
 
 
