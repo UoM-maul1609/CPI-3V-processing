@@ -179,6 +179,6 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
     #    postP['images'][j]=res
     #    postP['times'][j]=data['dat']['Time'][0,0][0,j]
         imagePP.append(res)
-        timesPP.append(data['dat'][0,0]['Time'][0,j])
-        lensPP.append(data['dat'][0,0]['len'][j,0])
+        timesPP.append(data['dat'][0,0]['Time'][0,i])
+        lensPP.append(data['dat'][0,0]['len'][i,0])
     return (imagePP,lensPP,timesPP)
