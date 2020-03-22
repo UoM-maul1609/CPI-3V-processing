@@ -63,6 +63,18 @@ def postProcessingDriver(path1,outputfile,foc_crit,min_len):
 #    hdf5storage.savemat(outputfile,\
 #                {'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP})    
 #    l=np.stack(imagePP,axis=0)
-    mydict={'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP}
-    with open(outputfile,'wb') as out:
-        pickle.dump(mydict, out, protocol=pickle.HIGHEST_PROTOCOL)
+#    mydict={'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP}
+#    with open(outputfile,'wb') as out:
+#        pickle.dump(mydict, out, protocol=pickle.HIGHEST_PROTOCOL)
+        
+    # https://stackoverflow.com/questions/20928136/input-and-output-numpy-arrays-to-h5py
+    i=np.stack(imagePP,axis=0)
+    l=np.stack( lensPP,axis=0)
+    t=np.stack(timesPP,axis=0)
+    h5f = h5py.File(outputfile, 'w')
+    h5f.create_dataset('images', data=i)
+    h5f.create_dataset('lens', data=l)
+    h5f.create_dataset('times', data=t)
+    h5f.close()
+    
+    
