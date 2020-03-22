@@ -64,5 +64,5 @@ def postProcessingDriver(path1,outputfile,foc_crit,min_len):
 #                {'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP})    
 #    l=np.stack(imagePP,axis=0)
     mydict={'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP}
-    with open(outputfile,'wb') as out:
+    with open(outputfile,'w') as out:
         json.dump(mydict, out)
