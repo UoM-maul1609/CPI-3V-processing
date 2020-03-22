@@ -14,6 +14,7 @@ import hdf5storage
 import h5py
 import pickle
 import numpy as np
+import json
 
 def postProcessingDriver(path1,outputfile,foc_crit,min_len):
     """
@@ -61,7 +62,7 @@ def postProcessingDriver(path1,outputfile,foc_crit,min_len):
     #h5py.get_config().default_file_mode='w'
 #    hdf5storage.savemat(outputfile,\
 #                {'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP})    
-    l=np.stack(imagePP,axis=0)
-    mydict={'imagePP':l,'lensPP':lensPP,'timesPP':timesPP}
+#    l=np.stack(imagePP,axis=0)
+    mydict={'imagePP':imagePP,'lensPP':lensPP,'timesPP':timesPP}
     with open(outputfile,'wb') as out:
-        pickle.dump(mydict, out)
+        json.dump(mydict, out)
