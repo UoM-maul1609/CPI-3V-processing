@@ -168,7 +168,7 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
         """
         #res1=image
         # resize to constant size
-        res=cv2.resize(res2, dsize=(130,130), interpolation=cv2.INTER_CUBIC)
+        res=cv2.resize(res2, dsize=(128,128), interpolation=cv2.INTER_CUBIC)
         """
         -------------------------------------------------------------------------------
         """
