@@ -34,43 +34,36 @@ runFit=True
 if defineModel:
     autoencoder=Sequential()
     # Encoder Layers
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same', input_shape=(128,128,1)))
-    autoencoder.add(MaxPooling2D((2, 2), padding='same'))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(MaxPooling2D((2, 2), padding='same'))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(MaxPooling2D((2, 2), padding='same'))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(MaxPooling2D((2, 2), padding='same'))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(MaxPooling2D((2, 2), padding='same'))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(MaxPooling2D((2, 2), padding='same'))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(MaxPooling2D((2, 2), padding='same'))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
+    autoencoder.add(Conv2D(32, (3, 3), activation='relu', input_shape=(128,128,1)))
+    autoencoder.add(MaxPooling2D((2, 2)))
+    autoencoder.add(Conv2D(32, (3, 3), activation='relu'))
+    autoencoder.add(MaxPooling2D((2, 2)))
+    autoencoder.add(Conv2D(32, (3, 3), activation='relu'))
+    autoencoder.add(MaxPooling2D((2, 2)))
+    autoencoder.add(Conv2D(32, (3, 3), activation='relu'))
+    autoencoder.add(MaxPooling2D((2, 2)))
+    autoencoder.add(Conv2D(32, (3, 3), activation='relu'))
+
+
+
     
     # Flatten encoding for visualization
     autoencoder.add(Flatten())
-    autoencoder.add(Dense(32, activation='softmax'))
-    autoencoder.add(Reshape((1, 1, 32)))
+    autoencoder.add(Dense(16, activation='softmax')) # 16 habits?
+    autoencoder.add(Reshape((4, 4, 1)))
     
     
     # Decoder Layers
     autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
-    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(BatchNormalization())
     autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
-    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(BatchNormalization())
     autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
-    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(BatchNormalization())
     autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
-    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(BatchNormalization())
     autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
-    #autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2,activation='relu', padding='same'))
-    #autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2,activation='relu', padding='same'))
-    #autoencoder.add(UpSampling2D((2, 2)))
+
     autoencoder.add(Conv2D(1, (3, 3), activation='sigmoid', padding='same'))
         
     autoencoder.summary()
