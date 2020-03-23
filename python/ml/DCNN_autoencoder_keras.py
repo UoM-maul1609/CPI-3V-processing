@@ -72,7 +72,7 @@ if defineModel:
     
     autoencoder.summary()
     
-    autoencoder.compile(optimizer='adam', loss='binary_crossentropy',metrics=['accuracy'])
+    autoencoder.compile(optimizer='adam', loss='mse',metrics=['accuracy'])
 
 
 if loadData:
@@ -91,6 +91,10 @@ if loadData:
     training_idx, test_idx = indices[:split1], indices[split1:]
     
     x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
+    del images
+    x_train=x_train.astype('float32')/255.
+    x_test=x_test.astype('float32')/255.
+
     lens_train,lens_test = lens[training_idx], lens[test_idx]
     times_train,times_test = times[training_idx], times[test_idx]
 
