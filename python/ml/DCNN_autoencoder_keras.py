@@ -52,6 +52,7 @@ if defineModel:
     
     # Flatten encoding for visualization
     autoencoder.add(Flatten())
+    autoencoder.add(Dense(32, activation='softmax'))
     autoencoder.add(Reshape((1, 1, 32)))
     
     
