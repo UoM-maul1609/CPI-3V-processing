@@ -54,24 +54,24 @@ if defineModel:
     
     
     # Decoder Layers
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
+    autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
+    autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
+    autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
+    autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
     autoencoder.add(UpSampling2D((2, 2)))
     autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
     autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
     autoencoder.add(UpSampling2D((2, 2)))
     autoencoder.add(Conv2D(1, (3, 3), activation='sigmoid', padding='same'))
-    
+        
     autoencoder.summary()
-    
+
     autoencoder.compile(optimizer='adam', loss='mse',metrics=['accuracy'])
 
 
