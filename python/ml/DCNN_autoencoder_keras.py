@@ -29,6 +29,8 @@ loadData=True
 
 defineModel=True
 
+runFit=True
+
 if defineModel:
     autoencoder=Sequential()
     # Encoder Layers
@@ -54,25 +56,25 @@ if defineModel:
     
     
     # Decoder Layers
-    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2D(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
-    autoencoder.add(Conv2DTranspose(32, (3, 3), activation='relu', padding='same'))
-    autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
+    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
+    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
+    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
+    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
+    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2,activation='relu', padding='same'))
+    #autoencoder.add(UpSampling2D((2, 2)))
+    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2,activation='relu', padding='same'))
+    #autoencoder.add(UpSampling2D((2, 2)))
     autoencoder.add(Conv2D(1, (3, 3), activation='sigmoid', padding='same'))
         
     autoencoder.summary()
 
-    autoencoder.compile(optimizer='adam', loss='mse',metrics=['accuracy'])
+    autoencoder.compile(optimizer='adam', loss='binary_crossentropy',metrics=['accuracy'])
 
 
 if loadData:
@@ -100,17 +102,18 @@ if loadData:
 
     print('data is loaded')
 
-# train the model
-autoencoder.fit(x_train, x_train, epochs=100, batch_size=128, \
-                validation_data=(x_test,x_test),verbose=1)
+if runFit:
+    # train the model
+    autoencoder.fit(x_train, x_train, epochs=100, batch_size=128, \
+                    validation_data=(x_test,x_test),verbose=1)
 
 
-# see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-layer_name='flatten_1'
-intermediate_layer_model = Model(input=autoencoder.input, \
-                        outputs=autoencoder.get_layer(layer_name).output)
+    # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
+    layer_name='flatten_1'
+    intermediate_layer_model = Model(input=autoencoder.input, \
+                            outputs=autoencoder.get_layer(layer_name).output)
 
-#intermediate_output = intermediate_layer_model.predict(data)
+    #intermediate_output = intermediate_layer_model.predict(data)
 
 
 
