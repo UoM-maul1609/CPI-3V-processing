@@ -78,8 +78,9 @@ if defineModel:
 if loadData:
     print('Loading data...')
     # load images
-    h5f = h5py.File('/Users/mccikpc2/Desktop/postProcessed_l50.h5','r')
+    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_l50.h5','r')
     images=h5f['images'][:]
+    images=np.expand_dims(images,axis=3)
     lens  =h5f['lens'][:]
     times =h5f['times'][:]
     h5f.close()
@@ -89,9 +90,9 @@ if loadData:
     split1=int(0.8*i1)
     training_idx, test_idx = indices[:split1], indices[split1:]
     
-    x_train, x_test = images[training_idx,:], images[test_idx,:]
-    lens_train,lens_test = lens[training_idx,:], lens[test_idx,:]
-    times_train,times_test = times[training_idx,:], times[test_idx,:]
+    x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
+    lens_train,lens_test = lens[training_idx], lens[test_idx]
+    times_train,times_test = times[training_idx], times[test_idx]
 
     print('data is loaded')
 
