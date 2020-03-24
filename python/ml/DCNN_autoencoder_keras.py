@@ -68,7 +68,7 @@ if defineModel:
         
     autoencoder.summary()
 
-    autoencoder.compile(optimizer='adam', loss='binary_crossentropy',metrics=['accuracy'])
+    autoencoder.compile(optimizer='adam', loss='binary_crossentropy',metrics=['rmse'])
 
 
 if loadData:
@@ -98,7 +98,7 @@ if loadData:
 
 if runFit:
     # train the model
-    autoencoder.fit(x_train, x_train, epochs=100, batch_size=128, \
+    autoencoder.fit(x_train, x_train, epochs=5, batch_size=128, \
                     validation_data=(x_test,x_test),verbose=1)
 
 
