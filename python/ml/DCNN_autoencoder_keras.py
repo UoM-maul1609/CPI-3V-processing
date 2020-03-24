@@ -110,8 +110,7 @@ if loadData:
 if runFit:
     # train the model
     autoencoder.fit(x_train, x_train, epochs=5, batch_size=256, \
-                    validation_data=(x_test,x_test),verbose=1,\
-                    validation_steps=np.floor(i22/256))
+                    validation_data=(x_test,x_test),verbose=1)
 
 
     # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
