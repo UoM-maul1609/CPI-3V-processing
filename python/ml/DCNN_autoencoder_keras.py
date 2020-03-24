@@ -23,12 +23,12 @@ from keras.layers import Dense, Conv2D, \
 from keras.layers.advanced_activations import LeakyReLU
 from keras.optimizers import adam
 import h5py
-
+import tensorflow as tf
 # try
 # https://stackoverflow.com/questions/46421258/limit-number-of-cores-used-in-keras
 NUM_WORKERS=32
 from keras import backend as K
-K.set_session(K.tf.Session(config=K.tf.ConfigProto( \
+K.set_session(tf.Session(config=tf.ConfigProto( \
     intra_op_parallelism_threads=NUM_WORKERS, \
     inter_op_parallelism_threads=NUM_WORKERS)))
 
