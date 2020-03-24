@@ -68,7 +68,7 @@ if defineModel:
         
     autoencoder.summary()
 
-    autoencoder.compile(optimizer='adam', loss='binary_crossentropy',metrics=['rmse'])
+    autoencoder.compile(optimizer='adam', loss='binary_crossentropy',metrics=['mse'])
 
 
 if loadData:
