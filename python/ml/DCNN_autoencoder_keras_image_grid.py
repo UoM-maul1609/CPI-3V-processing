@@ -6,7 +6,9 @@ from keras.models import model_from_json
 
 loadData=True
 
-inputs='/models/mccikpc2/CPI-analysis/model_epochs_15_dense64'
+inputs=['/models/mccikpc2/CPI-analysis/model_epochs_5_dense16' , \
+    '/models/mccikpc2/CPI-analysis/model_epochs_5_dense64' , \
+    '/models/mccikpc2/CPI-analysis/model_epochs_15_dense64']
 
 if loadData:
     """
@@ -42,49 +44,55 @@ if loadData:
     """
     
     
+size_bins=[0,100,200,300,400,500,600,700,800,900,1000]
+ims=[None]*100
+for mo in inputs:
     """
         load the model++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     """
     print('Loading model...')
-    json_file = open(inputs + '.json','r')
+    json_file = open(mo + '.json','r')
     loaded_model_json = json_file.read()
     json_file.close()
     loaded_model = model_from_json(loaded_model_json)
-    loaded_model.load_weights(inputs + '.h5')
+    loaded_model.load_weights(mo + '.h5')
     print('model is loaded')
     """
         ----------------------------------------------------------------------------------
     """
 
-# Save images ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-size_bins=[0,100,200,300,400,500,600,700,800,900,1000]
-ims=[None]*100
-for i in range(len(size_bins)-1):
-    inds,=np.where((lens_train>size_bins[i]) & (lens_train<=size_bins[i+1]))
-    # do 5 images
-    for j in range(5):
-        k=inds[j]
-        # save raw image
-        ims[i*10+j]=x_train[k:k+1,:,:,0:1]
-        # encode - decode
-        ed=loaded_model.predict(x_train[k:k+1,:,:,0:1])
-        # save processed image
-        ims[i*10+j+5]=ed
-#-----------------------------------------------------------------------------------------
+    # Save images ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    for i in range(len(size_bins)-1):
+        inds,=np.where((lens_train>size_bins[i]) & (lens_train<=size_bins[i+1]))
+        # do 5 images
+        for j in range(5):
+            k=inds[j]
+            # save raw image
+            ims[i*10+j]=x_train[k:k+1,:,:,0:1]
+            # encode - decode
+            ed=loaded_model.predict(x_train[k:k+1,:,:,0:1])
+            # save processed image
+            ims[i*10+j+5]=ed
+    #-------------------------------------------------------------------------------------
         
 
 
-"""
-    do plot on grids
-"""
-plt.ion()
-fig = plt.figure(figsize=(10., 10.))
-grid = ImageGrid(fig, 111,  # similar to subplot(111)
-                 nrows_ncols=(10, 10),  # creates 10x10 grid of axes
-                 axes_pad=0.1,  # pad between axes in inch.
-                 )
-for ax, im in zip(grid, ims): # ims is a list of images
-    # Iterating over the grid returns the Axes.
-    ax.imshow(im[0,:,:,0])
+    """
+        do plot on grids++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    plt.ion()
+    fig = plt.figure(figsize=(10., 10.))
+    grid = ImageGrid(fig, 111,  # similar to subplot(111)
+                     nrows_ncols=(10, 10),  # creates 10x10 grid of axes
+                     axes_pad=0.1,  # pad between axes in inch.
+                     )
+    for ax, im in zip(grid, ims): # ims is a list of images
+        # Iterating over the grid returns the Axes.
+        ax.imshow(im[0,:,:,0])
 
-plt.show()
+    plt.show()
+    fig.savefig(mo + '.png')
+    fig.close()
+    """
+        ----------------------------------------------------------------------------------
+    """
