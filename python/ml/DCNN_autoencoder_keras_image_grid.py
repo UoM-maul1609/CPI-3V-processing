@@ -1,7 +1,8 @@
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import ImageGrid
 import numpy as np
-
+import h5py
+from keras.models import model_from_json
 
 loadData=True
 
@@ -46,7 +47,7 @@ if loadData:
     """
     print('Loading model...')
     json_file = open(inputs + '.json','r')
-    loaded_model_hson = json_file.read()
+    loaded_model_json = json_file.read()
     json_file.close()
     loaded_model = model_from_json(loaded_model_json)
     loaded_model.load_weights(inputs + '.h5')
@@ -56,7 +57,7 @@ if loadData:
     """
 
 # Save images ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-size_bins=[0,100,250,500,750,1000,1250,1500,1750,2000,2250]
+size_bins=[0,100,200,300,400,500,600,700,800,900,1000]
 ims=[None]*100
 for i in range(len(size_bins)-1):
     inds,=np.where((lens_train>size_bins[i]) & (lens_train<=size_bins[i+1]))
