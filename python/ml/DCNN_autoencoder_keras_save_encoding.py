@@ -35,6 +35,8 @@ if loadData:
     times =h5f['times'][:]
     h5f.close()
     
+    images=images.astype('float32')/255.
+
     print('data is loaded')
 
 
@@ -62,8 +64,13 @@ print('model is loaded')
 #                         outputs=loaded_model.get_layer(layer_name).output)
 
 # https://stackoverflow.com/questions/53843573/extracting-encoding-decoding-models-from-keras-autoencoder-using-sequential-api
+# find the dense layer
+for i in range(len(loaded_model.layers)): 
+    if loaded_model.layers[i].name == 'dense_1': 
+        break 
+ei=i+1
 intermediate_layer_model = Sequential()
-for i in range(0,9):
+for i in range(0,ei):
     intermediate_layer_model.add(loaded_model.layers[i])
 
 

@@ -110,12 +110,6 @@ if runFit:
                     validation_data=(x_test,x_test),verbose=1)
 
 
-    # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-    layer_name='dense_1'
-    intermediate_layer_model = Model(input=autoencoder.input, \
-                            outputs=autoencoder.get_layer(layer_name).output)
-
-    #intermediate_output = intermediate_layer_model.predict(data)
 
     model_json = autoencoder.to_json()
     with open(outputs + '.json','w') as json_file:
