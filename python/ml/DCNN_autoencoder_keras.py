@@ -35,7 +35,7 @@ K.set_session(tf.Session(config=tf.ConfigProto( \
 loadData=True
 defineModel=True
 runFit=True
-outputs='/models/mccikpc2/CPI-analysis/model_epochs_5_dense16'
+outputs='/models/mccikpc2/CPI-analysis/model_epochs_5_dense64'
 
 
 
@@ -43,9 +43,8 @@ if defineModel:
     autoencoder=Sequential()
     # Encoder Layers
     autoencoder.add(Conv2D(32, (3, 3), activation='relu', input_shape=(128,128,1)))
-    autoencoder.add(MaxPooling2D((2, 2)))
-    autoencoder.add(Conv2D(64, (3, 3), activation='relu'))
-    autoencoder.add(MaxPooling2D((2, 2)))
+    autoencoder.add(MaxPooling2D((2, 2))) # could add some dropout after pooling layers
+                                          # might help with overfitting
     autoencoder.add(Conv2D(64, (3, 3), activation='relu'))
     autoencoder.add(MaxPooling2D((2, 2)))
     autoencoder.add(Conv2D(64, (3, 3), activation='relu'))
@@ -57,14 +56,12 @@ if defineModel:
     
     # Flatten encoding for visualization
     autoencoder.add(Flatten())
-    autoencoder.add(Dense(16, activation='softmax')) # 16 habits?
-    #autoencoder.add(Dense(16, activation='relu')) # 16 habits?
-    autoencoder.add(Reshape((4, 4, 1)))
+    autoencoder.add(Dense(64, activation='softmax')) # 64 habits?
+    #autoencoder.add(Dense(64, activation='relu')) # 64 habits? maybe try relu here
+    autoencoder.add(Reshape((8, 8, 1)))
     
     
     # Decoder Layers
-    autoencoder.add(Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same'))
-    autoencoder.add(BatchNormalization())
     autoencoder.add(Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same'))
     autoencoder.add(BatchNormalization())
     autoencoder.add(Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same'))
@@ -109,7 +106,7 @@ if loadData:
 
 if runFit:
     # train the model
-    autoencoder.fit(x_train, x_train, epochs=5, batch_size=256, \
+    autoencoder.fit(x_train, x_train, epochs=15, batch_size=256, \
                     validation_data=(x_test,x_test),verbose=1)
 
 
