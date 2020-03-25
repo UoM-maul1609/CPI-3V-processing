@@ -15,7 +15,7 @@ Created on Sun Mar 22 10:31:14 2020
 import keras
 import numpy as np
 import matplotlib.pyplot as plt
-from keras.models import Model, model_from_json
+from keras.models import Model, model_from_json, Sequential
 import h5py
 
 
@@ -57,9 +57,14 @@ print('model is loaded')
 
 
 # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-layer_name='dense_1'
-intermediate_layer_model = Model(input=loaded_model.input, \
-                        outputs=loaded_model.get_layer(layer_name).output)
+# layer_name='dense_1'
+# intermediate_layer_model = Model(input=loaded_model.input, \
+#                         outputs=loaded_model.get_layer(layer_name).output)
+
+# https://stackoverflow.com/questions/53843573/extracting-encoding-decoding-models-from-keras-autoencoder-using-sequential-api
+intermediate_layer_model = Sequential()
+for i in range(0,9):
+    intermediate_layer_model.add(loaded_model.layers[i])
 
 
 # calculate the 'finger prints' for cluster analysis

@@ -35,7 +35,7 @@ K.set_session(tf.Session(config=tf.ConfigProto( \
 loadData=True
 defineModel=True
 runFit=True
-outputs='/models/mccikpc2/CPI-analysis/model_epochs_5_dense64'
+outputs='/models/mccikpc2/CPI-analysis/model_epochs_50_dense64'
 
 
 
@@ -106,7 +106,7 @@ if loadData:
 
 if runFit:
     # train the model
-    autoencoder.fit(x_train, x_train, epochs=15, batch_size=256, \
+    autoencoder.fit(x_train, x_train, epochs=50, batch_size=256, \
                     validation_data=(x_test,x_test),verbose=1)
 
 
