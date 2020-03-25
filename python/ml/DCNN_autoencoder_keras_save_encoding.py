@@ -63,9 +63,10 @@ intermediate_layer_model = Model(input=loaded_model.input, \
 
 
 # calculate the 'finger prints' for cluster analysis
-finger_print=np.zeros((len(images),64))
-for i in len(images):
-    finger_print[i,:]=intermediate_layer_model.predict(images[i:i+1,:,:,0:1])
+# finger_print=np.zeros((len(images),64))
+# for i in range(len(images)):
+#     finger_print[i,:]=intermediate_layer_model.predict(images[i:i+1,:,:,0:1])
+finger_print=intermediate_layer_model.predict(images)
     
 h5f = h5py.File(inputs + '_encoding.h5', 'w')
 h5f.create_dataset('encoding', data=finger_print)
