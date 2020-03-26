@@ -35,7 +35,7 @@ if loadData:
     times =h5f['times'][:]
     h5f.close()
     
-    images=images.astype('float32')/255.
+    images=images.astype('float16')/255.
 
     print('data is loaded')
 
