@@ -1,4 +1,5 @@
 from sklearn.cluster import KMeans
+import h5py
 
 loadData=True
 
