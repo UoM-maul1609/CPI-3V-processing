@@ -35,6 +35,6 @@ n_clusters = 10
 # Runs in parallel 4 CPUs
 kmeans = KMeans(n_clusters=n_clusters, n_init=20, n_jobs=4)
 # Train K-Means.
-y_pred_kmeans = kmeans.fit_predict(x)
+y_pred_kmeans = kmeans.fit_predict(x_train)
 # Evaluate the K-Means clustering accuracy.
-metrics.acc(y, y_pred_kmeans)
+#metrics.acc(y, y_pred_kmeans)

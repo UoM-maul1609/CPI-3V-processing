@@ -26,20 +26,21 @@ import h5py
 import tensorflow as tf
 # try
 # https://stackoverflow.com/questions/46421258/limit-number-of-cores-used-in-keras
-NUM_WORKERS=32
-from keras import backend as K
-K.set_session(tf.Session(config=tf.ConfigProto( \
-    intra_op_parallelism_threads=NUM_WORKERS, \
-    inter_op_parallelism_threads=NUM_WORKERS)))
+# NUM_WORKERS=32
+# from keras import backend as K
+# K.set_session(tf.Session(config=tf.ConfigProto( \
+#     intra_op_parallelism_threads=NUM_WORKERS, \
+#     inter_op_parallelism_threads=NUM_WORKERS)))
 
 loadData=True
-defineModel=True
+defineModel=1
 runFit=True
 outputs='/models/mccikpc2/CPI-analysis/model_epochs_50_dense64'
 
 
 
-if defineModel:
+if defineModel==1:
+    # 64 in dense layer bottleneck
     autoencoder=Sequential()
     # Encoder Layers
     autoencoder.add(Conv2D(32, (3, 3), activation='relu', input_shape=(128,128,1)))
@@ -75,6 +76,47 @@ if defineModel:
     autoencoder.summary()
 
     autoencoder.compile(optimizer='adam', loss='binary_crossentropy',metrics=['mse'])
+elif defineModel==2:
+    # 16 in dense layer bottleneck
+    autoencoder=Sequential()
+    # Encoder Layers
+    autoencoder.add(Conv2D(32, (3, 3), activation='relu', input_shape=(128,128,1)))
+    autoencoder.add(MaxPooling2D((2, 2))) # could add some dropout after pooling layers
+                                          # might help with overfitting
+    autoencoder.add(Conv2D(64, (3, 3), activation='relu'))
+    autoencoder.add(MaxPooling2D((2, 2)))
+    autoencoder.add(Conv2D(64, (3, 3), activation='relu'))
+    autoencoder.add(MaxPooling2D((2, 2)))
+    autoencoder.add(Conv2D(64, (3, 3), activation='relu'))
+    autoencoder.add(MaxPooling2D((2, 2)))
+    autoencoder.add(Conv2D(64, (3, 3), activation='relu'))
+
+
+
+    
+    # Flatten encoding for visualization
+    autoencoder.add(Flatten())
+    autoencoder.add(Dense(16, activation='softmax')) # 64 habits?
+    autoencoder.add(Reshape((4, 4, 1)))
+    
+    
+    # Decoder Layers
+    autoencoder.add(Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same'))
+    autoencoder.add(BatchNormalization())
+    autoencoder.add(Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same'))
+    autoencoder.add(BatchNormalization())
+    autoencoder.add(Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same'))
+    autoencoder.add(BatchNormalization())
+    autoencoder.add(Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same'))
+    autoencoder.add(BatchNormalization())
+    autoencoder.add(Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same'))
+
+    autoencoder.add(Conv2D(1, (3, 3), activation='sigmoid', padding='same'))
+        
+    autoencoder.summary()
+
+    autoencoder.compile(optimizer='adam', loss='binary_crossentropy',metrics=['mse'])
+
 
 
 if loadData:
