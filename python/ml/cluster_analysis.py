@@ -2,6 +2,7 @@ import h5py
 import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 import keras
 from keras.models import Model, Sequential, Input
 from keras.models import model_from_json
@@ -49,8 +50,9 @@ decoder.build(input_shape=loaded_model.layers[ei].input_shape) # (None,64)
 
 decoder.summary()
 
-
-img=decoder.predict(np.expand_dims(encoded[100000,:],axis=0))
+i=100
+# plt.figure(2)
+img=decoder.predict(np.expand_dims(encoded[i,:],axis=0))
 
 plt.ion()
 plt.imshow(img[0,:,:,0]*255)
