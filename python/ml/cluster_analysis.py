@@ -7,7 +7,7 @@ import keras
 from keras.models import Model, Sequential, Input
 from keras.models import model_from_json
 
-mo='/tmp/model_epochs_15_dense64'
+mo='/tmp/model_epochs_50_dense64'
 
 
 # load the encoded data
@@ -18,7 +18,7 @@ encoded=h5f['encoding'][:]
 
 # perform k-means
 print('Performing k-means')
-y_pred = KMeans(n_clusters=10).fit_predict(encoded)
+y_pred = KMeans(n_clusters=64).fit_predict(encoded)
 print('done k-means')
 
 
@@ -50,9 +50,10 @@ decoder.build(input_shape=loaded_model.layers[ei].input_shape) # (None,64)
 
 decoder.summary()
 
-i=100
-# plt.figure(2)
-img=decoder.predict(np.expand_dims(encoded[i,:],axis=0))
-
 plt.ion()
-plt.imshow(img[0,:,:,0]*255)
+for i in range(0,100,1): 
+    img=decoder.predict(np.expand_dims(encoded[i,:],axis=0))  
+    plt.imshow(img[0,:,:,0]*255)  
+    plt.title('class: ' + str(y_pred[i])) 
+    plt.pause(1) 
+    
