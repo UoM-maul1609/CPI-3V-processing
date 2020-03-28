@@ -50,7 +50,7 @@ print('Loading model...')
 json_file = open(inputs + '.json','r')
 loaded_model_json = json_file.read()
 json_file.close()
-loaded_model = model_from_json(loaded_model_json)
+loaded_model = model_from_json(loaded_model_json, custom_objects={'ClusteringLayer':ClusteringLayer})
 loaded_model.load_weights(inputs + '.h5')
 print('model is loaded')
 """
