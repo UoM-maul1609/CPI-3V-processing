@@ -31,11 +31,6 @@ from keras import callbacks
 from keras.initializers import VarianceScaling
 import keras.backend as K
 
-n_clusters=10
-batch_size=256
-loadData=True
-inputs='/models/mccikpc2/CPI-analysis/model_epochs_50_dense64'
-#inputs='/tmp/model_epochs_50_dense64'
 
 
 
@@ -118,161 +113,166 @@ class ClusteringLayer(Layer):
 
 
 
+if __name__ == "__main__":
+
+    n_clusters=10
+    batch_size=256
+    loadData=True
+    inputs='/models/mccikpc2/CPI-analysis/model_epochs_50_dense64'
+    #inputs='/tmp/model_epochs_50_dense64'
 
 
 
 
 
 
-
-
-"""
-    1. Load image data++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-"""
-if loadData:
-    print('Loading data...')
-    # load images
-    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_l50.h5','r')
-    images=h5f['images'][:]
-    images=np.expand_dims(images,axis=3)
-    lens  =h5f['lens'][:]
-    times =h5f['times'][:]
-    h5f.close()
+    """
+        1. Load image data++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    if loadData:
+        print('Loading data...')
+        # load images
+        h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_l50.h5','r')
+        images=h5f['images'][:]
+        images=np.expand_dims(images,axis=3)
+        lens  =h5f['lens'][:]
+        times =h5f['times'][:]
+        h5f.close()
     
-    i1 = len(lens)
-    i11=60000
-    i22=10000
-    indices = np.random.permutation(i1)
-    #split1=int(0.8*i1)
-    training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
+        i1 = len(lens)
+        i11=60000
+        i22=10000
+        indices = np.random.permutation(i1)
+        #split1=int(0.8*i1)
+        training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
     
-    x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
-    del images
-    x_train=x_train.astype('float32')/255.
-    x_test=x_test.astype('float32')/255.
+        x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
+        del images
+        x_train=x_train.astype('float32')/255.
+        x_test=x_test.astype('float32')/255.
 
-    lens_train,lens_test = lens[training_idx], lens[test_idx]
-    times_train,times_test = times[training_idx], times[test_idx]
+        lens_train,lens_test = lens[training_idx], lens[test_idx]
+        times_train,times_test = times[training_idx], times[test_idx]
 
-    print('data is loaded')
-"""
-    --------------------------------------------------------------------------------------
-"""
-
-
-
-
-
-"""
-    load the full model+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-"""
-print('Loading model...')
-json_file = open(inputs + '.json','r')
-loaded_model_json = json_file.read()
-json_file.close()
-loaded_model = model_from_json(loaded_model_json)
-loaded_model.load_weights(inputs + '.h5')
-print('model is loaded')
-"""
-    --------------------------------------------------------------------------------------
-"""
-
-
-
-
-"""
-    2. Load encoder model+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-"""
-# see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-# layer_name='dense_1'
-# intermediate_layer_model = Model(input=loaded_model.input, \
-#                         outputs=loaded_model.get_layer(layer_name).output)
-
-# https://stackoverflow.com/questions/53843573/extracting-encoding-decoding-models-from-keras-autoencoder-using-sequential-api
-# find the dense layer
-for i in range(len(loaded_model.layers)): 
-    if loaded_model.layers[i].name == 'dense_1': 
-        break 
-ei=i+1
-encoder_model = Sequential()
-for i in range(0,ei):
-    encoder_model.add(loaded_model.layers[i])
-"""
-    --------------------------------------------------------------------------------------
-"""
-
-
-"""
-    3. Add clustering layer+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-"""
-clustering_layer = ClusteringLayer(n_clusters, name='clustering')(encoder_model.output)
-new_model = Model(inputs=encoder_model.input, outputs=clustering_layer)
-new_model.summary()
-new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
-"""
-    --------------------------------------------------------------------------------------
-"""
-
-
-
-
-"""
-    initialise cluster centers using k-means++++++++++++++++++++++++++++++++++++++++++++++
-"""
-print('First k-means...')
-kmeans = KMeans(n_clusters=n_clusters, n_init=20)
-y_pred = kmeans.fit_predict(encoder_model.predict(x_train))
-y_pred_last = np.copy(y_pred)
-new_model.get_layer(name='clustering').set_weights([kmeans.cluster_centers_])
-print('...done k-means')
-"""
-    --------------------------------------------------------------------------------------
-"""
+        print('data is loaded')
+    """
+        ----------------------------------------------------------------------------------
+    """
 
 
 
 
 
-"""
-    4. retrain the encoder + cluster layer++++++++++++++++++++++++++++++++++++++++++++++++
-"""
-loss = 0
-index = 0
-maxiter = 8000
-update_interval = 140
-index_array = np.arange(x_train.shape[0])
-tol = 0.001 # tolerance threshold to stop training
+    """
+        load the full model+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    print('Loading model...')
+    json_file = open(inputs + '.json','r')
+    loaded_model_json = json_file.read()
+    json_file.close()
+    loaded_model = model_from_json(loaded_model_json)
+    loaded_model.load_weights(inputs + '.h5')
+    print('model is loaded')
+    """
+        ----------------------------------------------------------------------------------
+    """
 
 
-for ite in range(int(maxiter)):
-    if ite % update_interval == 0:
-        q = new_model.predict(x_train, verbose=1)
-        p = target_distribution(q)  # update the auxiliary target distribution p
-
-        # evaluate the clustering performance
-        y_pred = q.argmax(1)
-
-        # check stop criterion - model convergence
-        delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
-        y_pred_last = np.copy(y_pred)
-        print('delta_label=', delta_label,' and tol=',tol)
-        if ite > 0 and delta_label < tol:
-            print('delta_label ', delta_label, '< tol ', tol)
-            print('Reached tolerance threshold. Stopping training.')
-            break
-    idx = index_array[index * batch_size: min((index+1) * batch_size, x_train.shape[0])]
-    loss = new_model.train_on_batch(x=x_train[idx], y=p[idx])
-    index = index + 1 if (index + 1) * batch_size <= x_train.shape[0] else 0
 
 
-model_json = new_model.to_json()
-with open(inputs + '_final.json','w') as json_file:
-    json_file.write(model_json)
-new_model.save_weights(inputs + '_final.h5')
+    """
+        2. Load encoder model+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
+    # layer_name='dense_1'
+    # intermediate_layer_model = Model(input=loaded_model.input, \
+    #                         outputs=loaded_model.get_layer(layer_name).output)
 
-"""
-    --------------------------------------------------------------------------------------
-"""
+    # https://stackoverflow.com/questions/53843573/extracting-encoding-decoding-models-from-keras-autoencoder-using-sequential-api
+    # find the dense layer
+    for i in range(len(loaded_model.layers)): 
+        if loaded_model.layers[i].name == 'dense_1': 
+            break 
+    ei=i+1
+    encoder_model = Sequential()
+    for i in range(0,ei):
+        encoder_model.add(loaded_model.layers[i])
+    """
+        ----------------------------------------------------------------------------------
+    """
+
+
+    """
+        3. Add clustering layer+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    clustering_layer = ClusteringLayer(n_clusters, name='clustering')(encoder_model.output)
+    new_model = Model(inputs=encoder_model.input, outputs=clustering_layer)
+    new_model.summary()
+    new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
+    """
+        ----------------------------------------------------------------------------------
+    """
+
+
+
+
+    """
+        initialise cluster centers using k-means++++++++++++++++++++++++++++++++++++++++++
+    """
+    print('First k-means...')
+    kmeans = KMeans(n_clusters=n_clusters, n_init=20)
+    y_pred = kmeans.fit_predict(encoder_model.predict(x_train))
+    y_pred_last = np.copy(y_pred)
+    new_model.get_layer(name='clustering').set_weights([kmeans.cluster_centers_])
+    print('...done k-means')
+    """
+        ----------------------------------------------------------------------------------
+    """
+
+
+
+
+
+    """
+        4. retrain the encoder + cluster layer++++++++++++++++++++++++++++++++++++++++++++
+    """
+    loss = 0
+    index = 0
+    maxiter = 8000
+    update_interval = 140
+    index_array = np.arange(x_train.shape[0])
+    tol = 0.001 # tolerance threshold to stop training
+
+
+    for ite in range(int(maxiter)):
+        if ite % update_interval == 0:
+            q = new_model.predict(x_train, verbose=1)
+            p = target_distribution(q)  # update the auxiliary target distribution p
+
+            # evaluate the clustering performance
+            y_pred = q.argmax(1)
+
+            # check stop criterion - model convergence
+            delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
+            y_pred_last = np.copy(y_pred)
+            print('delta_label=', delta_label,' and tol=',tol)
+            if ite > 0 and delta_label < tol:
+                print('delta_label ', delta_label, '< tol ', tol)
+                print('Reached tolerance threshold. Stopping training.')
+                break
+        idx = index_array[index * batch_size: min((index+1) * batch_size, x_train.shape[0])]
+        loss = new_model.train_on_batch(x=x_train[idx], y=p[idx])
+        index = index + 1 if (index + 1) * batch_size <= x_train.shape[0] else 0
+
+
+    model_json = new_model.to_json()
+    with open(inputs + '_final.json','w') as json_file:
+        json_file.write(model_json)
+    new_model.save_weights(inputs + '_final.h5')
+
+    """
+        ----------------------------------------------------------------------------------
+    """
 
 
 
