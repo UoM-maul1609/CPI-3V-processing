@@ -34,7 +34,7 @@ import keras.backend as K
 n_clusters=10
 batch_size=256
 loadData=True
-ßinputs='/models/mccikpc2/CPI-analysis/model_epochs_50_dense64'
+inputs='/models/mccikpc2/CPI-analysis/model_epochs_50_dense64'
 #inputs='/tmp/model_epochs_50_dense64'
 
 
@@ -223,7 +223,7 @@ print('First k-means...')
 kmeans = KMeans(n_clusters=n_clusters, n_init=20)
 y_pred = kmeans.fit_predict(encoder_model.predict(x_train))
 y_pred_last = np.copy(y_pred)
-model.get_layer(name='clustering').set_weights([kmeans.cluster_centers_])
+new_model.get_layer(name='clustering').set_weights([kmeans.cluster_centers_])
 print('...done k-means')
 """
     --------------------------------------------------------------------------------------
@@ -255,11 +255,12 @@ for ite in range(int(maxiter)):
         # check stop criterion - model convergence
         delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
         y_pred_last = np.copy(y_pred)
+        print('delta_label=', delta_label,' and tol=',tol)
         if ite > 0 and delta_label < tol:
             print('delta_label ', delta_label, '< tol ', tol)
             print('Reached tolerance threshold. Stopping training.')
             break
-    idx = index_array[index * batch_size: min((index+1) * batch_size, x.shape[0])]
+    idx = index_array[index * batch_size: min((index+1) * batch_size, x_train.shape[0])]
     loss = new_model.train_on_batch(x=x_train[idx], y=p[idx])
     index = index + 1 if (index + 1) * batch_size <= x_train.shape[0] else 0
 
