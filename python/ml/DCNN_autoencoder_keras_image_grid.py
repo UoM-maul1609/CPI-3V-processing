@@ -7,6 +7,7 @@ from keras.models import model_from_json
 loadData=True
 
 inputs=['/models/mccikpc2/CPI-analysis/model_epochs_5_dense16' , \
+    '/models/mccikpc2/CPI-analysis/model_epochs_50_dense16' , \
     '/models/mccikpc2/CPI-analysis/model_epochs_5_dense64' , \
     '/models/mccikpc2/CPI-analysis/model_epochs_15_dense64', \
     '/models/mccikpc2/CPI-analysis/model_epochs_50_dense64']
