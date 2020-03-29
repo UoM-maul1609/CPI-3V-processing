@@ -29,6 +29,7 @@ from sklearn.cluster import KMeans
 from keras.engine.topology import Layer, InputSpec
 from keras.layers import Dense, Input
 from keras.optimizers import SGD
+from keras.optimizers import adam
 from keras import callbacks
 from keras.initializers import VarianceScaling
 import keras.backend as K
@@ -212,7 +213,9 @@ if __name__ == "__main__":
     clustering_layer = ClusteringLayer(n_clusters, name='clustering')(encoder_model.output)
     new_model = Model(inputs=encoder_model.input, outputs=clustering_layer)
     new_model.summary()
-    new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
+#     new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
+    new_model.compile(optimizer='adam', loss='kld')
+#     new_model.compile(optimizer='adam', loss='categorical_crossentropy')
     """
         ----------------------------------------------------------------------------------
     """
