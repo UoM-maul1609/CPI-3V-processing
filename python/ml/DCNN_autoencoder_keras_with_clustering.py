@@ -10,6 +10,8 @@ Created on Sun Mar 22 10:31:14 2020
     Keras deep convolutional auto-encoder with clustering layer
     https://www.dlology.com/blog/how-to-do-unsupervised-clustering-with-keras/
 
+    Paper of relevance: https://arxiv.org/pdf/1511.06335.pdf
+    
     1. load image data
     2. load encoder model and build up encoder layer
     3. add clustering layer
@@ -201,6 +203,8 @@ if __name__ == "__main__":
         ----------------------------------------------------------------------------------
     """
 
+#     for i in range(0,ei):
+#         encoder_model.layers[i].trainable = False
 
     """
         3. Add clustering layer+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -238,13 +242,14 @@ if __name__ == "__main__":
     """
     loss = 0
     index = 0
-    maxiter = 8000
+    maxiter = 16000
     update_interval = 140
     index_array = np.arange(x_train.shape[0])
     tol = 0.001 # tolerance threshold to stop training
 
 
     for ite in range(int(maxiter)):
+        print(".",end="") # print . without newline
         if ite % update_interval == 0:
             q = new_model.predict(x_train, verbose=1)
             p = target_distribution(q)  # update the auxiliary target distribution p
@@ -255,7 +260,9 @@ if __name__ == "__main__":
             # check stop criterion - model convergence
             delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
             y_pred_last = np.copy(y_pred)
-            print('delta_label=', delta_label,' and tol=',tol)
+            if ite > 0:
+                print('delta_label=', delta_label,' and tol=',tol)
+    
             if ite > 0 and delta_label < tol:
                 print('delta_label ', delta_label, '< tol ', tol)
                 print('Reached tolerance threshold. Stopping training.')
