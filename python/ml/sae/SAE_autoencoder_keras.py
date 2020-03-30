@@ -43,39 +43,38 @@ init = VarianceScaling(scale=1. / 3., mode='fan_in',
 
 if defineModel==1:
     # symmetric fully connected autoencoder - see https://arxiv.org/pdf/1511.06335.pdf
-    autoencoder=Sequential(name='AE')
     # Encoder Layers
-#     autoencoder.add(Input(shape=(128**2,),name='input'))
 #     
-    autoencoder.add(Dense(128**2, activation='relu', kernel_initializer=init, \
-        name='encoder_0', input_shape=(128**2,)))
+    inputs=Input(name='input', shape=(128**2,))
 
-    autoencoder.add(Dense(500, activation='relu', kernel_initializer=init, \
-        name='encoder_1'))
+    x=Dense(500, activation='relu', kernel_initializer=init, \
+        name='encoder_0')(inputs)
 
-    autoencoder.add(Dense(500, activation='relu', kernel_initializer=init, \
-        name='encoder_2'))
+    x=Dense(500, activation='relu', kernel_initializer=init, \
+        name='encoder_1')(x)
 
-    autoencoder.add(Dense(2000, activation='relu', kernel_initializer=init, \
-        name='encoder_3'))
+    x=Dense(2000, activation='relu', kernel_initializer=init, \
+        name='encoder_2')(x)
 
 
 
     # features are extracted from here
-    autoencoder.add(Dense(10, activation='relu', kernel_initializer=init, \
-        name='encoder_4'))
+    x=Dense(10, activation='relu', kernel_initializer=init, \
+        name='encoder_3')(x)
 
-    autoencoder.add(Dense(2000, activation='relu', kernel_initializer=init, \
-        name='decoder_3'))
+    x=Dense(2000, activation='relu', kernel_initializer=init, \
+        name='decoder_3')(x)
 
-    autoencoder.add(Dense(500, activation='relu', kernel_initializer=init, \
-        name='decoder_2'))
+    x=Dense(500, activation='relu', kernel_initializer=init, \
+        name='decoder_2')(x)
 
-    autoencoder.add(Dense(500, activation='relu', kernel_initializer=init, \
-        name='decoder_1'))
+    x=Dense(500, activation='relu', kernel_initializer=init, \
+        name='decoder_1')(x)
 
-    autoencoder.add(Dense(128**2, activation='relu', kernel_initializer=init, \
-        name='decoder_0'))
+    x=Dense(128**2, activation='relu', kernel_initializer=init, \
+        name='decoder_0')(x)
+        
+    autoencoder=Model(inputs=inputs, outputs=x, name='AE')
 
         
     autoencoder.summary()
