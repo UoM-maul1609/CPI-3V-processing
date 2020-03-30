@@ -73,7 +73,7 @@ ind6,=np.where(y_pred==6)
 ind7,=np.where(y_pred==7)
 ind8,=np.where(y_pred==8)
 ind9,=np.where(y_pred==9)
-
+plt.ion()
 fig = plt.figure(figsize=(10.,1.)) 
 for i in range(100): 
     grid = ImageGrid(fig,111,nrows_ncols=(1,10),axes_pad=0.1) 

@@ -35,7 +35,7 @@ import tensorflow as tf
 loadData=True
 defineModel=1
 runFit=True
-outputs='/models/mccikpc2/CPI-analysis/model_epochs_50_dense64'
+outputs='/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense64'
 
 
 

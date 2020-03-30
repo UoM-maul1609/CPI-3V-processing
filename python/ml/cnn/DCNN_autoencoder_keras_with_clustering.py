@@ -121,7 +121,7 @@ if __name__ == "__main__":
     n_clusters=10
     batch_size=256
     loadData=True
-    inputs='/models/mccikpc2/CPI-analysis/model_epochs_50_dense64'
+    inputs='/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense64'
     #inputs='/tmp/model_epochs_50_dense64'
 
 
@@ -245,7 +245,7 @@ if __name__ == "__main__":
     """
     loss = 0
     index = 0
-    maxiter = 16000
+    maxiter = 8000
     update_interval = 140
     index_array = np.arange(x_train.shape[0])
     tol = 0.001 # tolerance threshold to stop training

@@ -17,10 +17,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from keras.models import Model, model_from_json, Sequential
 import h5py
+from DCNN_autoencoder_keras_with_clustering import ClusteringLayer 
 
 
 loadData=True
-inputs='/models/mccikpc2/CPI-analysis/model_epochs_15_dense64'
+inputs='/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense64_final'
 
 
 
@@ -49,7 +50,7 @@ print('Loading model...')
 json_file = open(inputs + '.json','r')
 loaded_model_json = json_file.read()
 json_file.close()
-loaded_model = model_from_json(loaded_model_json)
+loaded_model = model_from_json(loaded_model_json, custom_objects={'ClusteringLayer':ClusteringLayer})
 loaded_model.load_weights(inputs + '.h5')
 print('model is loaded')
 """
@@ -58,27 +59,10 @@ print('model is loaded')
 
 
 
-# see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-# layer_name='dense_1'
-# intermediate_layer_model = Model(input=loaded_model.input, \
-#                         outputs=loaded_model.get_layer(layer_name).output)
-
-# https://stackoverflow.com/questions/53843573/extracting-encoding-decoding-models-from-keras-autoencoder-using-sequential-api
-# find the dense layer
-for i in range(len(loaded_model.layers)): 
-    if loaded_model.layers[i].name == 'dense_1': 
-        break 
-ei=i+1
-intermediate_layer_model = Sequential()
-for i in range(0,ei):
-    intermediate_layer_model.add(loaded_model.layers[i])
 
 
 # calculate the 'finger prints' for cluster analysis
-# finger_print=np.zeros((len(images),64))
-# for i in range(len(images)):
-#     finger_print[i,:]=intermediate_layer_model.predict(images[i:i+1,:,:,0:1])
-finger_print=intermediate_layer_model.predict(images)
+finger_print=loaded_model.predict(images)
     
 h5f = h5py.File(inputs + '_encoding.h5', 'w')
 h5f.create_dataset('encoding', data=finger_print)
