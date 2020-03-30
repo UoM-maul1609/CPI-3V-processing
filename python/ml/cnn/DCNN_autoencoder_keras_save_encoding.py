@@ -59,10 +59,11 @@ print('model is loaded')
 
 
 # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-# layer_name='dense_1'
-# intermediate_layer_model = Model(input=loaded_model.input, \
-#                         outputs=loaded_model.get_layer(layer_name).output)
+layer_name='dense_1'
+intermediate_layer_model = Model(inputs=loaded_model.input, \
+                         outputs=loaded_model.get_layer(layer_name).output)
 
+"""
 # https://stackoverflow.com/questions/53843573/extracting-encoding-decoding-models-from-keras-autoencoder-using-sequential-api
 # find the dense layer
 for i in range(len(loaded_model.layers)): 
@@ -72,7 +73,7 @@ ei=i+1
 intermediate_layer_model = Sequential()
 for i in range(0,ei):
     intermediate_layer_model.add(loaded_model.layers[i])
-
+"""
 
 # calculate the 'finger prints' for cluster analysis
 # finger_print=np.zeros((len(images),64))
