@@ -72,7 +72,7 @@ for mo in inputs:
             # save raw image
             ims[i*10+j]=x_train[k,:].reshape((1,128,128,1))
             # encode - decode
-            ed=loaded_model.predict(x_train[k,:])
+            ed=loaded_model.predict(np.expand_dims(x_train[k,:],axis=0))
             # save processed image
             ims[i*10+j+5]=ed.reshape((1,128,128,1))
     #-------------------------------------------------------------------------------------
