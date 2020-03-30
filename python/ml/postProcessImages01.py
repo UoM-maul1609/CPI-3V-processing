@@ -12,7 +12,7 @@ import scipy.io as sio
 import numpy as np
 import cv2
 
-def postProcessing(filename1='/tmp/20180213071742.mat',\
+def postProcessing(filename1='/tmp/20180124121259.mat',\
                    background_file='/tmp/full_backgrounds.mat',\
                    foc_crit=12,min_len=50):
     """
@@ -182,3 +182,7 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
         timesPP.append(data['dat'][0,0]['Time'][0,i])
         lensPP.append(data['dat'][0,0]['len'][i,0])
     return (imagePP,lensPP,timesPP)
+
+if __name__ == "__main__":
+    postProcessing()
+    

@@ -6,7 +6,8 @@ from keras.models import model_from_json
 
 loadData=True
 
-inputs=['/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae01']
+inputs=['/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae01', \
+        '/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae02']
     
 if loadData:
     """

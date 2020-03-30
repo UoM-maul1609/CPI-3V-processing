@@ -36,7 +36,7 @@ import tensorflow as tf
 loadData=True
 defineModel=1
 runFit=True
-outputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae01'
+outputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae02'
 
 init = VarianceScaling(scale=1. / 3., mode='fan_in',
                            distribution='uniform')
@@ -59,7 +59,7 @@ if defineModel==1:
 
 
     # features are extracted from here
-    x=Dense(10, activation='relu', kernel_initializer=init, \
+    x=Dense(50, activation='relu', kernel_initializer=init, \
         name='encoder_3')(x)
 
     x=Dense(2000, activation='relu', kernel_initializer=init, \

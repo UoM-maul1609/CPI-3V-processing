@@ -6,7 +6,8 @@ Created on Sat Mar 21 09:28:54 2020
 @author: mccikpc2
 """
 import scipy.io as sio
-from postProcessImages import postProcessing
+import postProcessImages01
+import postProcessImages02
 from os import listdir
 from os import path
 from tqdm import tqdm
@@ -16,7 +17,7 @@ import pickle
 import numpy as np
 import json
 
-def postProcessingDriver(path1,outputfile,foc_crit,min_len):
+def postProcessingDriver(path1,outputfile,foc_crit,min_len, type1):
     """
         1. loop over all paths
         2. extract all images from each file & append
@@ -39,10 +40,16 @@ def postProcessingDriver(path1,outputfile,foc_crit,min_len):
         """
         for i in tqdm(range(len(filename1))):
             f=filename1[i]
-            (imagePP1,lensPP1,timesPP1)=postProcessing(\
-                                path.join(p,f.replace('.roi','.mat')), \
-                                path.join(p,'full_backgrounds.mat'),\
-                                foc_crit,min_len)
+            if type1==1:
+                (imagePP1,lensPP1,timesPP1)=postProcessImages01.postProcessing(\
+                                    path.join(p,f.replace('.roi','.mat')), \
+                                    path.join(p,'full_backgrounds.mat'),\
+                                    foc_crit,min_len)
+            elif type1==2:
+                (imagePP1,lensPP1,timesPP1)=postProcessImages02.postProcessing(\
+                                    path.join(p,f.replace('.roi','.mat')), \
+                                    path.join(p,'full_backgrounds.mat'),\
+                                    foc_crit,min_len)
             
             """
                 & append
