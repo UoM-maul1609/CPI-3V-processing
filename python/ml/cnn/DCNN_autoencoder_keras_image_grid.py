@@ -10,45 +10,62 @@ inputs=['/models/mccikpc2/CPI-analysis/cnn/model_epochs_5_dense16' , \
     '/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense16' , \
     '/models/mccikpc2/CPI-analysis/cnn/model_epochs_5_dense64' , \
     '/models/mccikpc2/CPI-analysis/cnn/model_epochs_15_dense64', \
-    '/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense64']
+    '/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense64',\
+    '/models/mccikpc2/CPI-analysis/cnn/model_t2_epochs_50_dense64']
     
-if loadData:
-    """
-        Load the image data+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    """
-    print('Loading image data...')
-    # load images
-    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_l50.h5','r')
-    images=h5f['images'][:]
-    images=np.expand_dims(images,axis=3)
-    lens  =h5f['lens'][:]
-    times =h5f['times'][:]
-    h5f.close()
     
-    i1 = len(lens)
-    i11=60000
-    i22=10000
-    indices = np.random.permutation(i1)
-    #split1=int(0.8*i1)
-    training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
-    
-    x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
-    del images
-    x_train=x_train.astype('float32')/255.
-    x_test=x_test.astype('float32')/255.
+dataFiles=['/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
+        '/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
+        '/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
+        '/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
+        '/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
+        '/models/mccikpc2/CPI-analysis/postProcessed_t2_l50.h5']
 
-    lens_train,lens_test = lens[training_idx], lens[test_idx]
-    times_train,times_test = times[training_idx], times[test_idx]
-
-    print('image data is loaded')
-    """
-        ----------------------------------------------------------------------------------
-    """
-    
-    
 size_bins=[0,100,200,300,400,500,600,700,800,900,1000]
 ims=[None]*100
+ii=0
+dataFileOld=''
 for mo in inputs:
+
+    if loadData:
+        """
+            Load the image data+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        """
+        print('Loading image data...')
+        # load images
+        dataFile=dataFiles[ii]
+        ii += 1
+        if dataFile != dataFileOld:
+            dataFile = dataFileOld
+            
+            h5f = h5py.File(dataFile,'r')
+            images=h5f['images'][:]
+            images=np.expand_dims(images,axis=3)
+            lens  =h5f['lens'][:]
+            times =h5f['times'][:]
+            h5f.close()
+    
+            i1 = len(lens)
+            i11=60000
+            i22=10000
+            indices = np.random.permutation(i1)
+            #split1=int(0.8*i1)
+            training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
+    
+            x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
+            del images
+            x_train=x_train.astype('float32')/255.
+            x_test=x_test.astype('float32')/255.
+
+            lens_train,lens_test = lens[training_idx], lens[test_idx]
+            times_train,times_test = times[training_idx], times[test_idx]
+
+        print('image data is loaded')
+        """
+            ------------------------------------------------------------------------------
+        """
+    
+    
     """
         load the model++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     """

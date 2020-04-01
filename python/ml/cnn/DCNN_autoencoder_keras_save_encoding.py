@@ -20,7 +20,7 @@ import h5py
 
 
 loadData=True
-inputs='/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense64'
+inputs='/models/mccikpc2/CPI-analysis/cnn/model_t2_epochs_50_dense64'
 
 
 
@@ -28,7 +28,7 @@ inputs='/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense64'
 if loadData:
     print('Loading data...')
     # load images
-    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_l50.h5','r')
+    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t2_l50.h5','r')
     images=h5f['images'][:]
     images=np.expand_dims(images,axis=3)
     lens  =h5f['lens'][:]
