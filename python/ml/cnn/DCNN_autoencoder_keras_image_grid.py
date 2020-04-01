@@ -34,7 +34,6 @@ for mo in inputs:
         print('Loading image data...')
         # load images
         dataFile=dataFiles[ii]
-        ii += 1
         if dataFile != dataFileOld:
             dataFileOld = dataFile
             
@@ -44,11 +43,13 @@ for mo in inputs:
             lens  =h5f['lens'][:]
             times =h5f['times'][:]
             h5f.close()
-    
-            i1 = len(lens)
-            i11=60000
-            i22=10000
-            indices = np.random.permutation(i1)
+            
+            if ii == 0:
+                i1 = len(lens)
+                i11=60000
+                i22=10000
+                indices = np.random.permutation(i1)
+                
             #split1=int(0.8*i1)
             training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
     
@@ -61,6 +62,7 @@ for mo in inputs:
             times_train,times_test = times[training_idx], times[test_idx]
 
         print('image data is loaded')
+        ii += 1
         """
             ------------------------------------------------------------------------------
         """
