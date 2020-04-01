@@ -36,7 +36,7 @@ for mo in inputs:
         dataFile=dataFiles[ii]
         ii += 1
         if dataFile != dataFileOld:
-            dataFile = dataFileOld
+            dataFileOld = dataFile
             
             h5f = h5py.File(dataFile,'r')
             images=h5f['images'][:]
