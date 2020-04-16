@@ -247,7 +247,7 @@ if __name__ == "__main__":
             y_pred = q.argmax(1)
 
 
-            if y is not None:
+            if y_test is not None:
                 acc = np.round(metrics.acc(y_test, y_pred), 5)
                 nmi = np.round(metrics.nmi(y_test, y_pred), 5)
                 ari = np.round(metrics.ari(y_test, y_pred), 5)
