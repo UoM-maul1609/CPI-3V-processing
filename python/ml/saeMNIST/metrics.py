@@ -22,6 +22,10 @@ def acc(y_true, y_pred):
     for i in range(y_pred.size):
         w[y_pred[i], y_true[i]] += 1
     from scipy.optimize import linear_sum_assignment 
+    # https://stackoverflow.com/questions/57369848/how-do-i-resolve-use-scipy-optimize-linear-sum-assignment-instead
+    #from sklearn.utils.linear_assignment_ import linear_assignment 
     ind = linear_sum_assignment(w.max() - w)
+    ind = np.asarray(ind)
+    ind = np.transpose(ind)
     return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size
     
