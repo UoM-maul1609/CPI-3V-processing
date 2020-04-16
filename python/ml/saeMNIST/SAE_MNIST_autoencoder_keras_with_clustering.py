@@ -218,6 +218,8 @@ if __name__ == "__main__":
     y_pred_last = np.copy(y_pred)
     new_model.get_layer(name='clustering').set_weights([kmeans.cluster_centers_])
     print('...done k-means')
+    acc1=metrics.acc(y_train, y_pred)
+    print(acc1)
     """
         ----------------------------------------------------------------------------------
     """
@@ -247,10 +249,10 @@ if __name__ == "__main__":
             y_pred = q.argmax(1)
 
 
-            if y_test is not None:
-                acc = np.round(metrics.acc(y_test, y_pred), 5)
-                nmi = np.round(metrics.nmi(y_test, y_pred), 5)
-                ari = np.round(metrics.ari(y_test, y_pred), 5)
+            if y_train is not None:
+                acc = np.round(metrics.acc(y_train, y_pred), 5)
+                nmi = np.round(metrics.nmi(y_train, y_pred), 5)
+                ari = np.round(metrics.ari(y_train, y_pred), 5)
                 loss = np.round(loss, 5)
                 print('Iter %d: acc = %.5f, nmi = %.5f, ari = %.5f' \
                     % (ite, acc, nmi, ari), ' ; loss=', loss)
