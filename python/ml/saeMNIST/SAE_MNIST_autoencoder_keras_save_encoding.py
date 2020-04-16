@@ -59,7 +59,7 @@ print('model is loaded')
 
 
 # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-layer_name='dense_1'
+layer_name='encoder_3'
 intermediate_layer_model = Model(inputs=loaded_model.input, \
                          outputs=loaded_model.get_layer(layer_name).output)
 
