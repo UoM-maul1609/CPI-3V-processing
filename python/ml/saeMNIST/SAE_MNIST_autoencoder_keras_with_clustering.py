@@ -231,7 +231,7 @@ if __name__ == "__main__":
     """
     loss = 0
     index = 0
-    maxiter = 8000
+    maxiter = 16000
     update_interval = 140
     index_array = np.arange(x_train.shape[0])
     tol = 0.001 # tolerance threshold to stop training
