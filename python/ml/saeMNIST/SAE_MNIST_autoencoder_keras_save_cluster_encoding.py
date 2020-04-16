@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from keras.datasets import mnist
 from keras.models import Model, model_from_json, Sequential
 import h5py
-from SAE_autoencoder_keras_with_clustering import ClusteringLayer 
+from SAE_MNIST_autoencoder_keras_with_clustering import ClusteringLayer 
 
 
 loadData=True
