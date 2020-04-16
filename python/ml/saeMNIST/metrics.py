@@ -21,7 +21,7 @@ def acc(y_true, y_pred):
     w = np.zeros((D, D), dtype=np.int64)
     for i in range(y_pred.size):
         w[y_pred[i], y_true[i]] += 1
-    import scipy.optimize.linear_sum_assignment as linear_assignment
-    ind = linear_assignment(w.max() - w)
+    from scipy.optimize import linear_sum_assignment 
+    ind = linear_sum_assignment(w.max() - w)
     return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size
     
