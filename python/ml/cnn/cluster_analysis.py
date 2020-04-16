@@ -9,7 +9,7 @@ from keras.models import model_from_json
 from DCNN_autoencoder_keras_with_clustering import target_distribution
 from mpl_toolkits.axes_grid1 import ImageGrid 
 
-mo='/tmp/model_epochs_50_dense64'
+mo='/tmp/model_t2_epochs_50_dense64'
 
 
 # load the encoded data
@@ -60,7 +60,7 @@ decoder.summary()
 
 
 
-y_pred=y_pred1
+y_pred=y_pred
 ims=[np.zeros((1,128,128,1))]*10
 tit=[None]*10
 ind0,=np.where(y_pred==0)
