@@ -171,7 +171,7 @@ if __name__ == "__main__":
         2. Load encoder model+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     """
     # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-    layer_name='dense_1'
+    layer_name='encoder_3'
     encoder_model = Model(inputs=loaded_model.input, \
                              outputs=loaded_model.get_layer(layer_name).output)
 
