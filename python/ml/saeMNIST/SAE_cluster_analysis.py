@@ -8,8 +8,32 @@ from keras.models import Model, Sequential, Input
 from keras.models import model_from_json
 from SAE_MNIST_autoencoder_keras_with_clustering import target_distribution
 from mpl_toolkits.axes_grid1 import ImageGrid 
+from keras.datasets import mnist
+
 
 mo='/tmp/model_epochs_50_sae_mnist'
+loadData=True
+
+if loadData:
+    """
+        Load the image data+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+    """
+    print('Loading data...')
+    # load images
+    (X_train, y_train), (X_test, y_test) = mnist.load_data()
+
+    x_train=X_train.reshape((X_train.shape[0],-1))
+    x_test=X_test.reshape((X_test.shape[0],-1))
+
+    x_train=x_train.astype('float32')/255.
+    x_test=x_test.astype('float32')/255.
+
+    print('data is loaded')
+    """
+        ----------------------------------------------------------------------------------
+    """
+    
+
 
 
 # load the encoded data
@@ -60,6 +84,24 @@ decoder.summary()
 
 
 y_pred=y_pred1
+
+
+
+import seaborn as sns
+import sklearn.metrics
+import matplotlib.pyplot as plt
+# sns.set(font_scale=3)
+confusion_matrix = sklearn.metrics.confusion_matrix(y_test, y_pred)
+
+plt.figure(figsize=(16, 14))
+sns.heatmap(confusion_matrix, annot=True, fmt="d", annot_kws={"size": 20});
+plt.title("Confusion matrix", fontsize=30)
+plt.ylabel('True label', fontsize=25)
+plt.xlabel('Clustering label', fontsize=25)
+plt.show()
+
+
+
 ims=[np.zeros((1,28,28,1))]*10
 tit=[None]*10
 ind0,=np.where(y_pred==0)
