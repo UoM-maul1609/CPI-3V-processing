@@ -90,8 +90,8 @@ if loadData:
     # load images
     (X_train, y_train), (X_test, y_test) = mnist.load_data()
 
-    x_train=X_train.reshape((x_train.shape[0],-1))
-    x_test=X_test.reshape((x_test.shape[0],-1))
+    x_train=X_train.reshape((X_train.shape[0],-1))
+    x_test=X_test.reshape((X_test.shape[0],-1))
 
     x_train=x_train.astype('float32')/255.
     x_test=x_test.astype('float32')/255.
