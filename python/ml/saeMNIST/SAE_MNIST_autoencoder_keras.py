@@ -22,6 +22,7 @@ from keras.layers import Dense, Conv2D, \
     Reshape, Flatten, Deconvolution2D, \
     Conv2DTranspose, MaxPooling2D, UpSampling2D
 from keras.layers.advanced_activations import LeakyReLU
+from keras.optimizers import SGD
 from keras.optimizers import adam
 from keras.initializers import VarianceScaling
 import h5py
@@ -60,7 +61,7 @@ if defineModel==1:
 
 
     # features are extracted from here
-    x=Dense(50, activation='relu', kernel_initializer=init, \
+    x=Dense(10, activation='relu', kernel_initializer=init, \
         name='encoder_3')(x)
 
     x=Dense(2000, activation='relu', kernel_initializer=init, \
@@ -80,7 +81,8 @@ if defineModel==1:
         
     autoencoder.summary()
 
-    autoencoder.compile(optimizer='adam', loss='mse',metrics=['mse'])
+#     autoencoder.compile(optimizer='adam', loss='mse',metrics=['mse'])
+    autoencoder.compile(optimizer=SGD(1,0.9), loss='mse',metrics=['mse'])
 
 
 
