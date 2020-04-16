@@ -31,7 +31,7 @@ from keras.optimizers import adam
 from keras import callbacks
 from keras.initializers import VarianceScaling
 import keras.backend as K
-
+import metrics
 
 
 
@@ -245,6 +245,16 @@ if __name__ == "__main__":
 
             # evaluate the clustering performance
             y_pred = q.argmax(1)
+
+
+            if y is not None:
+                acc = np.round(metrics.acc(y_test, y_pred), 5)
+                nmi = np.round(metrics.nmi(y_test, y_pred), 5)
+                ari = np.round(metrics.ari(y_test, y_pred), 5)
+                loss = np.round(loss, 5)
+                print('Iter %d: acc = %.5f, nmi = %.5f, ari = %.5f' \
+                    % (ite, acc, nmi, ari), ' ; loss=', loss)
+                    
 
             # check stop criterion - model convergence
             delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
