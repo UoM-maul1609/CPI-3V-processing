@@ -11,7 +11,7 @@ from mpl_toolkits.axes_grid1 import ImageGrid
 from keras.datasets import mnist
 
 
-mo='/tmp/model_epochs_50_sae_mnist'
+mo='/tmp/model_epochs_300_sae_mnist'
 loadData=True
 
 if loadData:
@@ -83,7 +83,7 @@ decoder.summary()
 
 
 
-y_pred=y_pred1
+y_pred=y_pred
 
 
 
