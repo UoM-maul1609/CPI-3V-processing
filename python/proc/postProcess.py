@@ -1,7 +1,7 @@
 import numpy as np
 from datetime import datetime
 from datetime import timedelta
-def postProcess(bytes1,rois,R,H,I,Header):
+def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     # use dictionaries for storing info
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # image times in hk format
@@ -26,12 +26,19 @@ def postProcess(bytes1,rois,R,H,I,Header):
     
 
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    # housekeeping packet times
-    HOUSE={'Time' : H['TimeMSW']*16**8 +
-           H['TimeISW']*16**4 +
-           H['TimeLSW'] }
-    Rdgs=H['Readings1']
-    HOUSE['deadtime']=Rdgs[:,66]*0.000341333
+    if not cpiv1:
+        # housekeeping packet times
+        HOUSE={'Time' : H['TimeMSW']*16**8 +
+               H['TimeISW']*16**4 +
+               H['TimeLSW'] }
+        Rdgs=H['Readings1']
+        HOUSE['deadtime']=Rdgs[:,66]*0.000341333
+    else:
+        # housekeeping packet times
+        HOUSE={'Time' : H['Time'] }
+        Rdgs=H['Readings']
+        HOUSE['deadtime']=Rdgs[:,31]*0.000682667
+        
     #--------------------------------------------------------------------------
 
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++

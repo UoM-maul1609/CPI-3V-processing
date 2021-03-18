@@ -30,18 +30,22 @@ def convertDataToHouseSA(bytes1,ushort,order,house,cpiv1):
                     ('order', 'uint32') ])
                     
         for i in range(len(house)):
-            if (ushort[house[i]+1] == 83):
+            if (((ushort[house[i]+2] << 16) + ushort[house[i]+1])== 106):
                 H['BlockNum'][i]=ushort[house[i]+0]
-                H['ulItemSize'][i]=(ushort[house[i]+1] << 16) + ushort[house[i]+2]
+                H['ulItemSize'][i]=(ushort[house[i]+2] << 16) + ushort[house[i]+1]
                 H['usVersion'][i]=ushort[house[i]+3]
-                H['ulXtraData'][i]=(ushort[house[i]+4] << 16) + ushort[house[i]+5]
+                H['ulXtraData'][i]=(ushort[house[i]+5] << 16) + ushort[house[i]+4]
                 H['bNewData'][i]=ushort[house[i]+6]
                 H['usChkSumFlag'][i]=ushort[house[i]+7]
                 H['TopReadings'][i]=np.reshape(ushort[house[i]+8:house[i]+8+3],(3,1))
-                H['Time'][i] = (ushort[house[i]+11] << 16) + ushort[house[i]+12]
+                H['Time'][i] = (ushort[house[i]+12] << 16) + ushort[house[i]+11]
                 H['Readings'][i]=np.reshape(ushort[house[i]+13:house[i]+13+40],(40,1))
                 H['order'][i]=order[house[i]]
     
+        ver=H['ulItemSize']
+        ind,=np.where(ver==106)
+        H=H[ind]
+
     else:
         H=np.zeros(len(house), 
             dtype=[('BlockNum', 'uint16'),
@@ -65,11 +69,11 @@ def convertDataToHouseSA(bytes1,ushort,order,house,cpiv1):
                 H['Readings'][i]=np.reshape(ushort[house[i]+75:house[i]+75+8],(8,1))   
                 H['order'][i]=order[house[i]]
         
+        ver=H['ulItemSize']
+        ind,=np.where(ver==83)
+        H=H[ind]
     
     
-    ver=H['ulItemSize']
-    ind,=np.where(ver==83)
-    H=H[ind]
 
     return (H)
 

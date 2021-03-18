@@ -1,13 +1,16 @@
 import numpy as np
 import copy
  
-def fullBackgrounds(ROI_N):
+def fullBackgrounds(ROI_N,cpiv1):
 
     #https://docs.scipy.org/doc/numpy-1.9.3/user/basics.rec.html
     # structured array with dictionary argument
     # +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # search for backgrounds
-    (ind,i1)=np.where(ROI_N['imageType']==19)
+    if cpiv1:
+        (ind,i1)=np.where(ROI_N['imageType']==33795)
+    else:
+        (ind,i1)=np.where(ROI_N['imageType']==19)
     if len(ind) == 0:
         print('no backgrounds in this file')
         FULL_BG={'Time':np.array([]),'IMAGE':np.array([]) }

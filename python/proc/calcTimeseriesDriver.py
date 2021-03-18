@@ -68,9 +68,14 @@ def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1):
         
         # Calculate timeseries ++++++++++++++++++++++++++++++++++++++++++++++++
         print('Calculate timeseries...')
-                      
-        ind,=np.where((ROI_N['imageType'][0,0][:,0] == 89) & \
+
+        if cpiv1:
+            ind,=np.where((ROI_N['imageType'][0,0][:,0] == 33857) & \
                       (dat['foc'][0,0]['focus'][0,:] >foc_crit))
+        else:
+            ind,=np.where((ROI_N['imageType'][0,0][:,0] == 89) & \
+                      (dat['foc'][0,0]['focus'][0,:] >foc_crit))
+                      
         
         if(len(ind)==0):
             continue
@@ -97,12 +102,25 @@ def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1):
                       (IMAGE1['Time1'][0,0][:,0]<(timeser['Time'][j]+dt2/2.)))
             # interpolation:
             try:
-                twin=f(np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.]))
-                indho,=np.where((HOUSE['Time'][0,0][0,:]  >=twin[0]) & \
-                                (HOUSE['Time'][0,0][0,:]< twin[1]))
-                timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
+                if not cpiv1:
+                    twin=f(np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.]))
+                    indho,=np.where((HOUSE['Time'][0,0][0,:]  >=twin[0]) & \
+                                    (HOUSE['Time'][0,0][0,:]< twin[1]))
+                    timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
+                else:
+                    indho,=np.where(\
+                        (HOUSE['Time'][0,0][0,:]/86400.-\
+                         np.floor(HOUSE['Time'][0,0][0,:]/86400.)+\
+                             np.floor(IMAGE1['Time1'][0,0][0,:]) \
+                             >=(timeser['Time'][j]-dt2/2.)) & \
+                        (HOUSE['Time'][0,0][0,:]/86400.-\
+                         np.floor(HOUSE['Time'][0,0][0,:]/86400.)+\
+                             np.floor(IMAGE1['Time1'][0,0][0,:]) \
+                             < (timeser['Time'][j]+dt2/2.)))
+                    timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
             except:
                 timeser['deadtimes'][j]=0.0
+
             timeser['nimages'][j]=len(indim)
             
             

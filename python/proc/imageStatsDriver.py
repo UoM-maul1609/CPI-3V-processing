@@ -72,7 +72,9 @@ def imageStatsDriver(path1,filename1,find_particle_edges,cpiv1,num_cores):
                 #log[j] = open('/tmp/' + filename1[i].replace('.roi','.out'),'wb')
                 #log[j].flush()
                 # run command
-                runs=sys.executable + ' ' + os.path.abspath(__file__) + ' ' + path1 + ' ' + \
+                runs=sys.executable + ' ' + \
+                    os.path.abspath(__file__).replace(' ','\ ').replace('(','\(').replace(')','\)') + \
+                        ' ' + path1 + ' ' + \
                     filename1[i] + ' ' + str(find_particle_edges) + ' ' +str(cpiv1) + ' ' + str(i)  
                 submission[j]=runs
                 print(runs)
@@ -225,7 +227,7 @@ def mult_job(path1, filename1, find_particle_edges,cpiv1,position,lock):
     # Particle properties +++++++++++++++++++++++++++++++++++++++++++++++++
     #print("{0}{1}".format('calculating particle properties...',filename1))
     #sys.stdout.flush()
-    dat=imageStats(ROI_N,BG,find_particle_edges,position,filename1,lock)
+    dat=imageStats(ROI_N,BG,cpiv1,find_particle_edges,position,filename1,lock)
     #print('done')
     #sys.stdout.flush()
     #----------------------------------------------------------------------

@@ -36,7 +36,7 @@ ys=zeros((ld,NB-1),dtype='float')
 focus=zeros((NB-1,1),dtype='float')
 intensity=zeros(ld,dtype='float')
 
-def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
+def imageStats(ROI_N,BG,cpiv1,b_flag,position,desc,globalLock):
 
     import sys
     """
@@ -65,7 +65,10 @@ def imageStats(ROI_N,BG,b_flag,position,desc,globalLock):
     
     global NB, ld
     pix=2.3
-    ind,=np.where(ROI_N['imageType'][0,0][:,0] == 89)
+    if cpiv1:
+        ind,=np.where(ROI_N['imageType'][0,0][:,0] == 33857)
+    else:
+        ind,=np.where(ROI_N['imageType'][0,0][:,0] == 89)
     l1=len(ROI_N['IMAGE'][0,0][0,:])
     
     # define data structured array:

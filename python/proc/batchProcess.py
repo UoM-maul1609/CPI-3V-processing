@@ -12,14 +12,15 @@ process_image_stats=True
 export_images=True
 output_timeseries=True
 num_cores=50
-cpiv1 = True
+cpiv1 = False
 
-path1='/models/mccikpc2/CPI-analysis/C081/3VCPI/'
+path1='/tmp/cpiv1.0/'
             # path to raw data
 filename1=['20180213065852.roi','20180213092819.roi','20180213055057.roi','20180213060933.roi']
             # list of filenames to process
 
 filename1=['20180213025037.roi']        
+filename1=['11291442.roi','12011408.roi','12011606.roi','12011642.roi','12011735.roi']        
         
 outputfile='timeseries.mat'
 

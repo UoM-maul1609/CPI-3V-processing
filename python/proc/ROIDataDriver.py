@@ -169,7 +169,7 @@ def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
    Header=convertDataToHeaderSA(ushort)
    (I,images)=convertDataToImageSA(bytes1,ushort,order,images)
    (R,rois)=convertDataToROISA(bytes1,ushort,order,rois)
-   (H)=convertDataToHouseSA(bytes1,ushort,order,house)
+   (H)=convertDataToHouseSA(bytes1,ushort,order,house,cpiv1)
    print('done')
    #--------------------------------------------------------------------------
       
@@ -178,7 +178,7 @@ def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
    #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
    # extract the images, times, etc ++++++++++++++++++++++++++++++++++++++++++
    print('Post-processing data, stage 2...')
-   (ROI_N,HOUSE,IMAGE1)=postProcess(bytes1,rois,R,H,I,Header)
+   (ROI_N,HOUSE,IMAGE1)=postProcess(bytes1,rois,R,H,I,Header,cpiv1)
    print('done')
    #--------------------------------------------------------------------------
     
@@ -191,7 +191,7 @@ def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
    #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
    #Backgrounds +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
    print('Getting backgrounds...')
-   FULL_BG1=fullBackgrounds(ROI_N) # append here
+   FULL_BG1=fullBackgrounds(ROI_N,cpiv1) # append here
    if len(FULL_BG1['Time']):
        temp_name=tempfile.mktemp()
        sio.savemat(temp_name,{'FULL_BG':FULL_BG1})
