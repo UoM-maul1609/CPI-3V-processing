@@ -38,7 +38,7 @@ import tensorflow as tf
 loadData=True
 defineModel=1
 runFit=True
-outputs='/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_50_sae_mnist'
+outputs='/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_300_sae_mnist'
 
 init = VarianceScaling(scale=1. / 3., mode='fan_in',
                            distribution='uniform')
@@ -102,7 +102,7 @@ if loadData:
 
 if runFit:
     # train the model
-    autoencoder.fit(x_train, x_train, epochs=50, batch_size=256, \
+    autoencoder.fit(x_train, x_train, epochs=300, batch_size=256, \
                     validation_data=(x_test,x_test),verbose=1)
 
 

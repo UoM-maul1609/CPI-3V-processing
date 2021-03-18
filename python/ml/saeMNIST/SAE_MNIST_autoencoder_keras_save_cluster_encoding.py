@@ -22,7 +22,7 @@ from SAE_MNIST_autoencoder_keras_with_clustering import ClusteringLayer
 
 
 loadData=True
-inputs='/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_50_sae_mnist_final'
+inputs='/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_300_sae_mnist_final'
 
 
 

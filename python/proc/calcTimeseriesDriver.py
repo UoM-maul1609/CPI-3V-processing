@@ -10,7 +10,7 @@ import numpy as np
 import os
 from scipy.interpolate import interp1d
 
-def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile):
+def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1):
     
     # note, numpy.histogramdd might be better
     save_files=True

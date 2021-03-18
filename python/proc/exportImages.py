@@ -15,7 +15,7 @@ from datetime import timedelta
 from tqdm import tqdm
 import gc
 
-def exportImages(pathname,filenames,foc_crit,size_thresh,MAP):
+def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
 
     prefix='_pytgt'
     interxy=0.01

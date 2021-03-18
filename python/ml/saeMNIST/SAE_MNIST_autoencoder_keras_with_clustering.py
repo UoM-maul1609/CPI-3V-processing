@@ -119,7 +119,7 @@ if __name__ == "__main__":
     n_clusters=10
     batch_size=256
     loadData=True
-    inputs='/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_50_sae_mnist'
+    inputs='/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_300_sae_mnist'
     #inputs='/tmp/model_epochs_50_dense64'
 
 

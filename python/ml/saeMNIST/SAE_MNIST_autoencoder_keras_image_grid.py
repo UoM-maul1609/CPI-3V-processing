@@ -7,7 +7,7 @@ from keras.datasets import mnist
 
 loadData=True
 
-inputs=['/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_50_sae_mnist']
+inputs=['/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_300_sae_mnist']
     
 if loadData:
     """

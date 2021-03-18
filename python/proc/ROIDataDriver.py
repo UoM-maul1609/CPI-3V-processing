@@ -14,7 +14,7 @@ import tempfile
 from multiprocessing import Pool
 
 
-def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
+def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist,cpiv1):
    t_min=1e9
    t_max=0.
    FULL_BG={'Time':np.array([]),'IMAGE':np.array([]) }
@@ -33,7 +33,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
        
        result=p.apply_async(mult_job,\
                 (path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,\
-                 process_sweep1_if_exist))
+                 process_sweep1_if_exist,cpiv1))
        (FULL_BG,t_min,t_max)=result.get()
        del FULL_BG
        dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),
@@ -61,7 +61,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
        p=Pool(processes=1)
        p.apply_async(mult_job2,\
-                (path1,filename[i],FULL_BG,save_files))
+                (path1,filename[i],FULL_BG,save_files,cpiv1))
 #       mult_job2(path1,filename[i],FULL_BG,save_files)
         # Garbage collection:
        gc.collect()
@@ -81,7 +81,7 @@ def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist):
 
 
 def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
-             process_sweep1_if_exist):   
+             process_sweep1_if_exist,cpiv1):   
 
    if (os.path.isfile("{0}{1}".format(path1 ,filename1.replace('.roi','.mat'))) 
       and not(process_sweep1_if_exist)):
@@ -138,7 +138,10 @@ def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
    #find the positions of the start of block marks ++++++++++++++++++++++++++
    #484B
    print('Finding house keeping...')
-   house,=np.where(ushort==int('0x484B',0))
+   if cpiv1:
+      house,=np.where(ushort==int('0xa1d7',0))
+   else:
+      house,=np.where(ushort==int('0x484B',0))
    print('done')
       
    # A3D5
@@ -231,7 +234,7 @@ def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
    return (FULL_BG,t_min,t_max)
     
    
-def mult_job2(path1,filename1,FULL_BG,save_files):
+def mult_job2(path1,filename1,FULL_BG,save_files,cpiv1):
     # load from file
     print('Loading from file...')
     #https://stackoverflow.com/questions/7008608/scipy-io-loadmat-nested-structures-i-e-dictionaries      

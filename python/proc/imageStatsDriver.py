@@ -30,7 +30,7 @@ from math import ceil
 from time import sleep
 from tqdm import tqdm
 
-def imageStatsDriver(path1,filename1,find_particle_edges,num_cores):
+def imageStatsDriver(path1,filename1,find_particle_edges,cpiv1,num_cores):
     import subprocess
     import sys
     import os
@@ -73,7 +73,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores):
                 #log[j].flush()
                 # run command
                 runs=sys.executable + ' ' + os.path.abspath(__file__) + ' ' + path1 + ' ' + \
-                    filename1[i] + ' ' + str(find_particle_edges) + ' ' + str(i)  
+                    filename1[i] + ' ' + str(find_particle_edges) + ' ' +str(cpiv1) + ' ' + str(i)  
                 submission[j]=runs
                 print(runs)
                 # submit the job
@@ -183,7 +183,7 @@ def imageStatsDriver(path1,filename1,find_particle_edges,num_cores):
 
 
 #def mult_job(list1): # path1, filename1, find_particle_edges
-def mult_job(path1, filename1, find_particle_edges,position,lock):
+def mult_job(path1, filename1, find_particle_edges,cpiv1,position,lock):
     """
     from os import environ
     environ["OMP_NUM_THREADS"]="1"
@@ -282,7 +282,8 @@ if __name__ == "__main__":
     print(path1 + ' ' + filename1)
     dummy1=NullContextManager()
     find_particle_edges = eval(sys.argv[3])
-    position = int(sys.argv[4])
+    cpiv1 = eval(sys.argv[4])
+    position = int(sys.argv[5])
     lock = NullContextManager()
-    mult_job(path1, filename1, find_particle_edges,position,lock)
+    mult_job(path1, filename1, find_particle_edges,cpiv1,position,lock)
 
