@@ -17,11 +17,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from keras.models import Model, model_from_json, Sequential
 import h5py
-from DCNN_autoencoder_keras_with_clustering import ClusteringLayer 
+from SAE_prop_autoencoder_keras_with_clustering import ClusteringLayer 
 
 
 loadData=True
-inputs='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_3a_freeze_final'
+inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae_prop05_10_final'
 
 
 
@@ -30,13 +30,24 @@ if loadData:
     print('Loading data...')
     # load images
     h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
-    images=h5f['images'][:]
-    images=np.expand_dims(images,axis=3)
     lens  =h5f['lens'][:]
     times =h5f['times'][:]
+    diams=h5f['diams'][:] 
+    rounds=h5f['rounds'][:] 
+    l2ws=h5f['l2ws'][:]
+   
     h5f.close()
     
-    images=images.astype('float16')/255.
+    i1 = len(lens)
+    input1=[None]*i1
+    for i in range(i1):
+        input1[i]= np.append(diams[i],[rounds[i],l2ws[i]])
+    
+    input1=np.expand_dims(input1,axis=2)
+    input1=input1.reshape((input1.shape[0],-1))
+    #input1=input1.astype('float16')
+
+    
 
     print('data is loaded')
 
@@ -62,7 +73,7 @@ print('model is loaded')
 
 
 # calculate the 'finger prints' for cluster analysis
-finger_print=loaded_model.predict(images)
+finger_print=loaded_model.predict(input1)
     
 h5f = h5py.File(inputs + '_encoding.h5', 'w')
 h5f.create_dataset('encoding', data=finger_print)

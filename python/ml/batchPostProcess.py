@@ -17,7 +17,7 @@ path1=['/models/mccikpc2/CPI-analysis/C072/3VCPI/' , \
        '/models/mccikpc2/CPI-analysis/C097/3VCPI/' , \
        '/models/mccikpc2/CPI-analysis/C098/3VCPI/' ]
 
-outputfile='/models/mccikpc2/CPI-analysis/postProcessed_t2_l50.h5'
+outputfile='/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5'
 
 
 
@@ -27,7 +27,7 @@ def runJobs():
     if post_process:
         from postProcessingDriver import postProcessingDriver
         # extract and post process all images and save to file
-        postProcessingDriver(path1,outputfile,foc_crit,min_len,2)
+        postProcessingDriver(path1,outputfile,foc_crit,min_len,5)
     #--------------------------------------------------------------------------
     
 

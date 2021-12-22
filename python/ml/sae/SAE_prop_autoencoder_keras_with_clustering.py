@@ -7,9 +7,6 @@ Created on Sun Mar 22 10:31:14 2020
 """
 
 """
-    Keras deep convolutional auto-encoder with clustering layer
-    https://www.dlology.com/blog/how-to-do-unsupervised-clustering-with-keras/
-
     Paper of relevance: https://arxiv.org/pdf/1511.06335.pdf
     
     1. load image data
@@ -118,11 +115,11 @@ class ClusteringLayer(Layer):
 
 if __name__ == "__main__":
 
-    n_clusters=9
-    batch_size=1024
+    n_clusters=5
+    batch_size=2048
     loadData=True
     auxLoad=True
-    inputs='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_3a'
+    inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae_prop05_10'
     #inputs='/tmp/model_epochs_50_dense64'
 
 
@@ -137,13 +134,21 @@ if __name__ == "__main__":
         print('Loading data...')
         # load images
         h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
-        images=h5f['images'][:]
-        images=np.expand_dims(images,axis=3)
         lens  =h5f['lens'][:]
         times =h5f['times'][:]
+        diams=h5f['diams'][:] 
+        rounds=h5f['rounds'][:] 
+        l2ws=h5f['l2ws'][:]
+       
         h5f.close()
-    
+        
         i1 = len(lens)
+        input1=[None]*i1
+        for i in range(i1):
+            input1[i]= np.append(diams[i],[rounds[i],l2ws[i]])
+
+        input1=np.expand_dims(input1,axis=2)
+    
         i11=60000
         i22=10000
         if ~auxLoad:
@@ -155,11 +160,15 @@ if __name__ == "__main__":
             training_idx=h5faux['training_idx'][:]
             test_idx =h5faux['test_idx'][:]
             h5faux.close()
-    
-        x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
-        del images
-        x_train=x_train.astype('float32')/255.
-        x_test=x_test.astype('float32')/255.
+                
+        x_train, x_test = input1[training_idx,:,:], input1[test_idx,:,:]
+        del input1
+        
+        x_train=x_train.reshape((x_train.shape[0],-1))
+        x_test=x_test.reshape((x_test.shape[0],-1))
+        
+        #x_train=x_train.astype('float32')/255.
+        #x_test=x_test.astype('float32')/255.
 
         lens_train,lens_test = lens[training_idx], lens[test_idx]
         times_train,times_test = times[training_idx], times[test_idx]
@@ -194,7 +203,7 @@ if __name__ == "__main__":
         2. Load encoder model+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     """
     # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-    layer_name='dense_1'
+    layer_name='encoder_3'
     encoder_model = Model(inputs=loaded_model.input, \
                              outputs=loaded_model.get_layer(layer_name).output)
 
@@ -255,7 +264,7 @@ if __name__ == "__main__":
     loss = 0
     index = 0
     maxiter = 8000
-    update_interval = 60 #140 #140
+    update_interval =30 #140
     index_array = np.arange(x_train.shape[0])
     tol = 0.001 # tolerance threshold to stop training
 
@@ -273,10 +282,10 @@ if __name__ == "__main__":
             delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
             y_pred_last = np.copy(y_pred)
             if ite > 0:
-                print('delta_label=', delta_label,' and tol=',tol, ',  ', ite)
+                print('delta_label=', delta_label,' and tol=',tol,' and ite=',ite)
     
             if ite > 0 and delta_label < tol:
-                print('delta_label ', delta_label, '< tol ', tol, ',  ', ite)
+                print('delta_label ', delta_label, '< tol ', tol)
                 print('Reached tolerance threshold. Stopping training.')
                 break
         idx = index_array[index * batch_size: min((index+1) * batch_size, x_train.shape[0])]

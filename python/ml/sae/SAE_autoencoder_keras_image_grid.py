@@ -5,9 +5,11 @@ import h5py
 from keras.models import model_from_json
 
 loadData=True
-
+auxLoad=False
 inputs=['/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae01', \
         '/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae02']
+    
+inputs=['/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae05_50']
     
 if loadData:
     """
@@ -15,7 +17,7 @@ if loadData:
     """
     print('Loading image data...')
     # load images
-    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_l50.h5','r')
+    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
     images=h5f['images'][:]
     images=np.expand_dims(images,axis=3)
     lens  =h5f['lens'][:]
@@ -23,12 +25,18 @@ if loadData:
     h5f.close()
     
     i1 = len(lens)
-    i11=60000
+    i11=100000
     i22=10000
-    indices = np.random.permutation(i1)
-    #split1=int(0.8*i1)
-    training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
-    
+    if ~auxLoad:
+        indices = np.random.permutation(i1)
+        #split1=int(0.8*i1)
+        training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
+    else:
+        h5faux = h5py.File(inputs + '_aux.h5','r')
+        training_idx=h5faux['training_idx'][:]
+        test_idx =h5faux['test_idx'][:]
+        h5faux.close()
+        
     x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
     del images
     

@@ -221,6 +221,10 @@ if __name__ == "__main__":
     """
     clustering_layer = ClusteringLayer(n_clusters, name='clustering')(encoder_model.output)
     new_model = Model(inputs=encoder_model.input, outputs=clustering_layer)
+    numLay=len(new_model.layers)
+    for i in range(numLay-1):
+        new_model.layers[i].trainable=False
+        
     new_model.summary()
     #new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
     new_model.compile(optimizer='adam', loss='kld')
@@ -285,9 +289,9 @@ if __name__ == "__main__":
 
 
     model_json = new_model.to_json()
-    with open(inputs + '_final.json','w') as json_file:
+    with open(inputs + '_freeze_final.json','w') as json_file:
         json_file.write(model_json)
-    new_model.save_weights(inputs + '_final.h5')
+    new_model.save_weights(inputs + '_freeze_final.h5')
 
     """
         ----------------------------------------------------------------------------------

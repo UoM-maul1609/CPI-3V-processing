@@ -5,13 +5,15 @@ import h5py
 from keras.models import model_from_json
 
 loadData=True
+auxLoad=False
 
 inputs=['/models/mccikpc2/CPI-analysis/cnn/model_epochs_5_dense16' , \
     '/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense16' , \
     '/models/mccikpc2/CPI-analysis/cnn/model_epochs_5_dense64' , \
     '/models/mccikpc2/CPI-analysis/cnn/model_epochs_15_dense64', \
     '/models/mccikpc2/CPI-analysis/cnn/model_epochs_50_dense64',\
-    '/models/mccikpc2/CPI-analysis/cnn/model_t2_epochs_50_dense64']
+    '/models/mccikpc2/CPI-analysis/cnn/model_t2_epochs_50_dense64',\
+    '/models/mccikpc2/CPI-analysis/cnn/model_t4_epochs_50_dense64']
     
     
 dataFiles=['/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
@@ -19,7 +21,11 @@ dataFiles=['/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
         '/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
         '/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
         '/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
-        '/models/mccikpc2/CPI-analysis/postProcessed_t2_l50.h5']
+        '/models/mccikpc2/CPI-analysis/postProcessed_t2_l50.h5',\
+        '/models/mccikpc2/CPI-analysis/postProcessed_t4_l50.h5']
+
+inputs=['/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_100_dense64_3a']
+dataFiles=['/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5']
 
 size_bins=[0,100,200,300,400,500,600,700,800,900,1000]
 ims=[None]*100
@@ -44,14 +50,21 @@ for mo in inputs:
             times =h5f['times'][:]
             h5f.close()
             
-            if ii == 0:
-                i1 = len(lens)
-                i11=60000
-                i22=10000
-                indices = np.random.permutation(i1)
+            i1 = len(lens)
                 
             #split1=int(0.8*i1)
-            training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
+            if ii == 0:
+                if ~auxLoad:
+                    i11=100000
+                    i22=10000
+                    indices = np.random.permutation(i1)
+                    #split1=int(0.8*i1)
+                    training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
+                else:
+                    h5faux = h5py.File(inputs + '_aux.h5','r')
+                    training_idx=h5faux['training_idx'][:]
+                    test_idx =h5faux['test_idx'][:]
+                    h5faux.close()
     
             x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
             del images

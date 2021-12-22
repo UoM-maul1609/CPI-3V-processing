@@ -11,7 +11,7 @@ from mpl_toolkits.axes_grid1 import ImageGrid
 from keras.datasets import mnist
 
 
-mo='/tmp/model_epochs_300_sae_mnist'
+mo='/models/mccikpc2/CPI-analysis/sae_mnist/model_epochs_300_sae_mnist'
 loadData=True
 
 if loadData:
@@ -83,7 +83,7 @@ decoder.summary()
 
 
 
-y_pred=y_pred
+y_pred=y_pred1
 
 
 
@@ -93,13 +93,15 @@ import matplotlib.pyplot as plt
 # sns.set(font_scale=3)
 confusion_matrix = sklearn.metrics.confusion_matrix(y_test, y_pred)
 
+plt.ion()
 plt.figure(figsize=(16, 14))
 sns.heatmap(confusion_matrix, annot=True, fmt="d", annot_kws={"size": 20});
 plt.title("Confusion matrix", fontsize=30)
 plt.ylabel('True label', fontsize=25)
 plt.xlabel('Clustering label', fontsize=25)
 plt.show()
-
+plt.savefig(mo + '_confusion.png')
+plt.close()
 
 
 ims=[np.zeros((1,28,28,1))]*10
@@ -115,8 +117,8 @@ ind7,=np.where(y_pred==7)
 ind8,=np.where(y_pred==8)
 ind9,=np.where(y_pred==9)
 plt.ion()
-fig = plt.figure(figsize=(10.,1.)) 
-for i in range(100): 
+fig = plt.figure(figsize=(10.,1.1)) 
+for i in range(10): 
     grid = ImageGrid(fig,111,nrows_ncols=(1,10),axes_pad=0.1) 
     try:
         ims[0]=decoder.predict(np.expand_dims(encoded[ind0[i],:],axis=0)) 
@@ -175,6 +177,8 @@ for i in range(100):
         ax.imshow(im.reshape((28,28))) 
         ax.set_title(ti)
     plt.show() 
+    plt.savefig(mo + '_eval' + str(i).zfill(2) + '.png')
+
     plt.pause(0.5) 
     plt.clf() 
 plt.close() 

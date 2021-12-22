@@ -21,7 +21,7 @@ from SAE_autoencoder_keras_with_clustering import ClusteringLayer
 
 
 loadData=True
-inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae02_final'
+inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae05_50_final'
 
 
 
@@ -29,7 +29,7 @@ inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae02_final'
 if loadData:
     print('Loading data...')
     # load images
-    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_l50.h5','r')
+    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
     images=h5f['images'][:]
     images=np.expand_dims(images,axis=3)
     lens  =h5f['lens'][:]
