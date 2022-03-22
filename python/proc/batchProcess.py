@@ -1,4 +1,4 @@
-foc_crit=12 # critical value of focus for an image
+foc_crit=5 # critical value of focus for an image
 min_len=100 # minimum length for particle images
 dt=10  # resolution on time-step for concentrations (take with a pince of salt)
 ds=10  # resolution for size bins
@@ -39,6 +39,11 @@ environ["NUMEXPR_NUM_THREADS"]="1"
 import gc
 from multiprocessing import set_start_method, Pool, Manager
 from multiprocessing.pool import ThreadPool
+"""
+process_roi_driver=False
+process_image_stats=False
+export_images=False
+"""
 
 process_roi_driver=False
 process_image_stats=False
@@ -100,8 +105,9 @@ def runJobs():
         elif classifier==True:
             # calculate number concentrations one day at a time?
             from calcTimeseriesClassifierDriver import calcTimeseriesClassifierDriver 
-            calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1,classifierFile,minClassSize)
         
+            calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,\
+                cpiv1,classifierFile,minClassSize)
     #--------------------------------------------------------------------------
 
     
