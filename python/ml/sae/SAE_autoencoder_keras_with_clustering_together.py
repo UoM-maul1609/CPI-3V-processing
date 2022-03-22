@@ -30,6 +30,7 @@ from keras.optimizers import adam
 from keras import callbacks
 from keras.initializers import VarianceScaling
 import keras.backend as K
+from keras.utils import plot_model
 
 
 
@@ -115,11 +116,11 @@ class ClusteringLayer(Layer):
 
 if __name__ == "__main__":
 
-    n_clusters=5
-    batch_size=2048
+    n_clusters=10
+    batch_size=256
     loadData=True
     auxLoad=True
-    inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae05_50'
+    inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae04_50'
     #inputs='/tmp/model_epochs_50_dense64'
 
 
@@ -133,7 +134,7 @@ if __name__ == "__main__":
     if loadData:
         print('Loading data...')
         # load images
-        h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
+        h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t4_l50.h5','r')
         images=h5f['images'][:]
         images=np.expand_dims(images,axis=3)
         lens  =h5f['lens'][:]
@@ -221,10 +222,13 @@ if __name__ == "__main__":
         3. Add clustering layer+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     """
     clustering_layer = ClusteringLayer(n_clusters, name='clustering')(encoder_model.output)
-    new_model = Model(inputs=encoder_model.input, outputs=clustering_layer)
+    new_model = Model(inputs=encoder_model.input, outputs=[clustering_layer,loaded_model.output])
     new_model.summary()
-    new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
-    #new_model.compile(optimizer='adam', loss='kld')
+    
+    plot_model(new_model, to_file='model.png', show_shapes=True)
+    
+    #new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
+    new_model.compile(loss=['kld','mse'],loss_weights=[0.1,1],optimizer='adam')
 #     new_model.compile(optimizer='adam', loss='categorical_crossentropy')
     """
         ----------------------------------------------------------------------------------
@@ -256,7 +260,7 @@ if __name__ == "__main__":
     loss = 0
     index = 0
     maxiter = 8000
-    update_interval =30
+    update_interval =140 # 140
     index_array = np.arange(x_train.shape[0])
     tol = 0.001 # tolerance threshold to stop training
 
@@ -264,7 +268,7 @@ if __name__ == "__main__":
     for ite in range(int(maxiter)):
         print(".",end="") # print . without newline
         if ite % update_interval == 0:
-            q = new_model.predict(x_train, verbose=1)
+            q, _  = new_model.predict(x_train, verbose=1)
             p = target_distribution(q)  # update the auxiliary target distribution p
 
             # evaluate the clustering performance
@@ -281,14 +285,14 @@ if __name__ == "__main__":
                 print('Reached tolerance threshold. Stopping training.')
                 break
         idx = index_array[index * batch_size: min((index+1) * batch_size, x_train.shape[0])]
-        loss = new_model.train_on_batch(x=x_train[idx], y=p[idx])
+        loss = new_model.train_on_batch(x=x_train[idx], y=[p[idx], x_train[idx] ])
         index = index + 1 if (index + 1) * batch_size <= x_train.shape[0] else 0
 
 
     model_json = new_model.to_json()
-    with open(inputs + '_final.json','w') as json_file:
+    with open(inputs + '_dec_final.json','w') as json_file:
         json_file.write(model_json)
-    new_model.save_weights(inputs + '_final.h5')
+    new_model.save_weights(inputs + '_dec_final.h5')
 
     """
         ----------------------------------------------------------------------------------

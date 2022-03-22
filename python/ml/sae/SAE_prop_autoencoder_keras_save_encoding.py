@@ -20,7 +20,7 @@ import h5py
 
 
 loadData=True
-inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae05_50'
+inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae_prop05_10'
 
 
 
@@ -29,15 +29,22 @@ if loadData:
     print('Loading data...')
     # load images
     h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
-    images=h5f['images'][:]
-    images=np.expand_dims(images,axis=3)
     lens  =h5f['lens'][:]
     times =h5f['times'][:]
+    diams=h5f['diams'][:] 
+    rounds=h5f['rounds'][:] 
+    l2ws=h5f['l2ws'][:]
+   
     h5f.close()
     
-    images=images.astype('float16')/255.
-
-    images=images.reshape((images.shape[0],-1))
+    i1 = len(lens)
+    input1=[None]*i1
+    for i in range(i1):
+        input1[i]= np.append(diams[i],[rounds[i],l2ws[i]])
+    
+    input1=np.expand_dims(input1,axis=2)
+    input1=input1.reshape((input1.shape[0],-1))
+    #input1=input1.astype('float16')
 
     print('data is loaded')
 
@@ -81,7 +88,7 @@ for i in range(0,ei):
 # finger_print=np.zeros((len(images),64))
 # for i in range(len(images)):
 #     finger_print[i,:]=intermediate_layer_model.predict(images[i:i+1,:,:,0:1])
-finger_print=intermediate_layer_model.predict(images)
+finger_print=intermediate_layer_model.predict(input1)
     
 h5f = h5py.File(inputs + '_encoding.h5', 'w')
 h5f.create_dataset('encoding', data=finger_print)

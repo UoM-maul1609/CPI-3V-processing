@@ -119,7 +119,7 @@ if __name__ == "__main__":
     batch_size=2048
     loadData=True
     auxLoad=True
-    inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae05_50'
+    inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae_prop05_10'
     #inputs='/tmp/model_epochs_50_dense64'
 
 
@@ -134,13 +134,21 @@ if __name__ == "__main__":
         print('Loading data...')
         # load images
         h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
-        images=h5f['images'][:]
-        images=np.expand_dims(images,axis=3)
         lens  =h5f['lens'][:]
         times =h5f['times'][:]
+        diams=h5f['diams'][:] 
+        rounds=h5f['rounds'][:] 
+        l2ws=h5f['l2ws'][:]
+       
         h5f.close()
-    
+        
         i1 = len(lens)
+        input1=[None]*i1
+        for i in range(i1):
+            input1[i]= np.append(diams[i],[rounds[i],l2ws[i]])
+
+        input1=np.expand_dims(input1,axis=2)
+    
         i11=60000
         i22=10000
         if ~auxLoad:
@@ -153,14 +161,14 @@ if __name__ == "__main__":
             test_idx =h5faux['test_idx'][:]
             h5faux.close()
                 
-        x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
-        del images
+        x_train, x_test = input1[training_idx,:,:], input1[test_idx,:,:]
+        del input1
         
         x_train=x_train.reshape((x_train.shape[0],-1))
         x_test=x_test.reshape((x_test.shape[0],-1))
         
-        x_train=x_train.astype('float32')/255.
-        x_test=x_test.astype('float32')/255.
+        #x_train=x_train.astype('float32')/255.
+        #x_test=x_test.astype('float32')/255.
 
         lens_train,lens_test = lens[training_idx], lens[test_idx]
         times_train,times_test = times[training_idx], times[test_idx]
@@ -223,8 +231,8 @@ if __name__ == "__main__":
     clustering_layer = ClusteringLayer(n_clusters, name='clustering')(encoder_model.output)
     new_model = Model(inputs=encoder_model.input, outputs=clustering_layer)
     new_model.summary()
-    new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
-    #new_model.compile(optimizer='adam', loss='kld')
+    #new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
+    new_model.compile(optimizer='adam', loss='kld')
 #     new_model.compile(optimizer='adam', loss='categorical_crossentropy')
     """
         ----------------------------------------------------------------------------------
@@ -256,7 +264,7 @@ if __name__ == "__main__":
     loss = 0
     index = 0
     maxiter = 8000
-    update_interval =30
+    update_interval =30 #140
     index_array = np.arange(x_train.shape[0])
     tol = 0.001 # tolerance threshold to stop training
 

@@ -35,7 +35,7 @@ import tensorflow as tf
 loadData=True
 defineModel=1
 runFit=True
-outputs='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64'
+outputs='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_2'
 
 
 
@@ -44,35 +44,29 @@ if defineModel==1:
     inputs=Input(name='input', shape=(128,128,1))
 
     # Encoder Layers
-    x=Conv2D(32, (3, 3), activation='relu')(inputs)
-    x=MaxPooling2D((2, 2))(x) # could add some dropout after pooling layers
-                                          # might help with overfitting
-    x=Conv2D(64, (3, 3), activation='relu')(x)
-    x=MaxPooling2D((2, 2))(x)
-    x=Conv2D(64, (3, 3), activation='relu')(x)
-    x=MaxPooling2D((2, 2))(x)
-    x=Conv2D(64, (3, 3), activation='relu')(x)
+    x=Conv2D(32, 5, strides=2, activation='relu',padding='same')(inputs)
+    x=Conv2D(64, 5, strides=2, activation='relu',padding='same')(x)
+    x=Conv2D(128, 3, strides=2, activation='relu',padding='same')(x)
+    x=Conv2D(256, 3, strides=2, activation='relu',padding='same')(x)
 
 
 
     
     # Flatten encoding for visualization
     x=Flatten()(x)
-    x=Dense(64, activation='softmax')(x) # 64 habits?
+    x=Dense(64, activation='relu')(x) # 64 habits?
+    x=Dense(8*8*256,activation='relu')(x)
     #autoencoder.add(Dense(64, activation='relu')) # 64 habits? maybe try relu here
-    x=Reshape((8, 8, 1))(x)
+    x=Reshape((8, 8, 256))(x)
     
     
     # Decoder Layers
-    x=Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same')(x)
-    x=BatchNormalization()(x)
-    x=Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same')(x)
-    x=BatchNormalization()(x)
-    x=Conv2DTranspose(64, (3, 3), strides=2, activation='relu', padding='same')(x)
-    x=BatchNormalization()(x)
-    x=Conv2DTranspose(32, (3, 3), strides=2, activation='relu', padding='same')(x)
+    x=Conv2DTranspose(128, 3, strides=2, activation='relu', padding='same')(x)
+    x=Conv2DTranspose(64, 3, strides=2, activation='relu', padding='same')(x)
+    x=Conv2DTranspose(32, 5, strides=2, activation='relu', padding='same')(x)
+    #x=Conv2DTranspose(32, 5, strides=2, activation='relu', padding='same')(x)
 
-    x=Conv2D(1, (3, 3), activation='sigmoid', padding='same')(x)
+    x=Conv2DTranspose(1, 5, strides=2, padding='same')(x)
         
     autoencoder=Model(inputs=inputs, outputs=x, name='AE')
     autoencoder.summary()

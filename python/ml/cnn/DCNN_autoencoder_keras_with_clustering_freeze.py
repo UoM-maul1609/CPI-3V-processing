@@ -7,6 +7,9 @@ Created on Sun Mar 22 10:31:14 2020
 """
 
 """
+    Keras deep convolutional auto-encoder with clustering layer
+    https://www.dlology.com/blog/how-to-do-unsupervised-clustering-with-keras/
+
     Paper of relevance: https://arxiv.org/pdf/1511.06335.pdf
     
     1. load image data
@@ -115,11 +118,11 @@ class ClusteringLayer(Layer):
 
 if __name__ == "__main__":
 
-    n_clusters=5
-    batch_size=2048
+    n_clusters=9
+    batch_size=1024
     loadData=True
     auxLoad=True
-    inputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae05_50'
+    inputs='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_3a'
     #inputs='/tmp/model_epochs_50_dense64'
 
 
@@ -152,13 +155,9 @@ if __name__ == "__main__":
             training_idx=h5faux['training_idx'][:]
             test_idx =h5faux['test_idx'][:]
             h5faux.close()
-                
+    
         x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
         del images
-        
-        x_train=x_train.reshape((x_train.shape[0],-1))
-        x_test=x_test.reshape((x_test.shape[0],-1))
-        
         x_train=x_train.astype('float32')/255.
         x_test=x_test.astype('float32')/255.
 
@@ -195,7 +194,7 @@ if __name__ == "__main__":
         2. Load encoder model+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     """
     # see https://keras.io/getting-started/faq/#how-can-i-obtain-the-output-of-an-intermediate-layer
-    layer_name='encoder_3'
+    layer_name='dense_1'
     encoder_model = Model(inputs=loaded_model.input, \
                              outputs=loaded_model.get_layer(layer_name).output)
 
@@ -222,9 +221,13 @@ if __name__ == "__main__":
     """
     clustering_layer = ClusteringLayer(n_clusters, name='clustering')(encoder_model.output)
     new_model = Model(inputs=encoder_model.input, outputs=clustering_layer)
+    numLay=len(new_model.layers)
+    for i in range(numLay-1):
+        new_model.layers[i].trainable=False
+        
     new_model.summary()
-    new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
-    #new_model.compile(optimizer='adam', loss='kld')
+    #new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
+    new_model.compile(optimizer='adam', loss='kld')
 #     new_model.compile(optimizer='adam', loss='categorical_crossentropy')
     """
         ----------------------------------------------------------------------------------
@@ -256,7 +259,7 @@ if __name__ == "__main__":
     loss = 0
     index = 0
     maxiter = 8000
-    update_interval =30
+    update_interval = 60 #140 #140
     index_array = np.arange(x_train.shape[0])
     tol = 0.001 # tolerance threshold to stop training
 
@@ -274,10 +277,10 @@ if __name__ == "__main__":
             delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
             y_pred_last = np.copy(y_pred)
             if ite > 0:
-                print('delta_label=', delta_label,' and tol=',tol,' and ite=',ite)
+                print('delta_label=', delta_label,' and tol=',tol, ',  ', ite)
     
             if ite > 0 and delta_label < tol:
-                print('delta_label ', delta_label, '< tol ', tol)
+                print('delta_label ', delta_label, '< tol ', tol, ',  ', ite)
                 print('Reached tolerance threshold. Stopping training.')
                 break
         idx = index_array[index * batch_size: min((index+1) * batch_size, x_train.shape[0])]
@@ -286,9 +289,9 @@ if __name__ == "__main__":
 
 
     model_json = new_model.to_json()
-    with open(inputs + '_final.json','w') as json_file:
+    with open(inputs + '_freeze_final.json','w') as json_file:
         json_file.write(model_json)
-    new_model.save_weights(inputs + '_final.h5')
+    new_model.save_weights(inputs + '_freeze_final.h5')
 
     """
         ----------------------------------------------------------------------------------

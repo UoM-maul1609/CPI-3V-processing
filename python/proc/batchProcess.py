@@ -5,7 +5,7 @@ ds=10  # resolution for size bins
 vel=100    # air speed - assumed fixed, used in calcTimeseriesDriver
 find_particle_edges=True # output the boundary of the particles
 command_line_path=True # use the commandline to define the path of files
-process_sweep1_if_exist=True # if the *.roi files have been extracted once,
+process_sweep1_if_exist=False # if the *.roi files have been extracted once,
                               #still do if True
 process_roi_driver=True
 process_image_stats=True
@@ -24,6 +24,11 @@ filename1=['11291442.roi','12011408.roi','12011606.roi','12011642.roi','12011735
         
 outputfile='timeseries.mat'
 
+# unsupervised classification scheme
+classifierFile='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_3a_freeze_final'
+classifier=False
+minClassSize=50.
+
 
 from os import environ
 environ["OMP_NUM_THREADS"]="1"
@@ -34,6 +39,10 @@ environ["NUMEXPR_NUM_THREADS"]="1"
 import gc
 from multiprocessing import set_start_method, Pool, Manager
 from multiprocessing.pool import ThreadPool
+
+process_roi_driver=False
+process_image_stats=False
+export_images=False
 
 def runJobs():
     global path1
@@ -84,9 +93,15 @@ def runJobs():
 
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     if output_timeseries:
-        # calculate number concentrations one day at a time?
-        from calcTimeseriesDriver import calcTimeseriesDriver
-        calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1)
+        if classifier==False:
+            # calculate number concentrations one day at a time?
+            from calcTimeseriesDriver import calcTimeseriesDriver
+            calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1)
+        elif classifier==True:
+            # calculate number concentrations one day at a time?
+            from calcTimeseriesClassifierDriver import calcTimeseriesClassifierDriver 
+            calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1,classifierFile,minClassSize)
+        
     #--------------------------------------------------------------------------
 
     

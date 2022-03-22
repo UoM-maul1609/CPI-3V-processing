@@ -118,10 +118,11 @@ class ClusteringLayer(Layer):
 
 if __name__ == "__main__":
 
-    n_clusters=10
-    batch_size=256
+    n_clusters=9
+    batch_size=1024
     loadData=True
-    inputs='/models/mccikpc2/CPI-analysis/cnn/model_t2_epochs_50_dense64'
+    auxLoad=True
+    inputs='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_3a'
     #inputs='/tmp/model_epochs_50_dense64'
 
 
@@ -135,7 +136,7 @@ if __name__ == "__main__":
     if loadData:
         print('Loading data...')
         # load images
-        h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t2_l50.h5','r')
+        h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
         images=h5f['images'][:]
         images=np.expand_dims(images,axis=3)
         lens  =h5f['lens'][:]
@@ -145,9 +146,15 @@ if __name__ == "__main__":
         i1 = len(lens)
         i11=60000
         i22=10000
-        indices = np.random.permutation(i1)
-        #split1=int(0.8*i1)
-        training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
+        if ~auxLoad:
+            indices = np.random.permutation(i1)
+            #split1=int(0.8*i1)
+            training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
+        else:
+            h5faux = h5py.File(inputs + '_aux.h5','r')
+            training_idx=h5faux['training_idx'][:]
+            test_idx =h5faux['test_idx'][:]
+            h5faux.close()
     
         x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
         del images
@@ -215,7 +222,7 @@ if __name__ == "__main__":
     clustering_layer = ClusteringLayer(n_clusters, name='clustering')(encoder_model.output)
     new_model = Model(inputs=encoder_model.input, outputs=clustering_layer)
     new_model.summary()
-#     new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
+    #new_model.compile(optimizer=SGD(0.01,0.9), loss='kld')
     new_model.compile(optimizer='adam', loss='kld')
 #     new_model.compile(optimizer='adam', loss='categorical_crossentropy')
     """
@@ -248,7 +255,7 @@ if __name__ == "__main__":
     loss = 0
     index = 0
     maxiter = 8000
-    update_interval = 140
+    update_interval = 60 #140 #140
     index_array = np.arange(x_train.shape[0])
     tol = 0.001 # tolerance threshold to stop training
 
@@ -266,10 +273,10 @@ if __name__ == "__main__":
             delta_label = np.sum(y_pred != y_pred_last).astype(np.float32) / y_pred.shape[0]
             y_pred_last = np.copy(y_pred)
             if ite > 0:
-                print('delta_label=', delta_label,' and tol=',tol)
+                print('delta_label=', delta_label,' and tol=',tol, ',  ', ite)
     
             if ite > 0 and delta_label < tol:
-                print('delta_label ', delta_label, '< tol ', tol)
+                print('delta_label ', delta_label, '< tol ', tol, ',  ', ite)
                 print('Reached tolerance threshold. Stopping training.')
                 break
         idx = index_array[index * batch_size: min((index+1) * batch_size, x_train.shape[0])]

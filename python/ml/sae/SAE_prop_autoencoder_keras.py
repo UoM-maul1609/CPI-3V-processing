@@ -37,17 +37,16 @@ import tensorflow as tf
 loadData=True
 defineModel=1
 runFit=True
-outputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae05_50'
+outputs='/models/mccikpc2/CPI-analysis/sae/model_epochs_50_sae_prop05a_10'
 
 init = VarianceScaling(scale=1. / 3., mode='fan_in',
                            distribution='uniform')
-#init='glorot_uniform'
-
+init='glorot_uniform' # try different initialiser
 if defineModel==1:
     # symmetric fully connected autoencoder - see https://arxiv.org/pdf/1511.06335.pdf
     # Encoder Layers
 #     
-    inputs=Input(name='input', shape=(128**2,))
+    inputs=Input(name='input', shape=(14,))
 
     x=Dense(500, activation='relu', kernel_initializer=init, \
         name='encoder_0')(inputs)
@@ -61,7 +60,7 @@ if defineModel==1:
 
 
     # features are extracted from here
-    x=Dense(50, activation='relu', kernel_initializer=init, \
+    x=Dense(10, activation='relu', kernel_initializer=init, \
         name='encoder_3')(x)
 
     x=Dense(2000, activation='relu', kernel_initializer=init, \
@@ -73,7 +72,7 @@ if defineModel==1:
     x=Dense(500, activation='relu', kernel_initializer=init, \
         name='decoder_1')(x)
 
-    x=Dense(128**2, activation='relu', kernel_initializer=init, \
+    x=Dense(14, activation='relu', kernel_initializer=init, \
         name='decoder_0')(x)
         
     autoencoder=Model(inputs=inputs, outputs=x, name='AE')
@@ -82,7 +81,7 @@ if defineModel==1:
     autoencoder.summary()
 
     autoencoder.compile(optimizer='adam', loss='mse',metrics=['mse'])
-    #autoencoder.compile(optimizer=SGD(1,0.9), loss='mse',metrics=['mse'])
+    #autoencoder.compile(optimizer=SGD(1.,0.9), loss='mse',metrics=['mse'])
 
 
 
@@ -91,26 +90,36 @@ if loadData:
     print('Loading data...')
     # load images
     h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
-    images=h5f['images'][:]
-    images=np.expand_dims(images,axis=3)
+    #images=h5f['images'][:]
+    #images=np.expand_dims(images,axis=3)
     lens  =h5f['lens'][:]
     times =h5f['times'][:]
+    diams=h5f['diams'][:] 
+    radii=h5f['radii'][:]
+    rounds=h5f['rounds'][:] 
+    l2ws=h5f['l2ws'][:]
+   
     h5f.close()
     
     i1 = len(lens)
+    input1=[None]*i1
+    for i in range(i1):
+        input1[i]= np.append(diams[i],[rounds[i],l2ws[i]]) #,np.std(diams[i]),np.min(diams[i])])
+
+    input1=np.expand_dims(input1,axis=2)
     i11=60000
     i22=10000
     indices = np.random.permutation(i1)
     #split1=int(0.8*i1)
     training_idx, test_idx = indices[:i11], indices[i11:i11+i22]
     
-    x_train, x_test = images[training_idx,:,:], images[test_idx,:,:]
-    del images
+    x_train, x_test = input1[training_idx,:,:], input1[test_idx,:,:]
+    del input1
     x_train=x_train.reshape((x_train.shape[0],-1))
     x_test=x_test.reshape((x_test.shape[0],-1))
 
-    x_train=x_train.astype('float32')/255.
-    x_test=x_test.astype('float32')/255.
+    #x_train=x_train.astype('float32')/255.
+    #x_test=x_test.astype('float32')/255.
 
     lens_train,lens_test = lens[training_idx], lens[test_idx]
     times_train,times_test = times[training_idx], times[test_idx]
