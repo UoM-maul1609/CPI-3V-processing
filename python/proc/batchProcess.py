@@ -5,16 +5,16 @@ ds=10  # resolution for size bins
 vel=100    # air speed - assumed fixed, used in calcTimeseriesDriver
 find_particle_edges=True # output the boundary of the particles
 command_line_path=True # use the commandline to define the path of files
-process_sweep1_if_exist=False # if the *.roi files have been extracted once,
+process_sweep1_if_exist=True # if the *.roi files have been extracted once,
                               #still do if True
 process_roi_driver=True
 process_image_stats=True
 export_images=True
 output_timeseries=True
-num_cores=50
-cpiv1 = False
+num_cores=32
+cpiv1 = True
 
-path1='/tmp/cpiv1.0/'
+path1='/tmp/CPICalibration/Cal140302/'
             # path to raw data
 filename1=['20180213065852.roi','20180213092819.roi','20180213055057.roi','20180213060933.roi']
             # list of filenames to process
@@ -45,9 +45,10 @@ process_image_stats=False
 export_images=False
 """
 
+output_timeseries=True
 process_roi_driver=False
-process_image_stats=False
-export_images=False
+process_image_stats=True
+export_images=True
 
 def runJobs():
     global path1

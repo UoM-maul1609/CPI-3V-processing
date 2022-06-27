@@ -47,16 +47,19 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     orderROIs=R['order']
     timeROIs=np.zeros((len(R),1))
     imageTypeROIs=np.zeros((len(R),1))
+    imageMeans=np.zeros((len(R),1))
     
     for i in range(len(orderImage)-1):
         ind,=np.where((orderImage[i]<orderROIs) & (orderImage[i+1]>orderROIs)) 
         timeROIs[ind]=Time[i]
         imageTypeROIs[ind]=IMAGE1['imageType'][i]
+        imageMeans[ind]=I['ucImgMean'][i]
     
     i=len(orderImage)-1
     ind,=np.where(orderImage[i]<orderROIs )
     timeROIs[ind]=Time[i]
     imageTypeROIs[ind]=IMAGE1['imageType'][i]
+    imageMeans[ind]=I['ucImgMean'][i]
     #--------------------------------------------------------------------------
     
 
@@ -87,6 +90,7 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     ROI_N['StartY']=R['StartY']
     ROI_N['EndX']=R['EndX']
     ROI_N['EndY']=R['EndY']
+    ROI_N['IM']=imageMeans
     #--------------------------------------------------------------------------
 
     # sort
@@ -97,6 +101,7 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     ROI_N['StartY'][:]=ROI_N['StartY'][indroi]
     ROI_N['EndX'][:]=ROI_N['EndX'][indroi]
     ROI_N['EndY'][:]=ROI_N['EndY'][indroi]
+    ROI_N['IM'][:]=ROI_N['IM'][indroi]
     #ROI_N['IMAGE'][:]=ROI_N['IMAGE'][indroi]
     # sort
     indhouse=np.argsort(HOUSE['Time'])

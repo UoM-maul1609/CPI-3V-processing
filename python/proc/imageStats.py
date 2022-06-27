@@ -48,8 +48,9 @@ def imageStats(ROI_N,BG,cpiv1,b_flag,position,desc,globalLock):
     environ["NUMEXPR_NUM_THREADS"]="1"
     """
     from cv2 import setNumThreads
-    from cv2 import threshold
-    from cv2 import THRESH_BINARY
+    from cv2 import threshold, adaptiveThreshold, cvtColor, COLOR_BGR2GRAY, floodFill
+    from cv2 import THRESH_BINARY, THRESH_BINARY_INV, ADAPTIVE_THRESH_GAUSSIAN_C, \
+        ADAPTIVE_THRESH_MEAN_C, THRESH_OTSU
     from skimage import measure
     from matplotlib import path
     from time import sleep
@@ -140,11 +141,34 @@ def imageStats(ROI_N,BG,cpiv1,b_flag,position,desc,globalLock):
             
             if len(inda_r)<=20:
                 continue
+                
             
             arr=(arr-np.min(arr))
-        
+
+            
+            if cpiv1:
+               # this bit of code removes the centre
+               h,w=np.shape(arr)
+               start1=ROI_N['StartX'][0,0][0,i]
+               end1=start1+h
+               # fill in the first line
+               if((end1 >= 512) and (start1 < 511) ):
+                  arr[512-start1-1:512-start1,:]=arr[512-start1-2:512-start1-1,:]
+
+               if((end1 >= 514) and (start1<=512) ):
+                  arr[512-start1:512-start1+1,:]=arr[512-start1+1:512-start1+2,:]
+
+            
+            for f in range(100):
+                arr[1:-1,1:-1]=signal.medfilt2d(arr.astype('B'),(3,3))[1:-1,1:-1]
+
             (r,c)=np.shape(arr)
             if r <= 15 and c <=15:
+                continue
+            
+            # 10 pixels need to be darker by 15 units or more for a particle
+            indt,=np.where((arr.flatten()-0.5*np.max(arr).astype('H'))>30)
+            if len(indt)<=10:
                 continue
     
             #https://docs.opencv.org/2.4/doc/tutorials/imgproc/threshold/threshold.html        
@@ -154,15 +178,44 @@ def imageStats(ROI_N,BG,cpiv1,b_flag,position,desc,globalLock):
             mag=np.sqrt(dx**2+dy**2)
             (th,level)=cv2.threshold(mag.astype('H'),50,255,cv2.THRESH_BINARY)
             """
-            (th,level)=threshold(np.float32(arr.astype('H')),38,255,THRESH_BINARY)
+            # could try np.float32(max(arr(:)).astype('H'))*0.4
+            #(th,level)=threshold(np.float32(arr.astype('H')),38,255,THRESH_BINARY)
             
+            # think I am going to try 80th percentile *0.7. wihich is probably indicative of 
+            # background image value
+#             (th,level)=threshold(np.float32(arr.astype('H')), \
+#                np.max([np.float32(np.max(arr[:]).astype('H'))*0.5,38]),255,THRESH_BINARY)
+#            (th,level)=threshold(np.float32(arr.astype('H')), \
+#                np.percentile(arr,18).astype('H'),255,THRESH_BINARY)
+            (th,level)=threshold(arr.astype('uint8'), \
+                0,255,THRESH_BINARY+THRESH_OTSU)
+            """
+            (th,level)=threshold(np.float32(arr.astype('H')), \
+               (0.5*np.percentile(arr,95)).astype('H'),255,THRESH_BINARY)
+            im_floodfill=level.copy()
+            h,w=level.shape[:2]
+            mask=np.zeros((h+2,w+2),np.uint8)
+            floodFill(im_floodfill, mask, (42,51), 255)
+            im_floodfill_inv = cv2.bitwise_not(im_floodfill.astype('B'))
+            BW2=im_floodfill_inv
+            contours=measure.find_contours((BW2-np.min(BW2))/255,0.5)
+            
+            """
+
+            #print(np.shape(np.stack([arr,arr,arr],axis=2)))           
+            #(level)=adaptiveThreshold(arr.astype('uint8'), \
+            #     255,ADAPTIVE_THRESH_MEAN_C,THRESH_BINARY,71,50)
     
             BW2=level.astype('B')
             BW2[1:-1,1:-1]=signal.medfilt2d(level.astype('B'),(3,3))[1:-1,1:-1]
+            for f in range(10):
+                BW2[1:-1,1:-1]=signal.medfilt2d(BW2.astype('B'),(3,3))[1:-1,1:-1]
     
             # fairly insensitive to the 0.4 choice
             #continue
-            contours=measure.find_contours((BW2-np.min(BW2))/255,0.4)
+            contours=measure.find_contours((BW2-np.min(BW2))/255,0.4) # this prob doesn't make much difference - as it's a BW image
+            
+            
             #temp=(BW2-np.min(BW2))
             #contours, hierarchy = cv2.findContours(temp, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE) 
             if not(len(contours)):
@@ -228,7 +281,7 @@ def imageStats(ROI_N,BG,cpiv1,b_flag,position,desc,globalLock):
             foc=calculate_focus(boundaries,arr,b_flag) # maybe focus less than 12?
             dat['foc'][i]=foc
             
-            del boundaries, contour, contours, IN, BW2, level, th, mask, stats
+            del boundaries, contour, contours, IN, BW2, level, mask, stats
             gc.collect()
             del gc.garbage[:]
         

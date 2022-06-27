@@ -124,6 +124,10 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
                 h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
                 h.axis('off')
                 
+                # this plots the boundary on the image
+                h.plot(dat[0,0]['foc'][0,i]['boundaries'][:,1], \
+                    dat[0,0]['foc'][0,i]['boundaries'][:,0],'r') 
+                
                 time1=ROI_N['Time'][0,0][i,0]
                 pytime=datetime.fromordinal(int(time1)) + \
                      timedelta(days=time1%1) - \
