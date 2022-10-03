@@ -64,7 +64,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
                 
             # check to see if criteria are met
             if ((dat['len'][0,0][i,0]<size_thresh) or 
-                (np.asscalar(dat['foc'][0,0]['focus'][0,i]) <=foc_crit) ):
+                (dat['foc'][0,0]['focus'][0,i].item() <=foc_crit) ):
                 i=i+1
                 continue
             
@@ -125,8 +125,8 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
                 h.axis('off')
                 
                 # this plots the boundary on the image
-                h.plot(dat[0,0]['foc'][0,i]['boundaries'][:,1], \
-                    dat[0,0]['foc'][0,i]['boundaries'][:,0],'r') 
+                #h.plot(dat[0,0]['foc'][0,i]['boundaries'][:,1], \
+                #    dat[0,0]['foc'][0,i]['boundaries'][:,0],'r') 
                 
                 time1=ROI_N['Time'][0,0][i,0]
                 pytime=datetime.fromordinal(int(time1)) + \

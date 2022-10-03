@@ -53,7 +53,7 @@ class SelectFromCollection:
         self.ind = np.append(self.ind,np.nonzero(path.contains_points(self.xys))[0])
         self.fc[:, -1] = self.alpha_other
         self.fc[self.ind, -1] = 1
-        self.collection.set_facecolors(self.fc)
+        #self.collection.set_facecolors(self.fc)
         self.canvas.draw_idle()
 
     def disconnect(self):
@@ -71,10 +71,15 @@ if __name__ == '__main__':
 
     data = np.random.rand(100, 2)
 
-    subplot_kw = dict(xlim=(0, 1), ylim=(0, 1), autoscale_on=False)
+    subplot_kw = dict(xlim=(0, 1024), ylim=(0, 1024), autoscale_on=False)
+    #subplot_kw = dict(xlim=(0, 1), ylim=(0, 1), autoscale_on=False)
     fig, ax = plt.subplots(subplot_kw=subplot_kw)
 
     pts = ax.scatter(data[:, 0], data[:, 1], s=80)
+    pts = ax.scatter(x, y, 5,len1)
+    pts.set_clim((0,150))
+    
+    ax.set_position((0.1,0.45,0.5,0.5))  
     selector = SelectFromCollection(ax, pts)
 
     def accept(event):
