@@ -1,5 +1,5 @@
 foc_crit=5 # critical value of focus for an image
-min_len=100 # minimum length for particle images
+min_len=1 # minimum length for particle images
 dt=10  # resolution on time-step for concentrations (take with a pince of salt)
 ds=10  # resolution for size bins
 vel=100    # air speed - assumed fixed, used in calcTimeseriesDriver
@@ -11,8 +11,8 @@ process_roi_driver=True
 process_image_stats=True
 export_images=True
 output_timeseries=True
-num_cores=32
-cpiv1 = True
+num_cores=4
+cpiv1 = False
 
 path1='/tmp/CPICalibration/Cal140302/'
             # path to raw data
@@ -46,7 +46,7 @@ export_images=False
 """
 
 output_timeseries=True
-process_roi_driver=False
+process_roi_driver=True
 process_image_stats=True
 export_images=True
 

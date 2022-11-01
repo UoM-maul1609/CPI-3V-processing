@@ -176,7 +176,8 @@ def convertDataToImageSA(bytes1,ushort,order,images):
     
     
     ver=I['usVersion']
-    ind,=np.where((ver==40) | (ver==25) )
+    day=I['day']
+    ind,=np.where(((ver==40) | (ver==25)) & (day>0)  )
     I=I[ind]
     images=images[ind]
 
