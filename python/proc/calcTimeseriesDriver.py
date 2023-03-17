@@ -92,7 +92,7 @@ def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1):
         #=======time loop======================================================
         f=interp1d(IMAGE1['Time1'][0,0][:,0], \
                    IMAGE1['Time'][0,0][0,:].T, \
-                   kind='nearest',fill_value='extrapolate')
+                   kind='linear',fill_value='extrapolate')
         
         for j in range(ilow,ihigh+1):
             # dead-time: find imge data that are in the time-window
@@ -103,7 +103,11 @@ def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1):
             # interpolation:
             try:
                 if not cpiv1:
+                    twin1=np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.])
                     twin=f(np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.]))
+                    tclock = (np.max(IMAGE1['Time'][0,0][0,:])-np.min(IMAGE1['Time'][0,0][0,:]))/ \
+                        (np.max(IMAGE1['Time1'][0,0][:,0])-np.min(IMAGE1['Time1'][0,0][:,0]))* \
+                            (twin1 - np.min(IMAGE1['Time1'][0,0][:,0])) + np.min(IMAGE1['Time'][0,0][0,:])
                     indho,=np.where((HOUSE['Time'][0,0][0,:]  >=twin[0]) & \
                                     (HOUSE['Time'][0,0][0,:]< twin[1]))
                     timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])

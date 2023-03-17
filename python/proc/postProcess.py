@@ -5,9 +5,9 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     # use dictionaries for storing info
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # image times in hk format
-    IMAGE1={'Time' : I['ArrivalTime1']*16**8.+
-            I['ArrivalTime1']*16**4+
-            I['ulTime']}
+    IMAGE1={'Time' : I['ArrivalTime2']*16**8+
+            (I['ulTime']/65536.)*16**4+
+            I['ArrivalTime1']}
     
     # time in MATLAB format, using msecond, etc
     (Time,Timestr)=calc_datetime(Header['usYear'],
@@ -32,7 +32,8 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
                H['TimeISW']*16**4 +
                H['TimeLSW'] }
         Rdgs=H['Readings1']
-        HOUSE['deadtime']=Rdgs[:,66]*0.000341333
+        #HOUSE['deadtime']=Rdgs[:,66]*0.000341333
+        HOUSE['deadtime']=Rdgs[:,57] /256
     else:
         # housekeeping packet times
         HOUSE={'Time' : H['Time'] }
@@ -65,7 +66,8 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
 
     #https://stackoverflow.com/questions/2397754/how-can-i-create-an-array-list-of-dictionaries-in-python
     ROI_N={'Time' : timeROIs,  'IMAGE' : [dict() for x in range(len(rois))] }    
-    indroi=np.argsort(ROI_N['Time'][:,0])
+    #indroi=np.argsort(ROI_N['Time'][:,0])
+    indroi=np.argsort(R['order'])
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # associate variables with each ROI++++++++++++++++++++++++++++++++++++++++
     for i in range(len(rois)):
@@ -94,7 +96,8 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     #--------------------------------------------------------------------------
 
     # sort
-    indroi=np.argsort(ROI_N['Time'][:,0])
+    #indroi=np.argsort(ROI_N['Time'][:,0])
+    indroi=np.argsort(R['order'])
     ROI_N['Time'][:,:]=ROI_N['Time'][indroi,:]
     ROI_N['imageType'][:]=ROI_N['imageType'][indroi]
     ROI_N['StartX'][:]=ROI_N['StartX'][indroi]
@@ -104,12 +107,14 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     ROI_N['IM'][:]=ROI_N['IM'][indroi]
     #ROI_N['IMAGE'][:]=ROI_N['IMAGE'][indroi]
     # sort
-    indhouse=np.argsort(HOUSE['Time'])
+    #indhouse=np.argsort(HOUSE['Time'])
+    indhouse=np.argsort(H['order'])
     HOUSE['Time'][:]=HOUSE['Time'][indhouse]
     HOUSE['deadtime'][:]=HOUSE['deadtime'][indhouse]
     
     # sort
-    indimage=np.argsort(IMAGE1['Time'][:])
+    #indimage=np.argsort(IMAGE1['Time'][:])
+    indimage=np.argsort(I['order'])
     IMAGE1['Time'][:]=IMAGE1['Time'][indimage]
     IMAGE1['Time1'][:,:]=IMAGE1['Time1'][indimage,:]
     IMAGE1['Timestr'][:]=IMAGE1['Timestr'][indimage]

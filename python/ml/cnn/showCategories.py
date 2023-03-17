@@ -15,12 +15,12 @@ readIn=True
 
 if readIn:
     print('Loading images....')
-    h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
+    h5f = h5py.File('/models/mccikpc2/DCMEX/CPI-analysis/postProcessed_t5_l50.h5','r')
     images=h5f['images'][:]
     h5f.close()
     print('Images loaded')
     
-h5f = h5py.File('/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_3a_freeze_final_encoding.h5','r') 
+h5f = h5py.File('/models/mccikpc2/DCMEX/CPI-analysis/cnn/model_t5_epochs_100_dense64_3a_freeze_final_encoding.h5','r') 
 cod2=h5f['encoding'][:]
 h5f.close()
 
@@ -29,7 +29,7 @@ y_pred = cod2.argmax(1)
 
 
 print (np.unique(y_pred))
-cat1=8;
+cat1=7;
 ind,=np.where(y_pred==cat1) 
 np.random.shuffle(ind)
 

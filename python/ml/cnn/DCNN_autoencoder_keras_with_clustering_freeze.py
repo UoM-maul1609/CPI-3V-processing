@@ -122,7 +122,7 @@ if __name__ == "__main__":
     batch_size=1024
     loadData=True
     auxLoad=True
-    inputs='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_3a'
+    inputs='/models/mccikpc2/DCMEX/CPI-analysis/cnn/model_t5_epochs_100_dense64_3a'
     #inputs='/tmp/model_epochs_50_dense64'
 
 
@@ -136,7 +136,7 @@ if __name__ == "__main__":
     if loadData:
         print('Loading data...')
         # load images
-        h5f = h5py.File('/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5','r')
+        h5f = h5py.File('/models/mccikpc2/DCMEX/CPI-analysis/postProcessed_t5_l50.h5','r')
         images=h5f['images'][:]
         images=np.expand_dims(images,axis=3)
         lens  =h5f['lens'][:]

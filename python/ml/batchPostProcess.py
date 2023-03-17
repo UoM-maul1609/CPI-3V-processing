@@ -1,23 +1,28 @@
-foc_crit=12 # critical value of focus for an image
+foc_crit=5 # critical value of focus for an image
 min_len=50 # minimum length for particle images
 
 post_process=True
 
-path1=['/models/mccikpc2/CPI-analysis/C072/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C073/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C074/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C075/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C076/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C077/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C078/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C079/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C080/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C081/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C082/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C097/3VCPI/' , \
-       '/models/mccikpc2/CPI-analysis/C098/3VCPI/' ]
+path1=['/models/mccikpc2/DCMEX/C296/' , \
+       '/models/mccikpc2/DCMEX/C299/' , \
+       '/models/mccikpc2/DCMEX/C300/' , \
+       '/models/mccikpc2/DCMEX/C301/' , \
+       '/models/mccikpc2/DCMEX/C302/' , \
+       '/models/mccikpc2/DCMEX/C303/' , \
+       '/models/mccikpc2/DCMEX/C304/' , \
+       '/models/mccikpc2/DCMEX/C305/' , \
+       '/models/mccikpc2/DCMEX/C306/' , \
+       '/models/mccikpc2/DCMEX/C307/' , \
+       '/models/mccikpc2/DCMEX/C308/' , \
+       '/models/mccikpc2/DCMEX/C309/' , \
+       '/models/mccikpc2/DCMEX/C310/' , \
+       '/models/mccikpc2/DCMEX/C311/' , \
+       '/models/mccikpc2/DCMEX/C312/' , \
+       '/models/mccikpc2/DCMEX/C313/' , \
+       '/models/mccikpc2/DCMEX/C314/' , \
+       '/models/mccikpc2/DCMEX/C315/' ]
 
-outputfile='/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5'
+outputfile='/models/mccikpc2/DCMEX/CPI-analysis/postProcessed_t5_l50.h5'
 
 
 

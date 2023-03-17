@@ -177,7 +177,7 @@ def calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile
         #=======time loop======================================================
         f=interp1d(IMAGE1['Time1'][0,0][:,0], \
                    IMAGE1['Time'][0,0][0,:].T, \
-                   kind='nearest',fill_value='extrapolate')
+                   kind='linear',fill_value='extrapolate')
         
         for j in range(ilow,ihigh+1):
             # dead-time: find imge data that are in the time-window
@@ -188,7 +188,11 @@ def calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile
             # interpolation:
             try:
                 if not cpiv1:
+                    twin1=np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.])
                     twin=f(np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.]))
+                    tclock = (np.max(IMAGE1['Time'][0,0][0,:])-np.min(IMAGE1['Time'][0,0][0,:]))/ \
+                        (np.max(IMAGE1['Time1'][0,0][:,0])-np.min(IMAGE1['Time1'][0,0][:,0]))* \
+                            (twin1 - np.min(IMAGE1['Time1'][0,0][:,0])) + np.min(IMAGE1['Time'][0,0][0,:])
                     indho,=np.where((HOUSE['Time'][0,0][0,:]  >=twin[0]) & \
                                     (HOUSE['Time'][0,0][0,:]< twin[1]))
                     timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
@@ -225,7 +229,7 @@ def calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile
             # size and roundness bins==========================================
             for k in range(0,na):
                 ind3=ind[ind2]
-                ind4,=np.where(class2[ind3] == k-1  )
+                ind4,=np.where(class2[ind3] == k-1  ) #  so the first one k, is equal to -1 , which is unclassified. The rest are in order
                     
                 
                 (N,X)=np.histogram(dat['len'][0,0][ind3[ind4],0],size1a)

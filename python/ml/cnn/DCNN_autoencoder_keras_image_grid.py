@@ -24,8 +24,8 @@ dataFiles=['/models/mccikpc2/CPI-analysis/postProcessed_l50.h5', \
         '/models/mccikpc2/CPI-analysis/postProcessed_t2_l50.h5',\
         '/models/mccikpc2/CPI-analysis/postProcessed_t4_l50.h5']
 
-inputs=['/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_100_dense64_3a']
-dataFiles=['/models/mccikpc2/CPI-analysis/postProcessed_t5_l50.h5']
+inputs=['/models/mccikpc2/DCMEX/CPI-analysis/cnn/model_t5_epochs_100_dense64_3a']
+dataFiles=['/models/mccikpc2/DCMEX/CPI-analysis/postProcessed_t5_l50.h5']
 
 size_bins=[0,100,200,300,400,500,600,700,800,900,1000]
 ims=[None]*100

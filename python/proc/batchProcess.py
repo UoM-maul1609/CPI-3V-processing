@@ -11,7 +11,7 @@ process_roi_driver=True
 process_image_stats=True
 export_images=True
 output_timeseries=True
-num_cores=4
+num_cores=24
 cpiv1 = False
 
 path1='/tmp/CPICalibration/Cal140302/'
@@ -25,8 +25,8 @@ filename1=['11291442.roi','12011408.roi','12011606.roi','12011642.roi','12011735
 outputfile='timeseries.mat'
 
 # unsupervised classification scheme
-classifierFile='/models/mccikpc2/CPI-analysis/cnn/model_t5_epochs_50_dense64_3a_freeze_final'
-classifier=False
+classifierFile='/models/mccikpc2/DCMEX/CPI-analysis/cnn/model_t5_epochs_100_dense64_3a_freeze_final'
+classifier=True
 minClassSize=50.
 
 
@@ -46,9 +46,9 @@ export_images=False
 """
 
 output_timeseries=True
-process_roi_driver=True
-process_image_stats=True
-export_images=True
+process_roi_driver=False
+process_image_stats=False
+export_images=False
 
 def runJobs():
     global path1
@@ -107,7 +107,7 @@ def runJobs():
             # calculate number concentrations one day at a time?
             from calcTimeseriesClassifierDriver import calcTimeseriesClassifierDriver 
         
-            calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,\
+            calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,'timeseries_class.mat',\
                 cpiv1,classifierFile,minClassSize)
     #--------------------------------------------------------------------------
 
