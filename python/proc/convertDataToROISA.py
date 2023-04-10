@@ -71,7 +71,7 @@ def convertDataToROISA(bytes1,ushort,order,rois):
     
     
     ver=R['usVersion']
-    ind,=np.where(ver==25)
+    ind,=np.where((ver==25) & (R['EndX']>0)& (R['EndY']>0))
     R=R[ind]
     rois=rois[ind]
 

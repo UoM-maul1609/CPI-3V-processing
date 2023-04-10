@@ -167,7 +167,8 @@ def imageStats(ROI_N,BG,cpiv1,b_flag,position,desc,globalLock):
                 continue
             
             # 10 pixels need to be darker by 15 units or more for a particle
-            indt,=np.where((arr.flatten()-0.5*np.max(arr).astype('H'))>30)
+            #indt,=np.where((arr.flatten()-0.5*np.max(arr).astype('H'))>30)
+            indt,=np.where((arr.flatten()-np.percentile(arr,90).astype('H'))<-30)
             if len(indt)<=10:
                 continue
     

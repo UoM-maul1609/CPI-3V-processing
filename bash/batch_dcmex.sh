@@ -34,7 +34,7 @@ python3 batchProcess.py /models/mccikpc2/DCMEX/C312/ &> /models/mccikpc2/DCMEX/C
 echo 'C313'
 python3 batchProcess.py /models/mccikpc2/DCMEX/C313/ &> /models/mccikpc2/DCMEX/C313/python.out 
 echo 'C314'
-python3 batchProcess.py /models/mccikpc2/DCMEX/C314/ &> /models/mccikpc2/DCMEX/C314/python.out 
+python3 batchProcess.py /models/mccikpc2/DCMEX/C314/ &> /models/mccikpc2/DCMEX/C314/python.out #
 echo 'C315'
 python3 batchProcess.py /models/mccikpc2/DCMEX/C315/ &> /models/mccikpc2/DCMEX/C315/python.out 
 
