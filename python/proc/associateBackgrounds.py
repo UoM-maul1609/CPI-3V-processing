@@ -12,8 +12,11 @@ def associateBackgrounds(ROI_N,FULL_BG):
     #--------------------------------------------------------------------------
     BG = [dict() for x in range(len(ROI_N['IMAGE'][0,0][0,:]))]
     #https://docs.scipy.org/doc/scipy/reference/generated/scipy.interpolate.interp1d.html
-    f=interp1d(FULL_BG['Time'][0,0][:,0],ind,kind='nearest',fill_value='extrapolate')
-
+    if len(ind)>1:
+        f=interp1d(FULL_BG['Time'][0,0][:,0],ind,kind='nearest',fill_value='extrapolate')
+    else:
+        pass
+        
     for i in range(len(ROI_N['IMAGE'][0,0][0,:])):
        if len(ind)==1:
            jj=int(ind)
