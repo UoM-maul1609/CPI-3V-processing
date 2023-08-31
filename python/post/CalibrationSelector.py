@@ -71,12 +71,12 @@ if __name__ == '__main__':
 
     data = np.random.rand(100, 2)
 
-    subplot_kw = dict(xlim=(0, 1024), ylim=(0, 1024), autoscale_on=False)
+    subplot_kw = dict(xlim=(-100, 1024), ylim=(-100, 1024), autoscale_on=False)
     #subplot_kw = dict(xlim=(0, 1), ylim=(0, 1), autoscale_on=False)
     fig, ax = plt.subplots(subplot_kw=subplot_kw)
 
     pts = ax.scatter(data[:, 0], data[:, 1], s=80)
-    pts = ax.scatter(x, y, 5,len1)
+    #pts = ax.scatter(x, y, 5,len1)
     pts.set_clim((0,150))
     
     ax.set_position((0.1,0.45,0.5,0.5))  
