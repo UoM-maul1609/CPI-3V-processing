@@ -7,7 +7,11 @@ def datetime2matlabdn(dt1):
    frac_seconds = (dt1-dt.datetime(dt1.year,dt1.month,dt1.day,0,0,0)).seconds / (24.0 * 60.0 * 60.0)
    frac_microseconds = dt1.microsecond / (24.0 * 60.0 * 60.0 * 1000000.0)
    return mdn.toordinal() + frac_seconds + frac_microseconds
-   
+
+"""
+    This code reads the position data for CPI calibrations
+    It returns posx, posy, and times
+"""   
 def ReadFile(fileName='/Users/mccikpc2/Downloads/CPI_cals/Matlab/Analogue_All_2.txt'):
     f = open(fileName,'r')
     str1=f.readlines()

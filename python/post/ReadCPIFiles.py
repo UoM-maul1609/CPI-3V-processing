@@ -5,6 +5,10 @@ import glob
 import scipy.io as sio
 from tqdm import tqdm
 
+"""
+    This code loads times, focus, x, y, images and boundaries for each image
+    sorts them by time, and returns them
+"""
 def ReadMAT(pathName='/Users/mccikpc2/Downloads/CPI_cals/ICEAnalogues/CPI'):
     times = np.zeros(0)
     foc   = np.zeros(0)
@@ -15,9 +19,11 @@ def ReadMAT(pathName='/Users/mccikpc2/Downloads/CPI_cals/ICEAnalogues/CPI'):
     boundaries   = np.zeros(0) # 
     
     files=glob.glob(pathName + '/*.mat')
-    files = [ x1 for x1 in files if not("timeseries.mat") in x1 ]
+    # remove timeseries.mat
+    files = [ x1 for x1 in files if not("timeseries.mat") in x1 ] 
+    # remove full_backgrounds.mat
     files = [ x1 for x1 in files if not("full_backgrounds.mat") in x1 ]
-    #print (files)
+
     for i in tqdm(range(len(files))):
         #print(files[i])
         dataload=sio.loadmat(files[i],
