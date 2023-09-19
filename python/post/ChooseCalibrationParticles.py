@@ -54,10 +54,10 @@ def line_select_callback(eclick, erelease):
 
 def toggle_selector(event):
     print(' Key pressed.')
-    if event.char in ['Q', 'q'] and toggle_selector.RS.active:
+    if event.key in ['Q', 'q'] and toggle_selector.RS.active:
         print(' RectangleSelector deactivated.')
         toggle_selector.RS.set_active(False)
-    if event.char in ['A', 'a'] and not toggle_selector.RS.active:
+    if event.key in ['A', 'a'] and not toggle_selector.RS.active:
         print(' RectangleSelector activated.')
         toggle_selector.RS.set_active(True)
 
@@ -178,7 +178,7 @@ class PageThree(tk.Frame):
 
         canvas = FigureCanvasTkAgg(f, self)
         toggle_selector.RS = RectangleSelector(a, line_select_callback,
-                                       drawtype='box',useblit=True,
+                                       useblit=True,
                                        button=[1, 3],  # don't use middle button
                                        minspanx=5, minspany=5,
                                        spancoords='pixels',
@@ -191,7 +191,7 @@ class PageThree(tk.Frame):
         toolbar.update()
         canvas._tkcanvas.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-#         canvas.mpl_connect('key_press_event', toggle_selector)
+        canvas.mpl_connect('key_press_event', toggle_selector)
         
 
         w = tk.Scale(self, from_=0, to=200, orient=tk.HORIZONTAL, \
@@ -200,5 +200,5 @@ class PageThree(tk.Frame):
         
 
 app = SeaofBTCapp()
-app.bind( "<Key>",toggle_selector)
+#app.bind( "<Key>",toggle_selector)
 app.mainloop()
