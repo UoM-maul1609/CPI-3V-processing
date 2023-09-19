@@ -10,6 +10,7 @@ import numpy as np
 import os
 from scipy.interpolate import interp1d
 from os import path
+import hdf5storage
 
 import keras
 from keras.models import Model, model_from_json, Sequential
@@ -262,9 +263,11 @@ def calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile
         if os.path.exists("{0}{1}".format(path1, outputfile)):
             # save / append
             #print("should be appending")
-            sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
-        else:
-            sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
+            #sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
+            hdf5storage.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser}, format=7.3, matlab_compatible=True)
+	else:
+            #sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
+            hdf5storage.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser}, format=7.3, matlab_compatible=True)
             
         print('done')
 
