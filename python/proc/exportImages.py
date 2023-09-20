@@ -66,6 +66,13 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
             lensPP.extend(lensPP1)
             indsPP.extend(indsPP1)  
             tot2 += tot1  
+
+        dataload=sio.loadmat("{0}{1}".format(pathname, filenames[i].replace('.roi','.mat')),
+                           variable_names=['ROI_N','dat'])
+        ROI_N=dataload['ROI_N']
+        dat=dataload['dat']
+        del dataload
+        assert tot1 == len(dat['foc'][0,0]['focus'][0,:])
         
         imagePP=np.stack(imagePP,axis=0)
         indsPP=np.stack(indsPP,axis=0)
@@ -125,46 +132,41 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         if classifier==True:
             indc=np.mgrid[0:len(dat['foc'][0,0]['focus'][0,:])]+ilast
             ilast=ilast+len(indc)
-            print(str(len(class1)) + " " + str(len(indsPP)))
             class2=class1[indc]
-            ind=indsPP[indc]
         """
             ------------------------------------------------------------------------------
         """
 
         if classifier==True:
-            ind1,=np.where(np.isin(class2,np.append(np.append(dropBins,iceBins),unclass)))
-            if(len(ind1)==0):
-                continue
+            ind,=np.where(np.isin(class2,np.append(np.append(dropBins,iceBins),unclass)))
         elif classifier==False:
             ind,=np.where( (dat['len'][0,0][:,0]>size_thresh) & \
                           (dat['foc'][0,0]['focus'][0,:] >foc_crit) )
-            if(len(ind)==0):
-                continue
         
+        if(len(ind)==0):
+            continue
         
         
         # loop over all the images in this file
         i=0
         #https://stackoverflow.com/questions/45808140/using-tqdm-progress-bar-in-a-while-loop
         tqdm.monitor_interval = 0
-        pbar=tqdm(total=len(dat['foc'][0,0]['focus'][0,ind]))
-        while(i<len(dat['foc'][0,0]['focus'][0,ind])):
+        pbar=tqdm(total=len(dat['foc'][0,0]['focus'][0]))
+        while(i<len(dat['foc'][0,0]['focus'][0])):
             if np.mod(i+1,10)==0:
                 pbar.update(10)
-            elif i+1==len(dat['foc'][0,0]['focus'][0,ind]):
-                pbar.n=len(dat['foc'][0,0]['focus'][0,ind])
+            elif i+1==len(dat['foc'][0,0]['focus'][0]):
+                pbar.n=len(dat['foc'][0,0]['focus'][0])
                 pbar.update()
                 
             # check to see if criteria are met
-            ii=ind[i]
-            if ((dat['len'][0,0][ii,0]<size_thresh) or 
-                (dat['foc'][0,0]['focus'][0,ii].item() <=foc_crit) ):
+            if ((dat['len'][0,0][i,0]<size_thresh) or 
+                (dat['foc'][0,0]['focus'][0,i].item() <=foc_crit) ):
                 i=i+1
                 continue
             
             if(j==1):
-                time1=ROI_N['Time'][0,0][ii,0]
+                time1=ROI_N['Time'][0,0][i,0]
                 dayold=np.floor(time1)
                 pytime=datetime.fromordinal(int(time1)) + \
                      timedelta(days=time1%1) - \
@@ -178,7 +180,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 
 
 
-            time1=ROI_N['Time'][0,0][ii,0]
+            time1=ROI_N['Time'][0,0][i,0]
             pytime=datetime.fromordinal(int(time1)) + \
                  timedelta(days=time1%1) - \
                  timedelta(days = 366)
@@ -188,7 +190,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
 
 
 
-            (r,c)=np.shape(ROI_N['IMAGE'][0,0][0,ii]['IM'][0,0])
+            (r,c)=np.shape(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0])
             h=plt.axes([runx, runy-r/(1280), c/(1024), r/(1280)])
             runx=runx+c/1024+interxy
             maxy=np.min([maxy,runy-r/1280-interxy])
@@ -227,22 +229,22 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 if classifier==True:
                     # drops
                     if(np.isin(class2[i],dropBins)):
-                        h.imshow(ROI_N['IMAGE'][0,0][0,ii]['IM'][0,0],cmap='Greys_r')
+                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Greys_r')
                     # ice
                     elif(np.isin(class2[i],iceBins)):
-                        h.imshow(ROI_N['IMAGE'][0,0][0,ii]['IM'][0,0],cmap='Blues_r')
+                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
                     # unclassified
                     elif(np.isin(class2[i],unclass)):
-                        h.imshow(ROI_N['IMAGE'][0,0][0,ii]['IM'][0,0],cmap='Reds_r')
+                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Reds_r')
                 elif classifier==False:
-                    h.imshow(ROI_N['IMAGE'][0,0][0,ii]['IM'][0,0],cmap='Blues_r')
+                    h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
                 h.axis('off')
                 
                 # this plots the boundary on the image
                 #h.plot(dat[0,0]['foc'][0,i]['boundaries'][:,1], \
                 #    dat[0,0]['foc'][0,i]['boundaries'][:,0],'r') 
                 
-                time1=ROI_N['Time'][0,0][ii,0]
+                time1=ROI_N['Time'][0,0][i,0]
                 pytime=datetime.fromordinal(int(time1)) + \
                      timedelta(days=time1%1) - \
                      timedelta(days = 366)
@@ -250,7 +252,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 hour1=pytime.hour
                 h.text(0,0.95,str1[0:12],ha='left',va='center', \
                        transform=h.transAxes,fontsize=2)
-                h.text(0,0.05,"{0}{1}".format(str('%d' % dat['len'][0,0][ii,0]), 'um'), \
+                h.text(0,0.05,"{0}{1}".format(str('%d' % dat['len'][0,0][i,0]), 'um'), \
                        ha='left',va='center',transform=h.transAxes,fontsize=3)
 
                 i=i+1
