@@ -123,7 +123,7 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
               and (data['dat']['len'][0,0][i,0] >min_len)  \
               for i in range(len(data['dat']['len'][0,0][:,0]))]
     else:
-        ind1=[for i in range(len(data['dat']['len'][0,0][:,0]))]
+        ind1=[i for i in range(len(data['dat']['len'][0,0][:,0]))]
     
     for i in range(len(ind1)):
         ind1[i] = ind1[i] and notOnBoundary[i]
