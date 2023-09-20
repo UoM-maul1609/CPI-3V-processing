@@ -214,13 +214,13 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
             if runx<= (1.+interxy):
                 if classifier==True:
                     # drops
-                    if(np.isin(class2[0],dropBins)):
+                    if(np.isin(class2[i],dropBins)):
                         h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Greys_r')
                     # ice
-                    elif(np.isin(class2[0],iceBins)):
+                    elif(np.isin(class2[i],iceBins)):
                         h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
                     # unclassified
-                    elif(np.isin(class2[0],unclass)):
+                    elif(np.isin(class2[i],unclass)):
                         h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Reds_r')
                 elif classifier==False:
                     h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
