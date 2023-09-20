@@ -197,12 +197,19 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 runx=0.
                 runy=1.   
                 
-                # file output
-                if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
-                    os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
-                plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
-                            str(size_thresh), '/', filename1),dpi=300)
-
+                if classifier==True: 
+                    # file output
+                    if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class','')):
+                        os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class',''))
+                    plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_class', \
+                                '', '/', filename1),dpi=300)
+                elif classifier==False: 
+                    # file output
+                    if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
+                        os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
+                    plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
+                                str(size_thresh), '/', filename1),dpi=300)
+    
                 plt.close()
                 plt.figure(figsize=(1024/200, 1280/200))
                 j=1
