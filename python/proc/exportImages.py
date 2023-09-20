@@ -131,7 +131,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         """
 
         if classifier==True:
-            ind,=np.where(np.isin(class2,np.append(np.append(dropBins,iceBins),unclass))
+            ind,=np.where(np.isin(class2,np.append(np.append(dropBins,iceBins),unclass)))
         elif classifier==False:
             ind,=np.where( (dat['len'][0,0][:,0]>size_thresh) & \
                           (dat['foc'][0,0]['focus'][0,:] >foc_crit) )
