@@ -92,7 +92,8 @@ def runJobs():
     if export_images:
         # export images
         from exportImagesDriver import exportImagesDriver
-        exportImagesDriver(path1,filename1,foc_crit,min_len,cpiv1)
+        exportImagesDriver(path1,filename1,foc_crit,min_len,cpiv1,classifier, \
+            classifierFile,minClassSize)
         del exportImagesDriver
     #--------------------------------------------------------------------------
 

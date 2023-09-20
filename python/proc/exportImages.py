@@ -15,7 +15,83 @@ from datetime import timedelta
 from tqdm import tqdm
 import gc
 
-def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
+def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
+    classifierFile,minClassSize, dropBins=[0,2,4,5],iceBins=[1,3,6,7,8],unclass=[-1]):
+
+    if classifier == True:
+        import keras
+        from keras.models import Model, model_from_json, Sequential
+        import h5py
+        import sys
+        # insert at 1, 0 is the script path (or '' in REPL)
+        sys.path.insert(1, '../ml/cnn')
+        sys.path.insert(1, '../ml')
+        from DCNN_autoencoder_keras_with_clustering import ClusteringLayer 
+    
+        """
+            load the model++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+        """
+        print('Loading model...')
+        json_file = open(classifierFile + '.json','r')
+        loaded_model_json = json_file.read()
+        json_file.close()
+        loaded_model = model_from_json(loaded_model_json, \
+            custom_objects={'ClusteringLayer':ClusteringLayer})
+        loaded_model.load_weights(classifierFile + '.h5')
+        print('model is loaded')
+        """
+            ------------------------------------------------------------------------------
+        """
+    
+    
+        """ 
+            extract the images for classifying++++++++++++++++++++++++++++++++++++++++++++
+        """
+        print('extract images...')
+        import postProcessImages05 
+        imagePP=[]
+        lensPP=[]
+        indsPP=[]
+        tot2=0
+        for i in tqdm(range(len(filenames))):
+            f=filenames[i]
+            (imagePP1,lensPP1,timesPP1,diamPP1,roundPP1,l2wPP1,radiusPP1,indsPP1,tot1)= \
+                postProcessImages05.postProcessing(\
+                                        path.join(path1,f.replace('.roi','.mat')), \
+                                        path.join(path1,'full_backgrounds.mat'),\
+                                        foc_crit,minClassSize)
+            indsPP1=indsPP1+tot2
+            imagePP.extend(imagePP1)
+            lensPP.extend(lensPP1)
+            indsPP.extend(indsPP1)  
+            tot2 += tot1  
+        
+        imagePP=np.stack(imagePP,axis=0)
+        indsPP=np.stack(indsPP,axis=0)
+        print('extracted')    
+        """
+            ------------------------------------------------------------------------------
+        """
+     
+        """
+            classify the images using model
+        """
+        print('classifying...')
+        imagePP=np.expand_dims(imagePP,axis=3)
+        imagePP = imagePP.astype('float16') / 255.
+        cod2=loaded_model.predict(imagePP)
+        y_pred=cod2.argmax(1)
+        class1=-np.ones((tot2)) # all -1 to start with
+        test=loaded_model.get_config()
+        n_clusters=test['layers'][7]['config']['n_clusters']  
+    
+        for i in range(n_clusters):
+            ind,=np.where(y_pred==i)
+            class1[indsPP[ind]]=i
+        print('classified')    
+        """
+            ------------------------------------------------------------------------------
+        """
 
     prefix='_pytgt'
     interxy=0.01
@@ -32,7 +108,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
     runy=1.
     
 
-    
+    ilast=0    
     for l in range(len(filenames)):
 
    
@@ -42,10 +118,23 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
         dat=dataload['dat']
         del dataload
         
-        
+        """
+            get the classes of all this file++++++++++++++++++++++++++++++++++++++++++++++
+        """
+        if classifier==True:
+            indc=np.mgrid[0:len(dat['foc'][0,0]['focus'][0,:])]+ilast
+            ilast=ilast+len(indc)
+            class2=class1[indc]
+        """
+            ------------------------------------------------------------------------------
+        """
 
-        ind,=np.where( (dat['len'][0,0][:,0]>size_thresh) & \
-                      (dat['foc'][0,0]['focus'][0,:] >foc_crit) )
+        if classifier==True:
+            ind,=np.where(np.isin(class2,np.append(dropBins,iceBins,unclass)))
+        elif classifier==False:
+            ind,=np.where( (dat['len'][0,0][:,0]>size_thresh) & \
+                          (dat['foc'][0,0]['focus'][0,:] >foc_crit) )
+        
         if(len(ind)==0):
             continue
         
@@ -76,7 +165,8 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
                      timedelta(days = 366)
                 str1=str(pytime.time())
                 hour1=pytime.hour
-                filename1="{0}{1}{2}{3}{4}{5}".format(datetime.strptime(str(pytime.date()), '%Y-%m-%d').strftime('%m_%d_%y'), \
+                filename1="{0}{1}{2}{3}{4}{5}".format(datetime.strptime( \
+                    str(pytime.date()), '%Y-%m-%d').strftime('%m_%d_%y'), \
                     '_', str(pytime.time())[0:8].replace(':','_'), '.', \
                     str('%03d' % int(pytime.microsecond/1000)), '.png')
                 
@@ -121,7 +211,18 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
             
             
             if runx<= (1.+interxy):
-                h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
+                if classifier==True:
+                    # drops
+                    if(np.isin(class2[0],dropBins)):
+                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Greys_r')
+                    # ice
+                    elif(np.isin(class2[0],iceBins)):
+                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
+                    # unclassified
+                    elif(np.isin(class2[0],unclass)):
+                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Reds_r')
+                elif classifier==False:
+                    h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
                 h.axis('off')
                 
                 # this plots the boundary on the image
@@ -154,12 +255,19 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1):
     
         pbar.close()
         del pbar
-        
-    # file output
-    if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
-        os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
-    plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
-                str(size_thresh), '/', filename1),dpi=300)
+       
+    if classifier==True: 
+        # file output
+        if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class','')):
+            os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class',''))
+        plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_class', \
+                    '', '/', filename1),dpi=300)
+    elif classifier==False:
+        # file output
+        if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
+            os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
+        plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
+                    str(size_thresh), '/', filename1),dpi=300)
     plt.close()
             
 

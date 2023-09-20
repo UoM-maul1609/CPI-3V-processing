@@ -9,7 +9,8 @@ import scipy.io as sio
 from exportImages import exportImages
 
 
-def exportImagesDriver(path1,filename1,foc_crit,min_len,cpiv1):
+def exportImagesDriver(path1,filename1,foc_crit,min_len,cpiv1,classifier, \
+    classifierFile,minClassSize):
     
     print('====================exporting images =============================')
     dataload=sio.loadmat('cmap',variable_names=['MAP2'])
@@ -17,7 +18,8 @@ def exportImagesDriver(path1,filename1,foc_crit,min_len,cpiv1):
         
     # Exporting all images ++++++++++++++++++++++++++++++++++++++++++++++++++++
     print('exporting all images...')
-    exportImages(path1,filename1,foc_crit,min_len,MAP2,cpiv1)
+    exportImages(path1,filename1,foc_crit,min_len,MAP2,cpiv1,classifier, \
+        classifierFile,minClassSize)
     print('done')
     #--------------------------------------------------------------------------
     del dataload, MAP2
