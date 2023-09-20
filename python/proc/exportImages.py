@@ -66,13 +66,6 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
             lensPP.extend(lensPP1)
             indsPP.extend(indsPP1)  
             tot2 += tot1  
-
-        dataload=sio.loadmat("{0}{1}".format(pathname, filenames[i].replace('.roi','.mat')),
-                           variable_names=['ROI_N','dat'])
-        ROI_N=dataload['ROI_N']
-        dat=dataload['dat']
-        del dataload
-        assert tot1 == len(dat['foc'][0,0]['focus'][0,:])
         
         imagePP=np.stack(imagePP,axis=0)
         indsPP=np.stack(indsPP,axis=0)
@@ -159,11 +152,14 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 pbar.n=len(dat['foc'][0,0]['focus'][0])
                 pbar.update()
                 
+            
             # check to see if criteria are met
-            if ((dat['len'][0,0][i,0]<size_thresh) or 
-                (dat['foc'][0,0]['focus'][0,i].item() <=foc_crit) ):
-                i=i+1
+            if not np.isin(i,ind):
                 continue
+#             if ((dat['len'][0,0][i,0]<size_thresh) or 
+#                 (dat['foc'][0,0]['focus'][0,i].item() <=foc_crit) ):
+#                 i=i+1
+#                 continue
             
             if(j==1):
                 time1=ROI_N['Time'][0,0][i,0]
