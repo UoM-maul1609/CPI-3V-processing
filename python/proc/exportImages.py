@@ -125,7 +125,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         if classifier==True:
             indc=np.mgrid[0:len(dat['foc'][0,0]['focus'][0,:])]+ilast
             ilast=ilast+len(indc)
-            print(len(class1) + " " + len(indsPP))
+            print(str(len(class1)) + " " + str(len(indsPP)))
             class2=class1[indc]
             ind=indsPP[indc]
         """
