@@ -131,9 +131,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         """
 
         if classifier==True:
-            ind,=np.where(np.isin(class2,np.append(np.append(dropBins,iceBins),unclass)) \
-                & (dat['len'][0,0][:,0]>size_thresh) & \
-                          (dat['foc'][0,0]['focus'][0,:] >foc_crit))
+            ind,=np.where(np.isin(class2,np.append(np.append(dropBins,iceBins),unclass)))
         elif classifier==False:
             ind,=np.where( (dat['len'][0,0][:,0]>size_thresh) & \
                           (dat['foc'][0,0]['focus'][0,:] >foc_crit) )
@@ -157,11 +155,12 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
             
             # check to see if criteria are met
             if not np.isin(i,ind):
+                i=i+1
                 continue
-#             if ((dat['len'][0,0][i,0]<size_thresh) or 
-#                 (dat['foc'][0,0]['focus'][0,i].item() <=foc_crit) ):
-#                 i=i+1
-#                 continue
+            if ((dat['len'][0,0][i,0]<size_thresh) or 
+                (dat['foc'][0,0]['focus'][0,i].item() <=foc_crit) ):
+                i=i+1
+                continue
             
             if(j==1):
                 time1=ROI_N['Time'][0,0][i,0]
