@@ -23,6 +23,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         from keras.models import Model, model_from_json, Sequential
         import h5py
         import sys
+        from os import path
         # insert at 1, 0 is the script path (or '' in REPL)
         sys.path.insert(1, '../ml/cnn')
         sys.path.insert(1, '../ml')
