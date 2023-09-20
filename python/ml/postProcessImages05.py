@@ -15,7 +15,7 @@ import cv2
 
 def postProcessing(filename1='/tmp/20180213071742.mat',\
                    background_file='/tmp/full_backgrounds.mat',\
-                   foc_crit=12,min_len=50):
+                   foc_crit=12,min_len=50,selective=False):
     """
         loop through all images full filling criteria
         process them so they are all the same size and rotated to same 
@@ -118,10 +118,13 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
                 
             
 
-    ind1=[(data['dat'][0,0]['foc'][0,i]['focus'][0][0] > foc_crit) \
-          and (data['dat']['len'][0,0][i,0] >min_len)  \
-          for i in range(len(data['dat']['len'][0,0][:,0]))]
-
+    if selective==False:
+        ind1=[(data['dat'][0,0]['foc'][0,i]['focus'][0][0] > foc_crit) \
+              and (data['dat']['len'][0,0][i,0] >min_len)  \
+              for i in range(len(data['dat']['len'][0,0][:,0]))]
+    else:
+        ind1=[for i in range(len(data['dat']['len'][0,0][:,0]))]
+    
     for i in range(len(ind1)):
         ind1[i] = ind1[i] and notOnBoundary[i]
 

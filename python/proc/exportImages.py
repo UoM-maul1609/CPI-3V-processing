@@ -60,7 +60,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 postProcessImages05.postProcessing(\
                                         path.join(pathname,f.replace('.roi','.mat')), \
                                         path.join(pathname,'full_backgrounds.mat'),\
-                                        foc_crit,minClassSize)
+                                        foc_crit,minClassSize,selective=True)
             indsPP1=indsPP1+tot2
             imagePP.extend(imagePP1)
             lensPP.extend(lensPP1)
