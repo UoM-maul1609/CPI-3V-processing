@@ -113,7 +113,7 @@ def postProcessing(filename1='/tmp/20180213071742.mat',\
             
         # additionally, if centroid is not within 25% of image centre remove 
         if notOnBoundary[i]==True:
-            if (np.abs((centroid[i,0]-ysize*0.5) / ysize) > 0.25) or (np.abs((centroid[i,1]-xsize*0.5) / xsize) > 0.25):
+            if (np.abs((centroid[i,1]-ysize*0.5) / ysize) > 0.25) or (np.abs((centroid[i,0]-xsize*0.5) / xsize) > 0.25):
                 notOnBoundary[i]=False
                 
             
