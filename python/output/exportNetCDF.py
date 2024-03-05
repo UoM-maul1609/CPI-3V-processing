@@ -6,12 +6,17 @@ import hdf5storage
 import scipy.io as sio
 import datetime
 import numpy as np
+import datetime as dt
 
 def OrdinalToDatetime(ordinal):
     plaindate = datetime.date.fromordinal(int(ordinal))
     date_time = datetime.datetime.combine(plaindate, datetime.datetime.min.time())
     return date_time + datetime.timedelta(days=ordinal-int(ordinal))
 
+def matlab2datetime(matlab_datenum):
+    day = dt.datetime.fromordinal(int(matlab_datenum))
+    dayfrac = dt.timedelta(days=matlab_datenum%1) - dt.timedelta(days = 366)
+    return day + dayfrac
 
 def exportNetCDF(inputTSFile='/tmp/timeseries_class.mat',outputFile='/tmp/output.nc', \
     dropBins=[1,3,5,6],iceBins=[2,4,7,8,9],description='flight C301 on '):
@@ -26,7 +31,8 @@ def exportNetCDF(inputTSFile='/tmp/timeseries_class.mat',outputFile='/tmp/output
     ncfile = Dataset(outputFile, mode='w', format='NETCDF4_CLASSIC')
 
     # date
-    d=OrdinalToDatetime(dataload['timeser'][0,0]['Time'][0,0])
+    d=matlab2datetime(dataload['timeser']['Time'][0])
+    python_datetime = datetime.fromordinal(int(matlab_datenum)) + timedelta(days=matlab_datenum%1) - timedelta(days = 366)
     # description
     ncfile.title = "CPI3V concentration and size distribution data from " + description \
         + " " + d.strftime("%Y/%m/%d")
@@ -44,8 +50,8 @@ def exportNetCDF(inputTSFile='/tmp/timeseries_class.mat',outputFile='/tmp/output
         " between total and drops+ice)"
     
     # dimensions
-    time_dim = ncfile.createDimension('time',len(dataload['timeser'][0,0]['Time'][0,:]))
-    size_dim = ncfile.createDimension('size',len(dataload['timeser'][0,0]['size1'][0,:]))
+    time_dim = ncfile.createDimension('time',len(dataload['timeser']['Time'][:]))
+    size_dim = ncfile.createDimension('size',len(dataload['timeser']['size1'][:]))
     
     # variables
     time = ncfile.createVariable('time', np.float64, ('time',) )
@@ -93,19 +99,19 @@ def exportNetCDF(inputTSFile='/tmp/timeseries_class.mat',outputFile='/tmp/output
 
 
     # write the data
-    time[:] = dataload['timeser'][0,0]['Time'][0,:]
-    size1[:] = dataload['timeser'][0,0]['size1'][0,:]
-    size2[:] = dataload['timeser'][0,0]['size2'][0,:]
-    conc[:] = dataload['timeser'][0,0]['conc'][0,:]
-    conc2[:,:] = dataload['timeser'][0,0]['conc2'][:,:]
+    time[:] = 24.*(dataload['timeser']['Time'][:]-dataload['timeser']['Time'][0])
+    size1[:] = dataload['timeser']['size1'][:]
+    size2[:] = dataload['timeser']['size2'][:]
+    conc[:] = dataload['timeser']['conc'][:]
+    conc2[:,:] = dataload['timeser']['conc2'][:,:]
     
     concDrops[:] = np.sum(np.sum( \
-        dataload['timeser'][0,0]['conc2ar'][:,:,dropBins],axis=2),axis=1)
-    conc2Drops[:,:] = np.sum(dataload['timeser'][0,0]['conc2ar'][:,:,dropBins],axis=2)
+        dataload['timeser']['conc2ar'][:,:,dropBins],axis=2),axis=1)
+    conc2Drops[:,:] = np.sum(dataload['timeser']['conc2ar'][:,:,dropBins],axis=2)
     
     concIce[:] = np.sum(np.sum( \
-        dataload['timeser'][0,0]['conc2ar'][:,:,iceBins],axis=2),axis=1)
-    conc2Ice[:,:] = np.sum(dataload['timeser'][0,0]['conc2ar'][:,:,iceBins],axis=2)
+        dataload['timeser']['conc2ar'][:,:,iceBins],axis=2),axis=1)
+    conc2Ice[:,:] = np.sum(dataload['timeser']['conc2ar'][:,:,iceBins],axis=2)
     
 
 

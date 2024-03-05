@@ -265,7 +265,7 @@ def calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile
             #print("should be appending")
             #sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
             hdf5storage.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser}, format=7.3, matlab_compatible=True)
-	else:
+        else:
             #sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
             hdf5storage.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser}, format=7.3, matlab_compatible=True)
             

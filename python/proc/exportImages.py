@@ -16,7 +16,7 @@ from tqdm import tqdm
 import gc
 
 def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
-    classifierFile,minClassSize, dropBins=[1,2,3,8],iceBins=[0,4,5,6,7],unclass=[-1]):
+    classifierFile,minClassSize, dropBins=[1,3,5,8],iceBins=[0,2,4,6,7],unclass=[-1]):
 
     if classifier == True:
         import keras

@@ -1,8 +1,8 @@
 #!/bin/bash
-echo 'C296'
-python3 batchProcess.py /models/mccikpc2/DCMEX/C296/ &> /models/mccikpc2/DCMEX/C296/python.out 
-#echo 'C298'
-#python3 batchProcess.py /models/mccikpc2/DCMEX/C298/ &> /models/mccikpc2/DCMEX/C298/python.out 
+#echo 'C296'
+#python3 batchProcess.py /models/mccikpc2/DCMEX/C296/ &> /models/mccikpc2/DCMEX/C296/python.out 
+echo 'C298'
+python3 batchProcess.py /models/mccikpc2/DCMEX/C298/ &> /models/mccikpc2/DCMEX/C298/python.out 
 echo 'C299'
 python3 batchProcess.py /models/mccikpc2/DCMEX/C299/ &> /models/mccikpc2/DCMEX/C299/python.out 
 echo 'C300'
