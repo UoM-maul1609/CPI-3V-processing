@@ -32,7 +32,6 @@ def exportNetCDF(inputTSFile='/tmp/timeseries_class.mat',outputFile='/tmp/output
 
     # date
     d=matlab2datetime(dataload['timeser']['Time'][0])
-    python_datetime = datetime.fromordinal(int(matlab_datenum)) + timedelta(days=matlab_datenum%1) - timedelta(days = 366)
     # description
     ncfile.title = "CPI3V concentration and size distribution data from " + description \
         + " " + d.strftime("%Y/%m/%d")
@@ -41,7 +40,7 @@ def exportNetCDF(inputTSFile='/tmp/timeseries_class.mat',outputFile='/tmp/output
     ncfile.source = "Data collected on the FAAM BAE-146 research aircraft during the " + \
         "DCMEX experiment in Alberquerque New Mexico. The data come from the 3V-CPI " +\
         "instrument, operated by the University of Manchester."
-    ncfile.history = "Version 0.1.0"
+    ncfile.history = "Version 0.0.2"
     ncfile.references = "See python version of Prof. Paul Connolly's " + \
         "processing software at https://github.com/UoM-maul1609/CPI-3V-processing"
     ncfile.comment="Data are processed with commit " + \
