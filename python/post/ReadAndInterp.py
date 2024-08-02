@@ -5,7 +5,7 @@ if __name__=="__main__":
     import ReadPositionFile
     
     """
-        Read the CPI files
+        Read the CPI files, this is just the 100um file?
     """
     (times,foc,len1,im1,boundaries,x,y)=ReadCPIFiles.ReadMAT( \
         pathName='/Users/mccikpc2/Downloads/CPI_cals/CPICalibration/Cal210302')
