@@ -5,9 +5,17 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     # use dictionaries for storing info
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # image times in hk format
-    IMAGE1={'Time' : I['ArrivalTime2']*16**8+
-            (I['ulTime']/65536.)*16**4+
-            I['ArrivalTime1']}
+    # Reconstruct the instrument time counter using an explicitly wide dtype.
+    # NumPy 2.x no longer promotes uint16 arrays when multiplying by Python
+    # integers outside the uint16 range (e.g. 16**8 == 2**32), so the legacy
+    # expression raises OverflowError.  Use float64 here to preserve the dtype
+    # produced by the historical expression (which contained a floating divide).
+    image_time = (
+        I['ArrivalTime2'].astype(np.float64) * float(16**8)
+        + I['ulTime'].astype(np.float64)
+        + I['ArrivalTime1'].astype(np.float64)
+    )
+    IMAGE1={'Time' : image_time}
     
     # time in MATLAB format, using msecond, etc
     (Time,Timestr)=calc_datetime(Header['usYear'],
@@ -28,9 +36,12 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     if not cpiv1:
         # housekeeping packet times
-        HOUSE={'Time' : H['TimeMSW']*16**8 +
-               H['TimeISW']*16**4 +
-               H['TimeLSW'] }
+        # Housekeeping timestamps are three 16-bit words.  Promote before
+        # shifting/multiplication so the arithmetic cannot overflow uint16.
+        HOUSE={'Time' : (
+               H['TimeMSW'].astype(np.uint64) * np.uint64(16**8)
+               + H['TimeISW'].astype(np.uint64) * np.uint64(16**4)
+               + H['TimeLSW'].astype(np.uint64))}
         Rdgs=H['Readings1']
         #HOUSE['deadtime']=Rdgs[:,66]*0.000341333
         HOUSE['deadtime']=Rdgs[:,57] /256
@@ -69,20 +80,44 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # associate variables with each ROI++++++++++++++++++++++++++++++++++++++++
     for i in range(len(rois)):
-        StartX=R['StartX'][indroi[i]]
-        StartY=R['StartY'][indroi[i]]
-        EndX=R['EndX'][indroi[i]]
-        EndY=R['EndY'][indroi[i]]
-        
-        X=(EndX-StartX+1)
-        Y=(EndY-StartY+1)
-        numberOfChars=X*Y
-    
-        chars1=bytearray(
-                bytes1[(rois[indroi[i]]+1)*2-1+33*2-14+1:\
-                       (rois[indroi[i]]+1)*2-1+33*2-14+1+numberOfChars])
-        #IM=np.reshape(chars1,(X,Y))
-        ROI_N['IMAGE'][i]['IM']=np.transpose(np.reshape(chars1,(Y,X)))
+        # R stores coordinates as uint16.  Convert to Python ints *before*
+        # subtracting/multiplying: under NumPy 2.x scalar uint16 arithmetic
+        # remains uint16, so a full 1280 x 1024 image gives
+        # 1,310,720 mod 65,536 == 0.
+        source_index = int(indroi[i])
+        StartX = int(R['StartX'][source_index])
+        StartY = int(R['StartY'][source_index])
+        EndX = int(R['EndX'][source_index])
+        EndY = int(R['EndY'][source_index])
+
+        X = EndX - StartX + 1
+        Y = EndY - StartY + 1
+        if X <= 0 or Y <= 0:
+            raise ValueError(
+                f"Invalid ROI dimensions for ROI {i}: "
+                f"Start=({StartX},{StartY}), End=({EndX},{EndY})"
+            )
+
+        numberOfChars = X * Y
+        roi_word = int(rois[source_index])
+
+        # Preserve the legacy byte offset exactly, but calculate it with
+        # ordinary Python integers so it cannot wrap in a NumPy dtype.
+        pixel_start = (roi_word + 1) * 2 - 1 + 33 * 2 - 14 + 1
+        pixel_end = pixel_start + numberOfChars
+        chars1 = bytes1[pixel_start:pixel_end]
+
+        if len(chars1) != numberOfChars:
+            raise ValueError(
+                f"Incomplete ROI pixel data for ROI {i}: expected "
+                f"{numberOfChars} bytes for {X}x{Y}, got {len(chars1)}; "
+                f"byte range [{pixel_start}:{pixel_end}], "
+                f"buffer length {len(bytes1)}"
+            )
+
+        ROI_N['IMAGE'][i]['IM'] = np.frombuffer(
+            chars1, dtype=np.uint8
+        ).reshape(Y, X).T.copy()
         
     
     ROI_N['imageType']=imageTypeROIs
@@ -126,10 +161,12 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
 
 def calc_datetime(year,mon,day,hour,mins,sec,msec):
     mtime=np.zeros((len(hour),1))
-    mtimestr=np.chararray(len(hour),24)
+    mtimestr = np.empty(len(hour), dtype='<U24')
     for i in range(len(hour)):
-        d=datetime(year,mon,day[i],hour[i],mins[i],sec[i],
-                 msec[i]*1000)
+        # Convert NumPy integer scalars to Python ints before arithmetic.
+        # With NumPy 2.x, np.uint16(999) * 1000 remains uint16 and wraps.
+        d=datetime(int(year), int(mon), int(day[i]), int(hour[i]),
+                   int(mins[i]), int(sec[i]), int(msec[i]) * 1000)
         mtime[i]=datetime2matlabdn(d)
         
         # http://strftime.org

@@ -114,7 +114,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
     for l in range(len(filenames)):
 
    
-        dataload=sio.loadmat("{0}{1}".format(pathname, filenames[l].replace('.roi','.mat')),
+        dataload=sio.loadmat(os.path.join(pathname, filenames[l].replace('.roi', '.mat')),
                            variable_names=['ROI_N','dat'])
         ROI_N=dataload['ROI_N']
         dat=dataload['dat']
@@ -205,16 +205,16 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 
                 if classifier==True: 
                     # file output
-                    if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class','')):
-                        os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class',''))
-                    plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_class', \
-                                '', '/', filename1),dpi=300)
+                    output_dir = os.path.join(pathname, filename1[0:8] + '_class')
+                    os.makedirs(output_dir, exist_ok=True)
+                    plt.savefig(os.path.join(output_dir, filename1), dpi=300)
                 elif classifier==False: 
                     # file output
-                    if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
-                        os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
-                    plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
-                                str(size_thresh), '/', filename1),dpi=300)
+                    output_dir = os.path.join(
+                        pathname, filename1[0:8] + prefix + str(size_thresh)
+                    )
+                    os.makedirs(output_dir, exist_ok=True)
+                    plt.savefig(os.path.join(output_dir, filename1), dpi=300)
     
                 plt.close()
                 plt.figure(figsize=(1024/200, 1280/200))
@@ -275,16 +275,16 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
     if page_has_particles and filename1 is not None:
         if classifier==True:
             # file output
-            if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class','')):
-                os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class',''))
-            plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_class', \
-                        '', '/', filename1),dpi=300)
+            output_dir = os.path.join(pathname, filename1[0:8] + '_class')
+            os.makedirs(output_dir, exist_ok=True)
+            plt.savefig(os.path.join(output_dir, filename1), dpi=300)
         elif classifier==False:
             # file output
-            if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
-                os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
-            plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
-                        str(size_thresh), '/', filename1),dpi=300)
+            output_dir = os.path.join(
+                pathname, filename1[0:8] + prefix + str(size_thresh)
+            )
+            os.makedirs(output_dir, exist_ok=True)
+            plt.savefig(os.path.join(output_dir, filename1), dpi=300)
     plt.close()
             
 

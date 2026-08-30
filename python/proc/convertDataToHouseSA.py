@@ -1,5 +1,10 @@
 import numpy as np
 import struct
+def _u32_from_words(high, low):
+    """Combine two 16-bit words without NumPy scalar overflow."""
+    return (int(high) << 16) | int(low)
+
+
 def convertDataToHouseSA(bytes1,ushort,order,house,cpiv1):
     # https://stackoverflow.com/questions/3648442/how-to-define-a-structure-like-in-c
     #https://stackoverflow.com/questions/5824530/python-struct-arrays
@@ -30,15 +35,15 @@ def convertDataToHouseSA(bytes1,ushort,order,house,cpiv1):
                     ('order', 'uint32') ])
                     
         for i in range(len(house)):
-            if (((ushort[house[i]+2] << 16) + ushort[house[i]+1])== 106):
+            if (_u32_from_words(ushort[house[i]+2], ushort[house[i]+1]) == 106):
                 H['BlockNum'][i]=ushort[house[i]+0]
-                H['ulItemSize'][i]=(ushort[house[i]+2] << 16) + ushort[house[i]+1]
+                H['ulItemSize'][i] = _u32_from_words(ushort[house[i]+2], ushort[house[i]+1])
                 H['usVersion'][i]=ushort[house[i]+3]
-                H['ulXtraData'][i]=(ushort[house[i]+5] << 16) + ushort[house[i]+4]
+                H['ulXtraData'][i] = _u32_from_words(ushort[house[i]+5], ushort[house[i]+4])
                 H['bNewData'][i]=ushort[house[i]+6]
                 H['usChkSumFlag'][i]=ushort[house[i]+7]
                 H['TopReadings'][i]=np.reshape(ushort[house[i]+8:house[i]+8+3],(3,1))
-                H['Time'][i] = (ushort[house[i]+12] << 16) + ushort[house[i]+11]
+                H['Time'][i] = _u32_from_words(ushort[house[i]+12], ushort[house[i]+11])
                 H['Readings'][i]=np.reshape(ushort[house[i]+13:house[i]+13+40],(40,1))
                 H['order'][i]=order[house[i]]
     

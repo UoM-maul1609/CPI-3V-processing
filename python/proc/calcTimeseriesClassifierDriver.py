@@ -96,7 +96,7 @@ def calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile
     sa=1280.*1024./np.sqrt(2.)*2.3e-6**2  # sample area of image perp to flow
     sv=sa*np.sqrt(2.)*3e-3             # sample volume of one image
 
-    dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),\
+    dataload=sio.loadmat(os.path.join(path1, 'full_backgrounds.mat'),\
                          variable_names=['t_range'])
     t_range=dataload['t_range']
 
@@ -136,7 +136,7 @@ def calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile
     for i in range(len(filename1)):
         # load from file
         print('Loading from file...')
-        dataload=sio.loadmat("{0}{1}".format(path1, filename1[i].replace('.roi','.mat')),
+        dataload=sio.loadmat(os.path.join(path1, filename1[i].replace('.roi', '.mat')),
                            variable_names=['ROI_N','HOUSE','IMAGE1','BG','dat'])
         ROI_N=dataload['ROI_N']
         HOUSE=dataload['HOUSE']
@@ -260,14 +260,14 @@ def calcTimeseriesClassifierDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile
     if save_files:
         # save to file
         print('Saving to file...')
-        if os.path.exists("{0}{1}".format(path1, outputfile)):
+        if os.path.exists(os.path.join(path1, outputfile)):
             # save / append
             #print("should be appending")
             #sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
-            hdf5storage.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser}, format=7.3, matlab_compatible=True)
+            hdf5storage.savemat(os.path.join(path1, outputfile), {'timeser': timeser}, format=7.3, matlab_compatible=True)
         else:
             #sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
-            hdf5storage.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser}, format=7.3, matlab_compatible=True)
+            hdf5storage.savemat(os.path.join(path1, outputfile), {'timeser': timeser}, format=7.3, matlab_compatible=True)
             
         print('done')
 

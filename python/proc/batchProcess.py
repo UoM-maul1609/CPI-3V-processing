@@ -35,13 +35,13 @@ process_sweep1_if_exist = True
 
 # Preserve the *effective* settings from the supplied archive.  The original
 # file defined these twice, with the later block silently overriding the first.
-process_roi_driver = False
+process_roi_driver = True
 process_image_stats = True
 export_images = True
 output_timeseries = True
 
 num_cores = 4
-cpiv1 = True
+cpiv1 = False
 outputfile = "timeseries.mat"
 
 classifierFile = "/models/mccikpc2/DCMEX/CPI-analysis/cnn/model_t5_epochs_100_dense64_3a_freeze_final"
