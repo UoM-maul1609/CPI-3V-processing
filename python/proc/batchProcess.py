@@ -11,8 +11,8 @@ process_roi_driver=True
 process_image_stats=True
 export_images=True
 output_timeseries=True
-num_cores=1
-cpiv1 = False
+num_cores=4
+cpiv1 = True
 
 path1='/tmp/CPICalibration/Cal140302/'
             # path to raw data
@@ -26,7 +26,7 @@ outputfile='timeseries.mat'
 
 # unsupervised classification scheme
 classifierFile='/models/mccikpc2/DCMEX/CPI-analysis/cnn/model_t5_epochs_100_dense64_3a_freeze_final'
-classifier=True
+classifier=False
 minClassSize=50.
 
 
@@ -47,8 +47,8 @@ export_images=False
 
 output_timeseries=True
 process_roi_driver=False
-process_image_stats=False
-export_images=False
+process_image_stats=True
+export_images=True
 
 def runJobs():
     global path1
