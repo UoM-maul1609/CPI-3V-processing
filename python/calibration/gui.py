@@ -2,7 +2,11 @@
 
 Typical use::
 
-    python -m calibration.gui /path/to/processed/calibration
+    cpi-calibrate /path/to/processed/calibration
+
+or::
+
+    python -m calibration /path/to/processed/calibration
 
 Selection state is stored in a CSV sidecar. The processed MAT files are never
 modified by the GUI.
@@ -45,7 +49,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .data import FilterSpec, ParticleCatalog, ParticleRecord, ParticleStore, datetime_to_matlab_datenum
+try:
+    from .data import FilterSpec, ParticleCatalog, ParticleRecord, ParticleStore, datetime_to_matlab_datenum
+except ImportError:  # Support ``python gui.py`` from this directory.
+    from data import FilterSpec, ParticleCatalog, ParticleRecord, ParticleStore, datetime_to_matlab_datenum
 
 
 class ParticleCanvas(FigureCanvasQTAgg):

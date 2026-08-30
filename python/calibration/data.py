@@ -246,7 +246,12 @@ def _scan_via_subprocess(path: Path, root: Path) -> List[ParticleRecord]:
     fd, temporary = tempfile.mkstemp(prefix="cpi_catalog_", suffix=".json")
     os.close(fd)
     try:
-        command = [sys.executable, os.path.abspath(__file__), "scan-one", str(path), str(root), temporary]
+        # Prefer the installed package entry point.  Fall back to the file path
+        # when the module is being run directly from a source checkout.
+        if __package__:
+            command = [sys.executable, "-m", "calibration.data", "scan-one", str(path), str(root), temporary]
+        else:
+            command = [sys.executable, os.path.abspath(__file__), "scan-one", str(path), str(root), temporary]
         subprocess.run(command, check=True)
         with open(temporary, "r", encoding="utf-8") as handle:
             rows = json.load(handle)

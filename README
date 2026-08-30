@@ -1,18 +1,15 @@
-Brief:
-	*CPI3V processing code
-	*A collection of files to process the roi files from the CPI3V
-	*Extracts data blocks from *.roi files and saves
-	*Processes the image data to file particle properties, boundaries, etc.
-	*Writes images to png files for viewing
-	*Calculates time-series of concentrations, segregated by particle properties
-Running code:
-	*See the README in either the matlab or python directory
-Using code:
-    *The code has been written by Dr Paul Connolly, University of Manchester. 
-    *It is available for collaborative use.
-    *Please cite the original source of the code when using.
-Contributing development:
-	* Plans is to add code so that the user can use the Python language
-	* Contact the code owner to contribute ideas. 
-	
+CPI-3V processing
+=================
 
+The current setup and usage documentation is in README.md.
+
+Quick setup from the repository root:
+
+    python -m venv .venv
+    source .venv/bin/activate
+    python -m pip install -e ".[gui]"
+    cpi-calibrate
+
+Deactivate the environment with:
+
+    deactivate
