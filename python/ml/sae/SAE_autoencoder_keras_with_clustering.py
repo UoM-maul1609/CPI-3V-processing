@@ -143,7 +143,7 @@ if __name__ == "__main__":
         i1 = len(lens)
         i11=60000
         i22=10000
-        if ~auxLoad:
+        if not auxLoad:
             indices = np.random.permutation(i1)
             #split1=int(0.8*i1)
             training_idx, test_idx = indices[:i11], indices[i11:i11+i22]

@@ -24,18 +24,17 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         import h5py
         import sys
         from os import path
-        # insert at 1, 0 is the script path (or '' in REPL)
-        sys.path.insert(1, '../ml/cnn')
-        sys.path.insert(1, '../ml')
+        proc_dir = os.path.dirname(os.path.abspath(__file__))
+        sys.path.insert(1, os.path.normpath(os.path.join(proc_dir, '../ml/cnn')))
+        sys.path.insert(1, os.path.normpath(os.path.join(proc_dir, '../ml')))
         from DCNN_autoencoder_keras_with_clustering import ClusteringLayer 
     
         """
             load the model++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
         """
         print('Loading model...')
-        json_file = open(classifierFile + '.json','r')
-        loaded_model_json = json_file.read()
-        json_file.close()
+        with open(classifierFile + '.json', 'r') as json_file:
+            loaded_model_json = json_file.read()
         loaded_model = model_from_json(loaded_model_json, \
             custom_objects={'ClusteringLayer':ClusteringLayer})
         loaded_model.load_weights(classifierFile + '.h5')
@@ -109,7 +108,9 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
     runy=1.
     
 
-    ilast=0    
+    ilast=0
+    page_has_particles=False
+    filename1=None
     for l in range(len(filenames)):
 
    
@@ -138,7 +139,8 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         
         if(len(ind)==0):
             continue
-        
+        selected = np.zeros(len(dat['foc'][0,0]['focus'][0]), dtype=bool)
+        selected[ind] = True
         
         # loop over all the images in this file
         i=0
@@ -154,7 +156,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 
             
             # check to see if criteria are met
-            if not np.isin(i,ind):
+            if not selected[i]:
                 i=i+1
                 continue
             if ((dat['len'][0,0][i,0]<size_thresh) or 
@@ -217,6 +219,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 plt.close()
                 plt.figure(figsize=(1024/200, 1280/200))
                 j=1
+                page_has_particles=False
                 daynew=dayold
                 continue
             
@@ -236,6 +239,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 elif classifier==False:
                     h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
                 h.axis('off')
+                page_has_particles=True
                 
                 # this plots the boundary on the image
                 #h.plot(dat[0,0]['foc'][0,i]['boundaries'][:,1], \
@@ -268,18 +272,19 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         pbar.close()
         del pbar
        
-    if classifier==True: 
-        # file output
-        if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class','')):
-            os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class',''))
-        plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_class', \
-                    '', '/', filename1),dpi=300)
-    elif classifier==False:
-        # file output
-        if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
-            os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
-        plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
-                    str(size_thresh), '/', filename1),dpi=300)
+    if page_has_particles and filename1 is not None:
+        if classifier==True:
+            # file output
+            if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class','')):
+                os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],'_class',''))
+            plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],'_class', \
+                        '', '/', filename1),dpi=300)
+        elif classifier==False:
+            # file output
+            if not os.path.exists("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh))):
+                os.makedirs("{0}{1}{2}{3}".format(pathname, filename1[0:8],prefix,str(size_thresh)))
+            plt.savefig("{0}{1}{2}{3}{4}{5}".format(pathname, filename1[0:8],prefix, \
+                        str(size_thresh), '/', filename1),dpi=300)
     plt.close()
             
 

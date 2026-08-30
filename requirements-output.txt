@@ -1,0 +1,4 @@
+-r requirements-core.txt
+netCDF4>=1.6
+# Optional, only for historical MATLAB v7.3/HDF5 MAT files:
+hdf5storage>=0.2

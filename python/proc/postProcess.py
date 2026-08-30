@@ -50,17 +50,15 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     imageTypeROIs=np.zeros((len(R),1))
     imageMeans=np.zeros((len(R),1))
     
-    for i in range(len(orderImage)-1):
-        ind,=np.where((orderImage[i]<orderROIs) & (orderImage[i+1]>orderROIs)) 
-        timeROIs[ind]=Time[i]
-        imageTypeROIs[ind]=IMAGE1['imageType'][i]
-        imageMeans[ind]=I['ucImgMean'][i]
-    
-    i=len(orderImage)-1
-    ind,=np.where(orderImage[i]<orderROIs )
-    timeROIs[ind]=Time[i]
-    imageTypeROIs[ind]=IMAGE1['imageType'][i]
-    imageMeans[ind]=I['ucImgMean'][i]
+    # Each ROI belongs to the immediately preceding IMAGE block in file order.
+    # The legacy implementation scanned every ROI once for every image block;
+    # searchsorted gives the same mapping without the O(Nimage*Nroi) loop.
+    if len(orderImage):
+        parent_image = np.searchsorted(orderImage, orderROIs, side='left') - 1
+        valid = parent_image >= 0
+        timeROIs[valid, 0] = Time[parent_image[valid], 0]
+        imageTypeROIs[valid, 0] = IMAGE1['imageType'][parent_image[valid]]
+        imageMeans[valid, 0] = I['ucImgMean'][parent_image[valid]]
     #--------------------------------------------------------------------------
     
 

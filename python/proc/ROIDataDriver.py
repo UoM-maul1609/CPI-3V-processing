@@ -1,278 +1,242 @@
+from __future__ import annotations
+
+import io
+import os
+import subprocess
+import sys
+
 import numpy as np
-from struct import pack, unpack
+import scipy.io as sio
+
+from associateBackgrounds import associateBackgrounds
 from convertDataToHeaderSA import convertDataToHeaderSA
+from convertDataToHouseSA import convertDataToHouseSA
 from convertDataToImageSA import convertDataToImageSA
 from convertDataToROISA import convertDataToROISA
-from convertDataToHouseSA import convertDataToHouseSA
-from postProcess import postProcess
 from fullBackgrounds import fullBackgrounds
-from associateBackgrounds import associateBackgrounds
-import scipy.io as sio
-import gc
-import os.path
-import tempfile
-from multiprocessing import Pool
+from io_utils import atomic_savemat, normalise_directory, parse_bool
+from postProcess import postProcess
 
 
-def ROIDataDriver(path1,filename,dt,process_sweep1_if_exist,cpiv1):
-   t_min=1e9
-   t_max=0.
-   FULL_BG={'Time':np.array([]),'IMAGE':np.array([]) }
-   temp_name=tempfile.mktemp()
-   sio.savemat(temp_name,{'FULL_BG':FULL_BG})
-   dataload=sio.loadmat(temp_name,variable_names=['FULL_BG'])
-   FULL_BG=dataload['FULL_BG']
-   #FULL_BGinit=FULL_BG.copy()
-   del dataload
- 
-   save_files=True
-   
-   print("=========================1st sweep================================")
-   for i in range(0,len(filename)):
-       p=Pool(processes=1)
-       
-       result=p.apply_async(mult_job,\
-                (path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,\
-                 process_sweep1_if_exist,cpiv1))
-       (FULL_BG,t_min,t_max)=result.get()
-       del FULL_BG
-       dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),
-                               variable_names=['FULL_BG'])
-       FULL_BG=dataload['FULL_BG']
-       del dataload 
-       del result
-#       (FULL_BG,t_min,t_max)=mult_job(path1,filename[i],dt,FULL_BG,t_min,t_max,save_files,process_sweep1_if_exist)
-        # Garbage collection:
-       gc.collect()
-       del gc.garbage[:]
-       
-       p.close()
-       p.join()
+def _as_matlab_struct(value):
+    """Round-trip a small Python dict through MAT format to get scipy's struct form."""
+    buffer = io.BytesIO()
+    sio.savemat(buffer, {"value": value})
+    buffer.seek(0)
+    return sio.loadmat(buffer, variable_names=["value"])["value"]
 
 
-       
-   print('=========================2nd sweep================================')
-   dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),
-                           variable_names=['FULL_BG','t_range'])
-   FULL_BG=dataload['FULL_BG']
-   t_range=dataload['t_range']
-   del dataload
-   for i in range(0,len(filename)):
-
-       p=Pool(processes=1)
-       p.apply_async(mult_job2,\
-                (path1,filename[i],FULL_BG,save_files,cpiv1))
-#       mult_job2(path1,filename[i],FULL_BG,save_files)
-        # Garbage collection:
-       gc.collect()
-       del gc.garbage[:]
-       p.close()
-       p.join()
-#   del p
+def _empty_full_backgrounds():
+    return _as_matlab_struct({"Time": np.array([]), "IMAGE": np.array([])})
 
 
-   return (t_range)
- 
+def _load_background_state(path1):
+    state_file = os.path.join(path1, "full_backgrounds.mat")
+    if not os.path.exists(state_file):
+        return _empty_full_backgrounds(), 1.0e9, 0.0
+
+    data = sio.loadmat(state_file, variable_names=["FULL_BG", "t_range"])
+    full_bg = data.get("FULL_BG", _empty_full_backgrounds())
+    t_range = data.get("t_range")
+    if t_range is None or t_range.size < 2:
+        return full_bg, 1.0e9, 0.0
+    return full_bg, float(t_range[0, 0]), float(t_range[0, 1])
 
 
+def _run_worker(*args):
+    command = [sys.executable, os.path.abspath(__file__), *map(str, args)]
+    subprocess.run(command, check=True)
 
 
+def ROIDataDriver(path1, filename, dt, process_sweep1_if_exist, cpiv1):
+    """Extract ROI data using one fresh process per file.
+
+    The first sweep is sequential because each file contributes to the shared
+    background set.  Importantly, that large background structure stays on disk
+    between workers instead of being pickled through multiprocessing pipes.
+    """
+    path1 = normalise_directory(path1)
+    state_file = os.path.join(path1, "full_backgrounds.mat")
+
+    if process_sweep1_if_exist:
+        atomic_savemat(state_file, {"FULL_BG": _empty_full_backgrounds()})
+    elif not os.path.exists(state_file):
+        raise FileNotFoundError(
+            "full_backgrounds.mat is required when process_sweep1_if_exist=False; "
+            "re-run the first sweep to rebuild it."
+        )
+
+    print("=========================1st sweep================================")
+    for name in filename:
+        _run_worker("sweep1", path1, name, dt, process_sweep1_if_exist, cpiv1)
+
+    data = sio.loadmat(state_file, variable_names=["t_range"])
+    if "t_range" not in data:
+        raise RuntimeError("First sweep did not produce t_range in full_backgrounds.mat")
+    t_range = data["t_range"]
+
+    print("=========================2nd sweep================================")
+    for name in filename:
+        _run_worker("sweep2", path1, name, cpiv1)
+
+    return t_range
 
 
+def mult_job(path1, filename1, dt, process_sweep1_if_exist, cpiv1):
+    """First-sweep worker for exactly one ROI file."""
+    path1 = normalise_directory(path1)
+    mat_file = os.path.join(path1, filename1.replace(".roi", ".mat"))
+    state_file = os.path.join(path1, "full_backgrounds.mat")
 
-def mult_job(path1,filename1,dt,FULL_BG,t_min,t_max,save_files,\
-             process_sweep1_if_exist,cpiv1):   
+    if os.path.isfile(mat_file) and not process_sweep1_if_exist:
+        print(f"Skipping file...{filename1}")
+        return
 
-   if (os.path.isfile("{0}{1}".format(path1 ,filename1.replace('.roi','.mat'))) 
-      and not(process_sweep1_if_exist)):
-       
-       dataload=sio.loadmat(path1+'full_backgrounds.mat', \
-                            variable_names=['FULL_BG','t_range'])
-       FULL_BG=dataload['FULL_BG']
-       t_range1=dataload['t_range']
-       t_min=t_range1[0,0]
-       t_max=t_range1[0,1]
-      
-       del dataload
-      
-       print("{0}{1}".format("Skipping file...", filename1))
-       bytes1,house,images,rois,ushort,Header,I,R,H = \
-           False, False, False, False, False, False, False, False, False
-       return (FULL_BG,t_min,t_max)
-       
-   fid = open("{0}{1}".format(path1, filename1), "rb")
-   print("{0}{1}".format("Reading file...", filename1))
-   bytes1=fid.read()
-   print("done")
-      
-   lb=len(bytes1)
-   # make bytes1 even
-   if np.mod(lb,2) != 0:
-       bytes1=bytes1[0:-1]
-       lb=lb-1
-     
-   order=np.mgrid[0:int(len(bytes1)/2)]
-   # https://stackoverflow.com/questions/45187101/converting-bytearray-to-short-int-in-python
-   ushort1=unpack('H'*int(lb/2), bytes1) # the H means ushort int
-   order1=order
-   ushort2=unpack('H'*int((lb)/2), bytes1[1:len(bytes1)] + b'1') # append a byte
-   order2=order[1:len(order)+1]
-      
-   # append the two tuples
-   #http://datos.io/2016/10/04/python-memory-issues-tips-and-tricks/
-   #ushort="{0}{1}".format(ushort1,ushort2)
-   ushort=ushort1+ushort2
-      
-   del ushort1, ushort2
-   # append two nmpy arrays
-   order=np.append(order1,order2)
-       
-   del order1, order2
-      
-   bytes1=pack('H'*int(lb), *ushort) # the H means ushort int
-      
-      
-   ushort=np.asarray(ushort)
-      
-   #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   #find the positions of the start of block marks ++++++++++++++++++++++++++
-   #484B
-   print('Finding house keeping...')
-   if cpiv1:
-      house,=np.where(ushort==int('0xa1d7',0))
-   else:
-      house,=np.where(ushort==int('0x484B',0))
-   print('done')
-      
-   # A3D5
-   print('Finding image data...')
-   images,=np.where(ushort==int('0xa3d5',0)) 
-   print('done')
-      
-   #B2E6
-   print('Finding roi data...')
-   rois,=np.where(ushort==int('0xb2e6',0)) 
-   print('done')
-      
-   fid.close()
-   #--------------------------------------------------------------------------
-      
-   # Garbage collection:
-   # https://stackoverflow.com/questions/1316767/how-can-i-explicitly-free-memory-in-python
-   gc.collect()
-   del gc.garbage[:]
-      
-      
-   #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   #convert the bytes1 to Header, Images and ROI structs +++++++++++++++++++++
-   print('Post-processing data, stage 1...')
-   Header=convertDataToHeaderSA(ushort)
-   (I,images)=convertDataToImageSA(bytes1,ushort,order,images)
-   (R,rois)=convertDataToROISA(bytes1,ushort,order,rois)
-   (H)=convertDataToHouseSA(bytes1,ushort,order,house,cpiv1)
-   print('done')
-   #--------------------------------------------------------------------------
-      
-      
-    
-   #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   # extract the images, times, etc ++++++++++++++++++++++++++++++++++++++++++
-   print('Post-processing data, stage 2...')
-   (ROI_N,HOUSE,IMAGE1)=postProcess(bytes1,rois,R,H,I,Header,cpiv1)
-   print('done')
-   #--------------------------------------------------------------------------
-    
-    
-   # Garbage collection:
-   gc.collect()
-   del gc.garbage[:]
-    
-    
-   #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   #Backgrounds +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-   print('Getting backgrounds...')
-   FULL_BG1=fullBackgrounds(ROI_N,cpiv1) # append here
-   if len(FULL_BG1['Time']):
-       temp_name=tempfile.mktemp()
-       sio.savemat(temp_name,{'FULL_BG':FULL_BG1})
-       dataload=sio.loadmat(temp_name,variable_names=['FULL_BG'])
-       FULL_BG1=dataload['FULL_BG']
-       del dataload
-      
-       r=len(FULL_BG['IMAGE'][0,0])
-       if r>0:
-           FULL_BG['IMAGE'][0,0]=np.append(FULL_BG['IMAGE'][0,0], \
-             FULL_BG1['IMAGE'][0,0],axis=1)
-           FULL_BG['Time'][0,0]=np.append(FULL_BG['Time'][0,0], \
-             FULL_BG1['Time'][0,0],axis=0)
-       else: # append
-           FULL_BG=FULL_BG1
-   print('done')
-   #--------------------------------------------------------------------------
-   
-   #https://stackoverflow.com/questions/10012788/python-find-min-max-of-two-lists
-   t_min=np.minimum(np.min(ROI_N['Time']),t_min)
-   t_max=np.maximum(np.max(ROI_N['Time']),t_max)
-   
-   t_range=np.array([np.floor(t_min*86400/dt)*dt/86400, 
-                     np.ceil(t_max*86400/dt)*dt/86400])
-    
-   if save_files:
-       #https://docs.scipy.org/doc/scipy/reference/tutorial/io.html
-       print('Saving to file...')
-       sio.savemat("{0}{1}".format(path1, filename1.replace('.roi','.mat')),
-                   {'ROI_N':ROI_N, 'HOUSE':HOUSE,'IMAGE1':IMAGE1})
-       sio.savemat("{0}{1}".format(path1, 'full_backgrounds.mat'),
-                   {'FULL_BG':FULL_BG,'t_range':t_range})
-       print('done')
-      
-   del ROI_N, HOUSE, IMAGE1
-   # Garbage collection:
-   gc.collect()
-   del gc.garbage[:]
-       
-   return (FULL_BG,t_min,t_max)
-    
-   
-def mult_job2(path1,filename1,FULL_BG,save_files,cpiv1):
-    # load from file
-    print('Loading from file...')
-    #https://stackoverflow.com/questions/7008608/scipy-io-loadmat-nested-structures-i-e-dictionaries      
-    dataload=sio.loadmat("{0}{1}".format(path1, filename1.replace('.roi','.mat')),
-                           variable_names=['ROI_N','HOUSE','IMAGE1'])
-    #dataload['ROI_N']['StartX'][0,0][0,:]
-    ROI_N=dataload['ROI_N']
-    HOUSE=dataload['HOUSE']
-    IMAGE1=dataload['IMAGE1']
-    del dataload
-      
-    print('done')
+    FULL_BG, t_min, t_max = _load_background_state(path1)
+
+    roi_file = os.path.join(path1, filename1)
+    print(f"Reading file...{filename1}")
+    with open(roi_file, "rb") as fid:
+        raw_bytes = fid.read()
+    print("done")
+
+    # The legacy reader searches both 16-bit alignments.  NumPy reproduces the
+    # same representation without the very large Python tuples created by
+    # struct.unpack('H' * N, ...).
+    if len(raw_bytes) % 2:
+        raw_bytes = raw_bytes[:-1]
+    nwords = len(raw_bytes) // 2
+
+    aligned = np.frombuffer(raw_bytes, dtype=np.dtype("=u2"))
+    shifted = np.frombuffer(raw_bytes[1:] + b"1", dtype=np.dtype("=u2"))
+    ushort = np.concatenate((aligned, shifted))
+
+    # Map the two alignments back to their approximate original word order.
+    # The final shifted word contains the artificial pad byte and should never
+    # be a valid block marker, but giving it an order value keeps lengths safe.
+    order = np.concatenate(
+        (np.arange(nwords, dtype=np.uint32), np.arange(1, nwords + 1, dtype=np.uint32))
+    )
+    bytes1 = ushort.tobytes()
+
+    print("Finding house keeping...")
+    if cpiv1:
+        house = np.flatnonzero(ushort == int("0xa1d7", 0))
+    else:
+        house = np.flatnonzero(ushort == int("0x484B", 0))
+    print("done")
+
+    print("Finding image data...")
+    images = np.flatnonzero(ushort == int("0xa3d5", 0))
+    print("done")
+
+    print("Finding roi data...")
+    rois = np.flatnonzero(ushort == int("0xb2e6", 0))
+    print("done")
+
+    print("Post-processing data, stage 1...")
+    Header = convertDataToHeaderSA(ushort)
+    I, images = convertDataToImageSA(bytes1, ushort, order, images)
+    R, rois = convertDataToROISA(bytes1, ushort, order, rois)
+    H = convertDataToHouseSA(bytes1, ushort, order, house, cpiv1)
+    print("done")
+
+    print("Post-processing data, stage 2...")
+    ROI_N, HOUSE, IMAGE1 = postProcess(bytes1, rois, R, H, I, Header, cpiv1)
+    print("done")
+
+    print("Getting backgrounds...")
+    FULL_BG1 = fullBackgrounds(ROI_N, cpiv1)
+    if len(FULL_BG1["Time"]):
+        FULL_BG1 = _as_matlab_struct(FULL_BG1)
+        existing = len(FULL_BG["IMAGE"][0, 0])
+        if existing > 0:
+            FULL_BG["IMAGE"][0, 0] = np.append(
+                FULL_BG["IMAGE"][0, 0], FULL_BG1["IMAGE"][0, 0], axis=1
+            )
+            FULL_BG["Time"][0, 0] = np.append(
+                FULL_BG["Time"][0, 0], FULL_BG1["Time"][0, 0], axis=0
+            )
+        else:
+            FULL_BG = FULL_BG1
+    print("done")
+
+    if ROI_N["Time"].size == 0:
+        raise RuntimeError(f"No ROI times found in {filename1}")
+    t_min = min(float(np.min(ROI_N["Time"])), t_min)
+    t_max = max(float(np.max(ROI_N["Time"])), t_max)
+    t_range = np.array(
+        [np.floor(t_min * 86400 / dt) * dt / 86400, np.ceil(t_max * 86400 / dt) * dt / 86400]
+    )
+
+    print("Saving to file...")
+    atomic_savemat(mat_file, {"ROI_N": ROI_N, "HOUSE": HOUSE, "IMAGE1": IMAGE1})
+    atomic_savemat(state_file, {"FULL_BG": FULL_BG, "t_range": t_range})
+    print("done")
 
 
+def mult_job2(path1, filename1, cpiv1):
+    """Second-sweep worker: associate the complete background set with one file."""
+    path1 = normalise_directory(path1)
+    mat_file = os.path.join(path1, filename1.replace(".roi", ".mat"))
+    state_file = os.path.join(path1, "full_backgrounds.mat")
 
-    #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    # Assocate backgrounds ++++++++++++++++++++++++++++++++++++++++++++++++
-    print("{0}{1}".format('Associate backgrounds...', filename1))
-    BG=associateBackgrounds(ROI_N,FULL_BG)
-    print('done')
-    #----------------------------------------------------------------------
-    
-    
-    if save_files:
-        #https://docs.scipy.org/doc/scipy/reference/tutorial/io.html
-        print('Saving to file...')
-        sio.savemat("{0}{1}".format(path1, filename1.replace('.roi','.mat')),
-                      {'ROI_N':ROI_N, 'HOUSE':HOUSE,'IMAGE1':IMAGE1,'BG':BG})
-        #with open(path1 + filename[i].replace('.roi','.mat'),'ab') as f:
-        #   sio.savemat(f, {'BG':BG})
-        print('done')
+    print("Loading from file...")
+    data = sio.loadmat(mat_file, variable_names=["ROI_N", "HOUSE", "IMAGE1"])
+    ROI_N = data["ROI_N"]
+    HOUSE = data["HOUSE"]
+    IMAGE1 = data["IMAGE1"]
+    full_data = sio.loadmat(state_file, variable_names=["FULL_BG"])
+    FULL_BG = full_data["FULL_BG"]
+    print("done")
+
+    print(f"Associate backgrounds...{filename1}")
+    BG = associateBackgrounds(ROI_N, FULL_BG)
+    print("done")
+
+    print("Saving to file...")
+    atomic_savemat(
+        mat_file, {"ROI_N": ROI_N, "HOUSE": HOUSE, "IMAGE1": IMAGE1, "BG": BG}
+    )
+    print("done")
 
 
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        raise SystemExit("ROIDataDriver worker mode required")
 
-    del ROI_N, HOUSE, IMAGE1, BG
-
-    # Garbage collection:
-    gc.collect()
-    del gc.garbage[:]    
-
-    return
+    mode = sys.argv[1]
+    if mode == "driver":
+        if len(sys.argv) != 6:
+            raise SystemExit(
+                "usage: ROIDataDriver.py driver PATH DT PROCESS_EXISTING CPIV1"
+            )
+        driver_path = normalise_directory(sys.argv[2])
+        driver_files = sorted(
+            f for f in os.listdir(driver_path) if f.endswith(".roi")
+        )
+        ROIDataDriver(
+            driver_path,
+            driver_files,
+            float(sys.argv[3]),
+            parse_bool(sys.argv[4]),
+            parse_bool(sys.argv[5]),
+        )
+    elif mode == "sweep1":
+        if len(sys.argv) != 7:
+            raise SystemExit(
+                "usage: ROIDataDriver.py sweep1 PATH FILE DT PROCESS_EXISTING CPIV1"
+            )
+        mult_job(
+            sys.argv[2],
+            sys.argv[3],
+            float(sys.argv[4]),
+            parse_bool(sys.argv[5]),
+            parse_bool(sys.argv[6]),
+        )
+    elif mode == "sweep2":
+        if len(sys.argv) != 5:
+            raise SystemExit("usage: ROIDataDriver.py sweep2 PATH FILE CPIV1")
+        mult_job2(sys.argv[2], sys.argv[3], parse_bool(sys.argv[4]))
+    else:
+        raise SystemExit(f"Unknown worker mode: {mode}")

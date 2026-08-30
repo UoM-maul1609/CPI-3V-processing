@@ -1,38 +1,15 @@
+#!/usr/bin/env python3
+"""Compatibility launcher for the maintained PySide6 calibration GUI."""
+
+from pathlib import Path
 import sys
-import matplotlib
-import os
+
+PYTHON_ROOT = Path(__file__).resolve().parents[1]
+if str(PYTHON_ROOT) not in sys.path:
+    sys.path.insert(0, str(PYTHON_ROOT))
+
+from calibration.gui import main
 
 
-matplotlib.use('Qt5Agg')
-
-from PySide6.QtWidgets import QMainWindow, QApplication
-
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg
-from matplotlib.figure import Figure
-
-
-class MplCanvas(FigureCanvasQTAgg):
-
-    def __init__(self, parent=None, width=5, height=4, dpi=100):
-        fig = Figure(figsize=(width, height), dpi=dpi)
-        self.axes = fig.add_subplot(111)
-        super(MplCanvas, self).__init__(fig)
-
-
-class MainWindow(QMainWindow):
-
-    def __init__(self, *args, **kwargs):
-        super(MainWindow, self).__init__(*args, **kwargs)
-
-        # Create the maptlotlib FigureCanvas object,
-        # which defines a single set of axes as self.axes.
-        sc = MplCanvas(self, width=5, height=4, dpi=100)
-        sc.axes.plot([0,1,2,3,4], [10,1,20,3,40])
-        self.setCentralWidget(sc)
-
-        self.show()
-
-
-app = QApplication(sys.argv)
-w = MainWindow()
-app.exec()
+if __name__ == "__main__":
+    raise SystemExit(main())

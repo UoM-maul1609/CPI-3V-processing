@@ -54,7 +54,7 @@ for mo in inputs:
                 
             #split1=int(0.8*i1)
             if ii == 0:
-                if ~auxLoad:
+                if not auxLoad:
                     i11=100000
                     i22=10000
                     indices = np.random.permutation(i1)

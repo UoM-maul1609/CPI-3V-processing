@@ -57,15 +57,14 @@ orderROIs=cat(1,R.order);
 timeROIs=zeros(length(R),1);
 imageTypeROIs=zeros(length(R),1);
 
-for i=1:length(orderImage)-1
-    ind=find(orderImage(i)<orderROIs & orderImage(i+1)>orderROIs );
-    timeROIs(ind)=Time(i);
-    imageTypeROIs(ind)=imageType(i);
+% Each ROI belongs to the immediately preceding IMAGE marker in file order.
+% discretize replaces the historical O(Nimage*Nroi) scan.
+if ~isempty(orderImage)
+    parentImage=discretize(orderROIs,[orderImage(:); Inf]);
+    valid=~isnan(parentImage);
+    timeROIs(valid)=Time(parentImage(valid));
+    imageTypeROIs(valid)=imageType(parentImage(valid));
 end
-i=length(orderImage);
-ind=find(orderImage(i)<orderROIs );
-timeROIs(ind)=Time(i);
-imageTypeROIs(ind)=imageType(i);
 %--------------------------------------------------------------------------
 
 

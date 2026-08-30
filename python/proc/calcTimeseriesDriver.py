@@ -1,188 +1,171 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-Created on Mon Mar 12 10:05:02 2018
+"""Calculate CPI concentration time series from per-file particle statistics."""
 
-@author: mccikpc2
-"""
-import scipy.io as sio
-import numpy as np
+from __future__ import annotations
+
 import os
+
+import numpy as np
+import scipy.io as sio
 from scipy.interpolate import interp1d
 
-def calcTimeseriesDriver(path1,filename1,foc_crit,dt,ds,vel,outputfile,cpiv1):
-    
-    # note, numpy.histogramdd might be better
-    save_files=True
-    sa=1280.*1024./np.sqrt(2.)*2.3e-6**2  # sample area of image perp to flow
-    sv=sa*np.sqrt(2.)*3e-3             # sample volume of one image
-
-    dataload=sio.loadmat("{0}{1}".format(path1, 'full_backgrounds.mat'),\
-                         variable_names=['t_range'])
-    t_range=dataload['t_range']
-
-    print('====================calculating timeseries=========================')
+from io_utils import atomic_savemat, normalise_directory
 
 
-    print('Set-up arrays')
-    dt2=dt/86400.
-    Time=np.mgrid[t_range[0,0]:t_range[0,1]+dt2:dt2]
-    size1=np.mgrid[0:2300+ds:ds]
-    size1a=np.mgrid[0:2300+ds*2.:ds]
-    ar1=np.mgrid[0:1.2:0.2]
-    nt=len(Time)
-    nl=len(size1)
-    na=len(ar1)
-    timeser={'Time':Time,
-             'size1':size1,
-             'size2':size1+ds,
-             'midsize':(size1+size1+ds)/2.,
-             'ar1':ar1,
-             'ar2':ar1+0.2,
-             'conc2':np.zeros((nt,nl)),
-             'conc':np.zeros((nt,1)),
-             'deadtimes':np.zeros((nt,1)),
-             'nimages':np.zeros((nt,1)),
-             'conc2ar':np.zeros((nt,nl,na))}
-    array=np.zeros((nt,nl))
+def _field_names(mat_struct):
+    names = getattr(mat_struct.dtype, "names", None)
+    return set(names or ())
 
 
+def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cpiv1):
+    path1 = normalise_directory(path1)
+    sa = 1280.0 * 1024.0 / np.sqrt(2.0) * 2.3e-6**2
+    sv = sa * np.sqrt(2.0) * 3e-3
 
+    background_data = sio.loadmat(
+        os.path.join(path1, "full_backgrounds.mat"), variable_names=["t_range"]
+    )
+    t_range = background_data["t_range"]
 
+    print("====================calculating timeseries=========================")
+    print("Set-up arrays")
 
-    for i in range(len(filename1)):
-        # load from file
-        print('Loading from file...')
-        dataload=sio.loadmat("{0}{1}".format(path1, filename1[i].replace('.roi','.mat')),
-                           variable_names=['ROI_N','HOUSE','IMAGE1','BG','dat'])
-        ROI_N=dataload['ROI_N']
-        HOUSE=dataload['HOUSE']
-        IMAGE1=dataload['IMAGE1']
-        BG=dataload['BG']
-        dat=dataload['dat']
-        print('done')
-        
-        #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-        
-        
-        
-        # Calculate timeseries ++++++++++++++++++++++++++++++++++++++++++++++++
-        print('Calculate timeseries...')
+    dt_days = dt / 86400.0
+    Time = np.arange(t_range[0, 0], t_range[0, 1] + 0.5 * dt_days, dt_days)
+    size1 = np.arange(0, 2300 + ds, ds)
+    size_edges = np.arange(0, 2300 + 2 * ds, ds)
+    ar1 = np.arange(0.0, 1.2, 0.2)
+    ar_edges = np.append(ar1, ar1[-1] + 0.2)
 
+    nt = len(Time)
+    nl = len(size1)
+    na = len(ar1)
+    time_edges = np.concatenate((Time - dt_days / 2.0, [Time[-1] + dt_days / 2.0]))
+
+    timeser = {
+        "Time": Time,
+        "size1": size1,
+        "size2": size1 + ds,
+        "midsize": size1 + ds / 2.0,
+        "ar1": ar1,
+        "ar2": ar1 + 0.2,
+        "conc2": np.zeros((nt, nl), dtype=float),
+        "conc": np.zeros((nt, 1), dtype=float),
+        "deadtimes": np.zeros((nt, 1), dtype=float),
+        "nimages": np.zeros((nt, 1), dtype=float),
+        "conc2ar": np.zeros((nt, nl, na), dtype=float),
+    }
+
+    image_type_value = 33857 if cpiv1 else 89
+
+    for filename in filename1:
+        print(f"Loading from file... {filename}")
+        mat_file = os.path.join(path1, filename.replace(".roi", ".mat"))
+        data = sio.loadmat(mat_file, variable_names=["HOUSE", "IMAGE1", "dat"])
+        HOUSE = data["HOUSE"]
+        IMAGE1 = data["IMAGE1"]
+        dat = data["dat"]
+
+        # New files carry imageType in dat, avoiding the very large ROI_N image
+        # structure.  Fall back for already-processed legacy MAT files.
+        if "imageType" in _field_names(dat):
+            image_types = dat["imageType"][0, 0][0, :]
+        else:
+            legacy = sio.loadmat(mat_file, variable_names=["ROI_N"])
+            image_types = legacy["ROI_N"]["imageType"][0, 0][:, 0]
+
+        focus = dat["foc"][0, 0]["focus"][0, :]
+        selected = (image_types == image_type_value) & (focus > foc_crit)
+        ind = np.flatnonzero(selected)
+
+        # Number of image frames in each time window.
+        image_times = np.asarray(IMAGE1["Time1"][0, 0][:, 0], dtype=float)
+        if image_times.size:
+            counts, _ = np.histogram(image_times, bins=time_edges)
+            timeser["nimages"][:, 0] += counts
+
+        # Dead time.  The CPIV1 clock can be put directly on the MATLAB-day
+        # time base, so this path is vectorized.  Retain the legacy interpolation
+        # for the older clock representation.
         if cpiv1:
-            ind,=np.where((ROI_N['imageType'][0,0][:,0] == 33857) & \
-                      (dat['foc'][0,0]['focus'][0,:] >foc_crit))
+            if image_times.size:
+                house_raw = np.asarray(HOUSE["Time"][0, 0][0, :], dtype=float)
+                house_time = (
+                    house_raw / 86400.0
+                    - np.floor(house_raw / 86400.0)
+                    + np.floor(image_times[0])
+                )
+                deadtime = np.asarray(HOUSE["deadtime"][0, 0][:, 0], dtype=float)
+                dead_hist, _ = np.histogram(
+                    house_time, bins=time_edges, weights=deadtime
+                )
+                timeser["deadtimes"][:, 0] += dead_hist
         else:
-            ind,=np.where((ROI_N['imageType'][0,0][:,0] == 89) & \
-                      (dat['foc'][0,0]['focus'][0,:] >foc_crit))
-                      
-        
-        if(len(ind)==0):
-            continue
-        tmin=np.min(ROI_N['Time'][0,0][ind,0])
-        tmax=np.max(ROI_N['Time'][0,0][ind,0])
-        ilow,=np.where(timeser['Time']>=tmin)
-        ilow=ilow[0]
-        ihigh,=np.where(timeser['Time']<tmax)
-        ihigh=ihigh[-1]
-        
-        
-        
-        
-        #=======time loop======================================================
-        f=interp1d(IMAGE1['Time1'][0,0][:,0], \
-                   IMAGE1['Time'][0,0][0,:].T, \
-                   kind='linear',fill_value='extrapolate')
-        
-        for j in range(ilow,ihigh+1):
-            # dead-time: find imge data that are in the time-window
-                        # find corresponding funny time of tiem-windown
-                        # add up dead-times
-            indim,=np.where((IMAGE1['Time1'][0,0][:,0]>=(timeser['Time'][j]-dt2/2.)) & \
-                      (IMAGE1['Time1'][0,0][:,0]<(timeser['Time'][j]+dt2/2.)))
-            # interpolation:
-            try:
-                if not cpiv1:
-                    twin1=np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.])
-                    twin=f(np.array([timeser['Time'][j]-dt2/2., timeser['Time'][j]+dt2/2.]))
-                    tclock = (np.max(IMAGE1['Time'][0,0][0,:])-np.min(IMAGE1['Time'][0,0][0,:]))/ \
-                        (np.max(IMAGE1['Time1'][0,0][:,0])-np.min(IMAGE1['Time1'][0,0][:,0]))* \
-                            (twin1 - np.min(IMAGE1['Time1'][0,0][:,0])) + np.min(IMAGE1['Time'][0,0][0,:])
-                    indho,=np.where((HOUSE['Time'][0,0][0,:]  >=twin[0]) & \
-                                    (HOUSE['Time'][0,0][0,:]< twin[1]))
-                    timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
-                else:
-                    indho,=np.where(\
-                        (HOUSE['Time'][0,0][0,:]/86400.-\
-                         np.floor(HOUSE['Time'][0,0][0,:]/86400.)+\
-                             np.floor(IMAGE1['Time1'][0,0][0,:]) \
-                             >=(timeser['Time'][j]-dt2/2.)) & \
-                        (HOUSE['Time'][0,0][0,:]/86400.-\
-                         np.floor(HOUSE['Time'][0,0][0,:]/86400.)+\
-                             np.floor(IMAGE1['Time1'][0,0][0,:]) \
-                             < (timeser['Time'][j]+dt2/2.)))
-                    timeser['deadtimes'][j]=np.nansum(HOUSE['deadtime'][0,0][indho,0])
-            except:
-                timeser['deadtimes'][j]=0.0
+            image_clock = np.asarray(IMAGE1["Time"][0, 0][0, :], dtype=float)
+            if image_times.size >= 2 and image_clock.size >= 2:
+                clock_map = interp1d(
+                    image_times,
+                    image_clock.T,
+                    kind="linear",
+                    fill_value="extrapolate",
+                )
+                house_time = np.asarray(HOUSE["Time"][0, 0][0, :], dtype=float)
+                house_dead = np.asarray(HOUSE["deadtime"][0, 0][:, 0], dtype=float)
+                for j in range(nt):
+                    twin = clock_map(time_edges[j : j + 2])
+                    in_window = (house_time >= twin[0]) & (house_time < twin[1])
+                    timeser["deadtimes"][j, 0] += np.nansum(house_dead[in_window])
 
-            timeser['nimages'][j]=len(indim)
-            
-            
-            
-            # particles:
-            ind2,=np.where((dat['Time'][0,0][0,ind]>=(timeser['Time'][j]-dt2/2.)) & \
-                (dat['Time'][0,0][0,ind]<(timeser['Time'][j]+dt2/2)))
-            timeser['conc'][j]=timeser['conc'][j]+len(ind2)
-            
-            
-            
-            # size bins========================================================
-            (N,X)=np.histogram(dat['len'][0,0][ind[ind2],0],size1a)
-            timeser['conc2'][j,:]=timeser['conc2'][j,:]+N
-            #------------------------------------------------------------------
-            
-            # size and roundness bins==========================================
-            for k in range(0,na):
-                ind3=ind[ind2]
-                ind4,=np.where((dat['round'][0,0][ind3,0]>= timeser['ar1'][k]) & \
-                    (dat['round'][0,0][ind3,0]< timeser['ar2'][k]) )
-                (N,X)=np.histogram(dat['len'][0,0][ind3[ind4],0],size1a)
-                timeser['conc2ar'][j,:,k]=timeser['conc2ar'][j,:,k]+N     
-            #------------------------------------------------------------------
-            
-        #----------------------------------------------------------------------
-            
-            
-            
-            
-    # scale by sample volume
-    dead=np.transpose(np.tile(timeser['deadtimes'].T,(nl,na,1)), (2,0,1))
-    nimages=np.transpose(np.tile(timeser['nimages'].T,(nl,na,1)), (2,0,1))
-    timeser['conc2ar']=timeser['conc2ar']/((dt-dead)*vel*sa+nimages*sv)
-    
-    timeser['conc2']=np.nansum(timeser['conc2ar'],axis=2)
-    timeser['conc']=np.nansum(timeser['conc2'],axis=1)
-    
-    
-    
-    
-    print('done')
-    #----------------------------------------------------------------------
-    
-    
-    if save_files:
-        # save to file
-        print('Saving to file...')
-        if os.path.exists("{0}{1}".format(path1, outputfile)):
-            # save / append
-            #print("should be appending")
-            sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
-        else:
-            sio.savemat("{0}{1}".format(path1, outputfile),{'timeser':timeser})  
-            
-        print('done')
+        if ind.size:
+            particle_times = np.asarray(dat["Time"][0, 0][0, ind], dtype=float)
+            lengths = np.asarray(dat["len"][0, 0][ind, 0], dtype=float)
+            roundness = np.asarray(dat["round"][0, 0][ind, 0], dtype=float)
+            histogram, _ = np.histogramdd(
+                (particle_times, lengths, roundness),
+                bins=(time_edges, size_edges, ar_edges),
+            )
+            timeser["conc2ar"] += histogram
 
-    return
-    
-    
-    
+    # Scale counts by the effective sampled volume.  Broadcasting avoids the
+    # two large tiled arrays created by the old implementation.
+    effective_volume = (
+        (dt - timeser["deadtimes"][:, 0]) * vel * sa
+        + timeser["nimages"][:, 0] * sv
+    )
+    valid = effective_volume > 0
+    scaled = np.full_like(timeser["conc2ar"], np.nan, dtype=float)
+    scaled[valid, :, :] = (
+        timeser["conc2ar"][valid, :, :] / effective_volume[valid, None, None]
+    )
+    timeser["conc2ar"] = scaled
+    timeser["conc2"] = np.nansum(timeser["conc2ar"], axis=2)
+    timeser["conc"] = np.nansum(timeser["conc2"], axis=1)
+
+    print("done")
+    print("Saving to file...")
+    atomic_savemat(os.path.join(path1, outputfile), {"timeser": timeser})
+    print("done")
+
+
+if __name__ == "__main__":
+    import sys
+    from io_utils import parse_bool
+
+    if len(sys.argv) != 9 or sys.argv[1] != "worker":
+        raise SystemExit(
+            "usage: calcTimeseriesDriver.py worker PATH FOC DT DS VEL OUTPUT CPIV1"
+        )
+    worker_path = normalise_directory(sys.argv[2])
+    worker_files = sorted(
+        f for f in os.listdir(worker_path) if f.endswith(".roi")
+    )
+    calcTimeseriesDriver(
+        worker_path,
+        worker_files,
+        float(sys.argv[3]),
+        float(sys.argv[4]),
+        float(sys.argv[5]),
+        float(sys.argv[6]),
+        sys.argv[7],
+        parse_bool(sys.argv[8]),
+    )
