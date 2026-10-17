@@ -90,7 +90,13 @@ class ParticleRecord:
     stage_x: float = float("nan")
     stage_y: float = float("nan")
     status: str = "undecided"
+    reject_reason: str = ""
     object_plane_um: float = 0.0
+    actual_length_um: float = float("nan")
+    actual_width_um: float = float("nan")
+    instrument: str = "CPI3v"
+    is_full_frame: bool = False
+    label: str = ""  # name in the shared label library (bead type, ice analogue …)
 
     @property
     def particle_id(self) -> str:
@@ -118,6 +124,8 @@ class FilterSpec:
     time_min: Optional[float] = None
     time_max: Optional[float] = None
     status: Optional[str] = None
+    ratio_min: Optional[float] = None
+    ratio_max: Optional[float] = None
 
     def matches(self, record: ParticleRecord) -> bool:
         checks = (
@@ -132,6 +140,10 @@ class FilterSpec:
             if lower is not None and (not math.isfinite(value) or value < lower):
                 return False
             if upper is not None and (not math.isfinite(value) or value > upper):
+                return False
+        if self.ratio_min is not None or self.ratio_max is not None:
+            ratio = record.length_um / record.actual_length_um if record.actual_length_um > 0 else float("nan")
+            if not math.isfinite(ratio) or (self.ratio_min is not None and ratio < self.ratio_min) or (self.ratio_max is not None and ratio > self.ratio_max):
                 return False
         if self.status and self.status != "all" and record.status != self.status:
             return False
@@ -148,32 +160,66 @@ class PositionLog:
         self.y = np.asarray(y, dtype=float)[order]
 
     @classmethod
-    def from_text(cls, filename: os.PathLike) -> "PositionLog":
+    def from_text(cls, filename: os.PathLike, series: str = "beads", time_basis: str = "roi") -> "PositionLog":
+        """Read historical stage logs or consolidated interval CSV (zero-order hold).
+
+        For consolidated CSV, limit to one series and time basis to avoid
+        overlapping full-frame/ROI intervals masquerading as stage changes.
+        The original instrument clock timezone is not inferred.
+        """
+        path = Path(filename)
         times: List[float] = []
         xs: List[float] = []
         ys: List[float] = []
-        with open(filename, "r", encoding="utf-8") as handle:
-            rows = handle.readlines()
-        for row in rows[1:]:
-            parts = row.split()
-            if len(parts) < 4:
-                continue
-            try:
-                xs.append(float(parts[0]))
-                ys.append(float(parts[1]))
-                timestamp = datetime.strptime(parts[2] + " " + parts[3], "%d/%m/%y %H:%M:%S")
-            except ValueError:
-                continue
-            times.append(datetime_to_matlab_datenum(timestamp))
+        if path.suffix.lower() in (".csv", ".tsv"):
+            with path.open("r", encoding="utf-8-sig", newline="") as handle:
+                sample = handle.read(2048); handle.seek(0)
+                dialect = csv.excel_tab if path.suffix.lower() == ".tsv" else csv.excel
+                reader = csv.DictReader(handle, dialect=dialect)
+                fields = set(reader.fieldnames or [])
+                if not {"stage_x_original", "stage_z_original", "start_time"}.issubset(fields):
+                    raise ValueError("CSV needs stage_x_original, stage_z_original and start_time columns")
+                for row in reader:
+                    if row.get("series", series) != series or row.get("time_basis", time_basis) != time_basis:
+                        continue
+                    try:
+                        stamp = datetime.fromisoformat(row["start_time"].strip())
+                        xs.append(float(row["stage_x_original"]))
+                        ys.append(float(row["stage_z_original"]))
+                        times.append(datetime_to_matlab_datenum(stamp))
+                    except (ValueError, TypeError):
+                        continue
+        else:
+            with path.open("r", encoding="utf-8-sig") as handle:
+                for row in list(handle)[1:]:
+                    parts = row.split()
+                    if len(parts) < 4:
+                        continue
+                    try:
+                        xx, zz = float(parts[0]), float(parts[1])
+                        stamp = " ".join(parts[2:4])
+                        parsed = None
+                        for fmt in ("%d/%m/%y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+                            try:
+                                parsed = datetime.strptime(stamp, fmt)
+                                break
+                            except ValueError:
+                                pass
+                        if parsed is not None:
+                            xs.append(xx); ys.append(zz)
+                            times.append(datetime_to_matlab_datenum(parsed))
+                    except (ValueError, IndexError):
+                        continue
         if not times:
-            raise ValueError("No valid position records found in {}".format(filename))
+            raise ValueError(f"No valid position records in {filename} for {series}/{time_basis}")
         return cls(np.asarray(times), np.asarray(xs), np.asarray(ys))
 
     def previous(self, times: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         query = np.asarray(times, dtype=float)
         index = np.searchsorted(self.times, query, side="right") - 1
+        valid = index >= 0
         index = np.clip(index, 0, len(self.times) - 1)
-        return self.x[index], self.y[index]
+        return np.where(valid, self.x[index], np.nan), np.where(valid, self.y[index], np.nan)
 
 
 def list_processed_files(directory: os.PathLike) -> List[Path]:
@@ -203,7 +249,8 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
     lengths = _vector(dat.get("len"), n)
     widths = _vector(dat.get("wid"), n)
     rounds = _vector(dat.get("round"), n)
-    times = _vector(dat.get("Time", roi.get("Time")), n)
+    # Always use ROI_N.Time: dat.Time may represent a different acquisition clock.
+    times = _vector(roi.get("Time"), n)
     start_x = _vector(roi.get("StartX"), n)
     end_x = _vector(roi.get("EndX"), n)
     start_y = _vector(roi.get("StartY"), n)
@@ -237,6 +284,7 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
                 image_y_px=float((start_y[i] + end_y[i]) * 0.5),
                 centroid_row_px=float(centroids[i, 0]),
                 centroid_col_px=float(centroids[i, 1]),
+                is_full_frame=bool((end_x[i] - start_x[i] >= 900) and (end_y[i] - start_y[i] >= 900)),
             )
         )
     return records
@@ -319,6 +367,11 @@ class ParticleCatalog:
                 status = row.get("status", "undecided")
                 if status in {"undecided", "keep", "reject"}:
                     record.status = status
+                record.reject_reason = row.get("reject_reason", "")
+                record.label = (row.get("label") or "").strip()
+                for field in ("actual_length_um", "actual_width_um", "instrument"):
+                    if row.get(field) not in (None, ""):
+                        setattr(record, field, row[field] if field == "instrument" else float(row[field]))
                 try:
                     record.object_plane_um = float(row.get("object_plane_um", 0.0))
                 except ValueError:
@@ -328,8 +381,8 @@ class ParticleCatalog:
         fieldnames = [
             "particle_id", "source_file", "roi_index", "time_matlab", "time_iso",
             "length_um", "width_um", "focus", "roundness", "image_x_px", "image_y_px",
-            "centroid_row_px", "centroid_col_px", "stage_x", "stage_y", "status",
-            "object_plane_um",
+            "centroid_row_px", "centroid_col_px", "stage_x", "stage_y", "status", "reject_reason",
+            "object_plane_um", "actual_length_um", "actual_width_um", "instrument", "label",
         ]
         destination = Path(filename)
         destination.parent.mkdir(parents=True, exist_ok=True)
