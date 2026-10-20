@@ -8,13 +8,14 @@ files does not cause the GUI process RSS to grow with SciPy/NumPy allocations.
 from __future__ import annotations
 
 import csv
+import functools
 import json
 import math
 import os
 import subprocess
 import sys
 import tempfile
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -24,6 +25,46 @@ import scipy.io as sio
 
 
 EXCLUDED_MAT_FILES = {"timeseries.mat", "full_backgrounds.mat"}
+
+
+def particle_key(time_matlab, image_x_px, image_y_px):
+    """Processing-independent identity of a ROI: (time in ms, StartX+EndX, StartY+EndY).
+
+    ``roi_index`` can change when files are reprocessed with different
+    criteria, and length/focus change with the algorithm, but the ROI's
+    acquisition time and its position on the camera come straight from the
+    raw data.  ``image_x_px`` is the ROI centre (StartX+EndX)/2, so twice it is
+    an exact integer.  Returns None if any value is missing.
+    """
+    try:
+        t, x, y = float(time_matlab), float(image_x_px), float(image_y_px)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(t) and math.isfinite(x) and math.isfinite(y)):
+        return None
+    return (int(round(t * 86400000.0)), int(round(2 * x)), int(round(2 * y)))
+
+
+@dataclass
+class MatchReport:
+    """Outcome of re-attaching saved flags to the loaded particles."""
+    rows: int = 0
+    same_id: int = 0          # matched, ROI index unchanged
+    remapped: int = 0         # matched by time + position, ROI index changed
+    by_id_only: int = 0       # legacy rows without time/position
+    unmatched: int = 0        # particle not in the loaded files
+    ambiguous: int = 0        # several loaded ROIs share time + position
+    id_map: Dict[str, str] = field(default_factory=dict)
+
+    def summary(self) -> str:
+        parts = [f"{self.same_id + self.remapped + self.by_id_only:,} of {self.rows:,} saved particles matched"]
+        if self.remapped:
+            parts.append(f"{self.remapped:,} re-identified by time + camera position (ROI numbering changed)")
+        if self.unmatched:
+            parts.append(f"{self.unmatched:,} not in the loaded files")
+        if self.ambiguous:
+            parts.append(f"{self.ambiguous:,} ambiguous (skipped)")
+        return "; ".join(parts)
 
 
 def matlab_datenum_to_datetime(value: float) -> datetime:
@@ -97,10 +138,34 @@ class ParticleRecord:
     instrument: str = "CPI3v"
     is_full_frame: bool = False
     label: str = ""  # name in the shared label library (bead type, ice analogue …)
+    local_illum: float = float("nan")
+    detected_cpi: str = ""  # "CPI1.0" / "CPI3v" from the file's image-type codes (never from user edits)  # median brightness of the ROI's 2-px border (local illumination)
+    start_x: float = float("nan")
+    end_x: float = float("nan")
+    start_y: float = float("nan")
+    end_y: float = float("nan")
+    focus_T: float = float("nan")      # focus on transmittance (new edge method)
+    edge_touch: int = -1               # 1 = particle reaches the ROI border (size is a lower limit); -1 unknown
+    processing: str = ""               # short label of the edge method that produced len/focus
+
+    def __setattr__(self, name, value):
+        object.__setattr__(self, name, value)
+        if name in ("source_file", "roi_index"):
+            self.__dict__.pop("particle_id", None)   # the cached ID follows a renamed source
+        elif name in ("time_matlab", "image_x_px", "image_y_px"):
+            self.__dict__.pop("_key", None)
+
+    @functools.cached_property
+    def particle_id(self) -> str:
+        # Built once and then read as a plain attribute: it is asked for millions of times.
+        return "{}#{}".format(self.source_file, self.roi_index)
 
     @property
-    def particle_id(self) -> str:
-        return "{}#{}".format(self.source_file, self.roi_index)
+    def match_key(self):
+        """Stable identity that survives reprocessing (see :func:`particle_key`)."""
+        if "_key" not in self.__dict__:
+            self.__dict__["_key"] = particle_key(self.time_matlab, self.image_x_px, self.image_y_px)
+        return self.__dict__["_key"]
 
     @property
     def time_iso(self) -> str:
@@ -126,6 +191,8 @@ class FilterSpec:
     status: Optional[str] = None
     ratio_min: Optional[float] = None
     ratio_max: Optional[float] = None
+    illum_min: Optional[float] = None
+    illum_max: Optional[float] = None
 
     def matches(self, record: ParticleRecord) -> bool:
         checks = (
@@ -135,6 +202,7 @@ class FilterSpec:
             (record.image_x_px, self.x_min, self.x_max),
             (record.image_y_px, self.y_min, self.y_max),
             (record.time_matlab, self.time_min, self.time_max),
+            (record.local_illum, self.illum_min, self.illum_max),
         )
         for value, lower, upper in checks:
             if lower is not None and (not math.isfinite(value) or value < lower):
@@ -160,7 +228,8 @@ class PositionLog:
         self.y = np.asarray(y, dtype=float)[order]
 
     @classmethod
-    def from_text(cls, filename: os.PathLike, series: str = "beads", time_basis: str = "roi") -> "PositionLog":
+    def from_text(cls, filename: os.PathLike, series: Optional[str] = None,
+                  time_basis: Optional[str] = "roi") -> "PositionLog":
         """Read historical stage logs or consolidated interval CSV (zero-order hold).
 
         For consolidated CSV, limit to one series and time basis to avoid
@@ -180,7 +249,11 @@ class PositionLog:
                 if not {"stage_x_original", "stage_z_original", "start_time"}.issubset(fields):
                     raise ValueError("CSV needs stage_x_original, stage_z_original and start_time columns")
                 for row in reader:
-                    if row.get("series", series) != series or row.get("time_basis", time_basis) != time_basis:
+                    # series / time_basis = None means "use every row".  The particle
+                    # type is decided later, by flagging and labelling particles.
+                    if series is not None and row.get("series", series) != series:
+                        continue
+                    if time_basis is not None and row.get("time_basis", time_basis) != time_basis:
                         continue
                     try:
                         stamp = datetime.fromisoformat(row["start_time"].strip())
@@ -211,8 +284,33 @@ class PositionLog:
                     except (ValueError, IndexError):
                         continue
         if not times:
-            raise ValueError(f"No valid position records in {filename} for {series}/{time_basis}")
+            raise ValueError(f"No valid position records in {filename} for "
+                             f"{series or 'all series'}/{time_basis or 'all time bases'}")
         return cls(np.asarray(times), np.asarray(xs), np.asarray(ys))
+
+    @staticmethod
+    def csv_choices(filename: os.PathLike) -> Dict[str, List[str]]:
+        """Distinct ``series`` and ``time_basis`` values in a consolidated stage CSV."""
+        path = Path(filename)
+        found: Dict[str, set] = {"series": set(), "time_basis": set()}
+        if path.suffix.lower() not in (".csv", ".tsv"):
+            return {k: [] for k in found}
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            dialect = csv.excel_tab if path.suffix.lower() == ".tsv" else csv.excel
+            for row in csv.DictReader(handle, dialect=dialect):
+                for key in found:
+                    value = (row.get(key) or "").strip()
+                    if value:
+                        found[key].add(value)
+        return {k: sorted(v) for k, v in found.items()}
+
+    def conflicting_times(self) -> int:
+        """Number of identical timestamps that carry different stage positions."""
+        if len(self.times) < 2:
+            return 0
+        same = np.diff(self.times) == 0
+        moved = (np.diff(self.x) != 0) | (np.diff(self.y) != 0)
+        return int(np.count_nonzero(same & moved))
 
     def previous(self, times: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         query = np.asarray(times, dtype=float)
@@ -228,6 +326,50 @@ def list_processed_files(directory: os.PathLike) -> List[Path]:
         p for p in root.glob("*.mat")
         if p.name not in EXCLUDED_MAT_FILES and not p.name.startswith(".")
     )
+
+
+# Particle ROI image-type codes written by the two instruments (see proc/imageStats.py).
+CPI_PARTICLE_TYPES = {89: "CPI3v", 33857: "CPI1.0"}
+CPI_DISPLAY = {"CPI3v": "CPI-3V", "CPI1.0": "CPI 1.0"}
+
+
+def detect_cpi_type(image_types) -> str:
+    """'CPI3v' or 'CPI1.0' from a file's ROI image-type codes ('' if neither is present)."""
+    values = np.asarray(image_types).ravel() if image_types is not None else np.array([])
+    counts = {name: int(np.count_nonzero(values == code)) for code, name in CPI_PARTICLE_TYPES.items()}
+    best = max(counts, key=counts.get)
+    return best if counts[best] else ""
+
+
+def roi_edge_brightness(image, width: int = 2) -> float:
+    """Local illumination of a ROI: median of its outer ``width``-pixel frame.
+
+    CPI ROIs are padded, so the frame is mostly background around the
+    particle, imaged at the same moment and place.  It therefore follows both
+    the beam profile across the camera and laser-power drift in time, which
+    scale the edge-gradient focus metric.
+    """
+    im = np.asarray(image)
+    if im.ndim != 2 or min(im.shape) < 2 * width + 1:
+        return float("nan")
+    w = width
+    frame = np.concatenate((im[:w].ravel(), im[-w:].ravel(), im[w:-w, :w].ravel(), im[w:-w, -w:].ravel()))
+    return float(np.median(frame.astype(float)))
+
+
+def processing_label(proc_options) -> str:
+    """Short name of the edge method recorded in dat.proc_options ("legacy" for files without one)."""
+    if proc_options is None or (hasattr(proc_options, "size") and np.size(proc_options) == 0):
+        return "legacy (unrecorded)"
+    try:
+        opts = json.loads(str(proc_options if isinstance(proc_options, str) else np.asarray(proc_options).ravel()[0]))
+    except (ValueError, TypeError, IndexError):
+        return "unknown"
+    if opts.get("method") == "transmittance":
+        if opts.get("edge_mode") == "relative":
+            return f"transmittance relative f={opts.get('edge_fraction')} denoise={opts.get('denoise')}"
+        return f"transmittance T={opts.get('edge_level')} denoise={opts.get('denoise')}"
+    return str(opts.get("method", "unknown"))
 
 
 def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = None) -> List[ParticleRecord]:
@@ -265,8 +407,15 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
         temp[: min(n, len(flat))] = flat[:n]
         centroids = temp
 
+    detected = detect_cpi_type(roi.get("imageType"))
+    image_structs = _struct_list(roi.get("IMAGE"), n)
+    illum = [roi_edge_brightness(item.get("IM")) if "IM" in item else float("nan") for item in image_structs]
+
     foc_structs = _struct_list(dat.get("foc"), n)
     focuses = np.asarray([_safe_float(item.get("focus")) for item in foc_structs])
+    focus_T = np.asarray([_safe_float(item.get("focus_T")) for item in foc_structs])
+    edge_touch = _vector(dat.get("edge_touch"), n, default=-1)
+    processing = processing_label(dat.get("proc_options"))
 
     source = str(path.relative_to(root)) if root is not None else path.name
     records = []
@@ -285,6 +434,13 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
                 centroid_row_px=float(centroids[i, 0]),
                 centroid_col_px=float(centroids[i, 1]),
                 is_full_frame=bool((end_x[i] - start_x[i] >= 900) and (end_y[i] - start_y[i] >= 900)),
+                local_illum=float(illum[i]),
+                detected_cpi=detected,
+                start_x=float(start_x[i]), end_x=float(end_x[i]),
+                start_y=float(start_y[i]), end_y=float(end_y[i]),
+                focus_T=float(focus_T[i]),
+                edge_touch=int(edge_touch[i]) if np.isfinite(edge_touch[i]) else -1,
+                processing=processing,
             )
         )
     return records
@@ -354,16 +510,75 @@ class ParticleCatalog:
     def filtered_indices(self, spec: FilterSpec) -> List[int]:
         return [i for i, record in enumerate(self.records) if spec.matches(record)]
 
-    def apply_selection_file(self, filename: os.PathLike) -> None:
+    def key_index(self) -> Dict[tuple, List[ParticleRecord]]:
+        index: Dict[tuple, List[ParticleRecord]] = {}
+        for record in self.records:
+            key = record.match_key
+            if key is not None:
+                index.setdefault(key, []).append(record)
+        return index
+
+    @staticmethod
+    def resolve_key(candidates, row=None):
+        """Pick one record among ROIs sharing a key, or None if still ambiguous."""
+        if len(candidates) <= 1 or row is None:
+            return candidates[0] if len(candidates) == 1 else None
+        narrowed = list(candidates)
+        for fields in (("start_x", "end_x", "start_y", "end_y"),):
+            try:
+                wanted = tuple(float(row[f]) for f in fields)
+            except (KeyError, TypeError, ValueError):
+                continue
+            hit = [r for r in narrowed if tuple(getattr(r, f) for f in fields) == wanted]
+            if hit:
+                narrowed = hit
+        source = Path(str(row.get("source_file", ""))).name
+        if len(narrowed) > 1 and source:
+            hit = [r for r in narrowed if Path(r.source_file).name == source]
+            narrowed = hit or narrowed
+        if len(narrowed) > 1 and str(row.get("roi_index", "")).strip():
+            hit = [r for r in narrowed if str(r.roi_index) == str(row["roi_index"]).strip()]
+            narrowed = hit or narrowed
+        return narrowed[0] if len(narrowed) == 1 else None
+
+    def apply_selection_file(self, filename: os.PathLike) -> MatchReport:
+        """Re-attach saved flags/labels to the loaded particles.
+
+        Rows are matched by ROI time + camera position (robust to
+        reprocessing, which may renumber ROIs).  Only rows that carry no
+        time/position (very old files) fall back to the particle ID.
+        """
+        report = MatchReport()
         path = Path(filename)
         if not path.exists():
-            return
+            return report
+        index = self.key_index()
         with open(path, "r", encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
             for row in reader:
-                record = self._by_id.get(row.get("particle_id", ""))
-                if record is None:
-                    continue
+                report.rows += 1
+                old_id = row.get("particle_id", "")
+                key = particle_key(row.get("time_matlab"), row.get("image_x_px"), row.get("image_y_px"))
+                if key is not None:
+                    candidates = index.get(key, [])
+                    if not candidates:
+                        report.unmatched += 1
+                        continue
+                    record = self.resolve_key(candidates, row)
+                    if record is None:
+                        report.ambiguous += 1
+                        continue
+                    if record.particle_id == old_id:
+                        report.same_id += 1
+                    else:
+                        report.remapped += 1
+                else:
+                    record = self._by_id.get(old_id)
+                    if record is None:
+                        report.unmatched += 1
+                        continue
+                    report.by_id_only += 1
+                report.id_map[old_id] = record.particle_id
                 status = row.get("status", "undecided")
                 if status in {"undecided", "keep", "reject"}:
                     record.status = status
@@ -376,33 +591,78 @@ class ParticleCatalog:
                     record.object_plane_um = float(row.get("object_plane_um", 0.0))
                 except ValueError:
                     record.object_plane_um = 0.0
+        return report
 
-    def save_selection_file(self, filename: os.PathLike) -> None:
-        fieldnames = [
-            "particle_id", "source_file", "roi_index", "time_matlab", "time_iso",
-            "length_um", "width_um", "focus", "roundness", "image_x_px", "image_y_px",
-            "centroid_row_px", "centroid_col_px", "stage_x", "stage_y", "status", "reject_reason",
-            "object_plane_um", "actual_length_um", "actual_width_um", "instrument", "label",
-        ]
+    # Decisions plus what is needed to re-find each particle (time + ROI corners, robust to
+    # reprocessing).  Measurements (length, focus, ...) are not repeated here: they are in the
+    # MAT files and in <project>_particle_positions.csv, and never change during a session.
+    FLAG_FIELDS = (
+        "particle_id", "source_file", "roi_index", "time_matlab", "time_iso",
+        "image_x_px", "image_y_px", "status", "reject_reason", "label",
+        "actual_length_um", "actual_width_um", "start_x", "end_x", "start_y", "end_y",
+    )
+
+    def selection_rows(self, decided_only: bool = False):
+        """Snapshot of the flags table (plain tuples), cheap enough to take on the UI thread.
+
+        The parts of a row that never change in a session (ID, time, ROI corners)
+        are built once per particle and cached; only the decision columns are
+        read each time.
+        """
+        records = [r for r in self.records if not decided_only or r.status != "undecided" or r.label
+                   or r.reject_reason]
+        cache = self.__dict__.setdefault("_row_cache", {})
+        missing = [r for r in records if id(r) not in cache]
+        if missing:
+            times = np.array([r.time_matlab for r in missing], float)
+            iso = [""] * len(missing)
+            finite = np.isfinite(times)
+            if finite.any():
+                # MATLAB datenum -> ms since 1970, formatted in one call
+                ms = np.round((times[finite] - 719529.0) * 86400000.0).astype("int64")
+                text = np.datetime_as_string(ms.astype("datetime64[ms]"), unit="ms")
+                for k, value in zip(np.flatnonzero(finite), text):
+                    iso[k] = value.replace("T", " ")
+            for r, stamp in zip(missing, iso):
+                cache[id(r)] = (r, (r.particle_id, os.path.basename(r.source_file), r.roi_index, r.time_matlab, stamp,
+                                    r.image_x_px, r.image_y_px),
+                                (r.start_x, r.end_x, r.start_y, r.end_y))
+        rows = []
+        for r in records:
+            entry = cache[id(r)]
+            if entry[0] is not r:            # id() reused by a new object: rebuild this one
+                del cache[id(r)]
+                return self.selection_rows(decided_only)
+            rows.append(entry[1] + (r.status, r.reject_reason, r.label, r.actual_length_um, r.actual_width_um)
+                        + entry[2])
+        return rows
+
+    @classmethod
+    def write_selection_rows(cls, filename: os.PathLike, rows) -> None:
         destination = Path(filename)
         destination.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix="." + destination.name + ".", suffix=".tmp", dir=str(destination.parent))
         os.close(fd)
         try:
             with open(temporary, "w", encoding="utf-8", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=fieldnames)
-                writer.writeheader()
-                for record in self.records:
-                    row = asdict(record)
-                    row["particle_id"] = record.particle_id
-                    row["time_iso"] = record.time_iso
-                    writer.writerow({key: row.get(key, "") for key in fieldnames})
+                writer = csv.writer(handle)
+                writer.writerow(cls.FLAG_FIELDS)
+                writer.writerows(rows)
             os.replace(temporary, destination)
         finally:
             try:
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
+
+    def save_selection_file(self, filename: os.PathLike, decided_only: bool = False) -> None:
+        """Write flags and labels for every particle (``decided_only`` writes only decided ones).
+
+        All rows are written by default, so applying the file to a session that
+        already has flags also resets particles that are now unreviewed.  Rows
+        carry ROI time and corners, so they are re-found after reprocessing.
+        """
+        self.write_selection_rows(filename, self.selection_rows(decided_only))
 
 
 class ParticleStore:

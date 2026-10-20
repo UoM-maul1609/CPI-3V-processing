@@ -208,3 +208,181 @@ def scan_direction_deg(xs, zs):
     if vx < -1e-12 or (abs(vx) <= 1e-12 and vz < 0):
         vx, vz = -vx, -vz
     return math.degrees(math.atan2(vz, vx))
+
+
+# ---------------------------------------------------------------------------
+# Time-stepped default references
+# ---------------------------------------------------------------------------
+# Any set or review batch may carry its own best-focus X/Z.  Its members use
+# it.  Every other particle uses the most recently defined reference at or
+# before its acquisition time (a zero-order hold / step in time), so a new
+# batch recorded after one calibrated batch and before the next uses the
+# earlier one.  A reference takes effect from the time of the first particle
+# of the set/batch it was defined for.  Particles earlier than every
+# reference use the earliest reference.
+
+
+def reference_steps(named_sets, member_times):
+    """Sorted [(start_time, reference, set_name)] for every set/batch with X/Z.
+
+    ``member_times`` maps particle ID -> acquisition time (MATLAB datenum) for
+    the loaded particles.  A stored ``ref_time_matlab`` is used when present,
+    otherwise the earliest loaded member time.  Sets whose start cannot be
+    determined are left out of the time steps (their members still use them).
+    """
+    steps = []
+    for name, entry in named_sets.items():
+        ref = validate_reference(entry.get("best_focus"))
+        if ref is None:
+            continue
+        start = entry.get("ref_time_matlab")
+        if start is None:
+            times = [member_times[p] for p in entry.get("particle_ids", ()) if p in member_times]
+            times = [t for t in times if t == t]
+            start = min(times) if times else None
+        if start is not None:
+            steps.append((float(start), ref, name))
+    steps.sort(key=lambda item: (item[0], item[2]))
+    return steps
+
+
+def reference_at_time(steps, time_matlab):
+    """(reference, set_name) in force at ``time_matlab`` under the step rule."""
+    if not steps or time_matlab != time_matlab:
+        return None, None
+    import bisect
+    starts = [s[0] for s in steps]
+    k = bisect.bisect_right(starts, float(time_matlab)) - 1
+    start, ref, name = steps[max(k, 0)]
+    return ref, name
+
+
+def effective_reference(particle_id, time_matlab, index, steps, own_names=None):
+    """Reference for one particle: its own set's X/Z, else the time step.
+
+    Returns (reference, source_name, kind) with kind "own", "step" or None.
+    Overlapping sets with conflicting references fall back to the time step.
+    """
+    ref, conflict = index.get(particle_id, (None, False))
+    if ref is not None and not conflict:
+        return ref, (own_names or {}).get(particle_id), "own"
+    ref, name = reference_at_time(steps, time_matlab)
+    return (ref, name, "step") if ref is not None else (None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# Per-cluster best focus (tilted slides)
+# ---------------------------------------------------------------------------
+# If the slide is not parallel to the object plane, each patch of the slide
+# comes into focus at a different stage position, so every accepted cluster
+# (batch) gets its own Xbest/Zbest, taken from the peak of ITS OWN median
+# focus trace.  Particles without their own X/Z borrow from the nearest
+# calibrated cluster on the camera in the same acquisition session, which
+# follows the tilt better than borrowing by time alone.
+
+SESSION_GAP_DAYS = 30.0 / 1440.0   # a gap of 30 min or more starts a new session
+
+
+def focus_peak_reference(stage_x, stage_z, focus, peak="maximum", min_count=3):
+    """Best-focus (Xbest, Zbest) for one cluster from its median focus traces.
+
+    For each stage axis that was scanned (>= 3 distinct positions), take the
+    position of the peak of the median focus trace; an axis that did not move
+    takes its median value.  Returns (reference | None, reason).
+    """
+    import numpy as np
+    try:
+        from .plot_utils import median_trace, trace_extremum
+    except ImportError:
+        from plot_utils import median_trace, trace_extremum
+    x = np.asarray(stage_x, dtype=float)
+    z = np.asarray(stage_z, dtype=float)
+    f = np.asarray(focus, dtype=float)
+    good = np.isfinite(x) & np.isfinite(z) & np.isfinite(f)
+    if good.sum() < min_count:
+        return None, "too few particles with stage position and focus"
+    best = []
+    for values in (x[good], z[good]):
+        if len(np.unique(np.round(values, 7))) >= 3:
+            ext = trace_extremum(median_trace(values, f[good], min_count=min_count), peak)
+            if ext is None:
+                return None, "too few particles at each stage position to find a focus peak"
+            best.append(ext[0])
+        else:
+            best.append(float(np.median(values)))
+    if len(np.unique(np.round(x[good], 7))) < 3 and len(np.unique(np.round(z[good], 7))) < 3:
+        return None, "the stage was not scanned for these particles (fewer than 3 positions)"
+    return make_reference(best[0], best[1]), ""
+
+
+def focus_peak_on_plane(stage_x, stage_z, focus, normal_deg=45.0, peak="maximum", min_count=3):
+    """Best-focus (Xbest, Zbest) that puts d = 0 exactly at the focus maximum.
+
+    The median focus trace is taken along the object-plane normal (the signed
+    distance d the plots use), not along X and Z separately, so the result does
+    not depend on how X and Z were combined in the scan.  The reference is the
+    median stage position of the particles in the peak group, so for an X-only
+    scan it is (X at the peak, the scan's Z).  Returns (reference | None, reason).
+    """
+    import numpy as np
+    try:
+        from .plot_utils import median_trace, trace_extremum
+    except ImportError:
+        from plot_utils import median_trace, trace_extremum
+    x = np.asarray(stage_x, dtype=float)
+    z = np.asarray(stage_z, dtype=float)
+    f = np.asarray(focus, dtype=float)
+    good = np.isfinite(x) & np.isfinite(z) & np.isfinite(f)
+    if good.sum() < min_count:
+        return None, "too few particles with stage position and focus"
+    x, z, f = x[good], z[good], f[good]
+    t = math.radians(normal_deg)
+    proj = x * math.cos(t) + z * math.sin(t)
+    if len(np.unique(np.round(proj, 7))) < 3:
+        return None, "the stage was not moved through the object plane for these particles (fewer than 3 positions)"
+    trace = median_trace(proj, f, min_count=min_count)
+    ext = trace_extremum(trace, peak)
+    if ext is None:
+        return None, "too few particles at each stage position to find a focus peak"
+    centres = np.asarray(trace["x"], float)
+    gaps = np.diff(centres)
+    tol = 0.5 * float(np.median(gaps)) if len(gaps) else 1e-9
+    near = np.abs(proj - ext[0]) <= max(tol, 1e-9)
+    if not near.any():
+        near = np.abs(proj - ext[0]) <= np.min(np.abs(proj - ext[0])) + 1e-12
+    return make_reference(float(np.median(x[near])), float(np.median(z[near]))), ""
+
+
+def session_labels(times, gap_days=SESSION_GAP_DAYS):
+    """Label each time with an acquisition-session number (new session after a long gap)."""
+    import numpy as np
+    t = np.asarray(times, dtype=float)
+    labels = np.full(len(t), -1, dtype=int)
+    finite = np.flatnonzero(np.isfinite(t))
+    if not len(finite):
+        return labels
+    order = finite[np.argsort(t[finite], kind="stable")]
+    session = 0
+    labels[order[0]] = 0
+    for prev, cur in zip(order[:-1], order[1:]):
+        if t[cur] - t[prev] >= gap_days:
+            session += 1
+        labels[cur] = session
+    return labels
+
+
+def nearest_group_reference(x, y, session, groups):
+    """(reference, name) of the nearest calibrated group on the camera, same session.
+
+    ``groups`` is a list of dicts with keys name, reference, session, cx, cy.
+    """
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return None, None
+    best = None
+    for g in groups:
+        if g["session"] != session or not (math.isfinite(g["cx"]) and math.isfinite(g["cy"])):
+            continue
+        dist = math.hypot(g["cx"] - x, g["cy"] - y)
+        if best is None or dist < best[0]:
+            best = (dist, g["reference"], g["name"])
+    return (best[1], best[2]) if best else (None, None)

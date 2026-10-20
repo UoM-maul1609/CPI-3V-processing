@@ -1,11 +1,11 @@
-# CPI Calibration Workbench
+# CPI Calibration Workbench (v12)
 
 An interactive tool for choosing calibration particles (beads, ice-crystal
 analogues …) from processed CPI-3V / CPI 1.0 `.mat` files. You select
 particles on a camera X–Y plot, refine the selection on focus and size plots,
 then accept or reject them. Accepted particles can carry a label with their
-true size, and you can save named calibration sets with a best-focus stage
-position.
+true size, and each accepted cluster (batch) is saved with its own best-focus
+stage position.
 
 **The original MAT files are never modified.** Everything you decide is
 written to small CSV/JSON files alongside them.
@@ -24,12 +24,13 @@ written to small CSV/JSON files alongside them.
 8. [Checking images: Gallery and Particle tabs](#8-checking-images-gallery-and-particle-tabs)
 9. [Median traces](#9-median-traces)
 10. [Labels with true sizes](#10-labels-with-true-sizes)
-11. [Best focus, calibration sets and which side of the object plane](#11-best-focus-calibration-sets-and-which-side-of-the-object-plane)
-12. [Filters](#12-filters)
-13. [Files the workbench writes](#13-files-the-workbench-writes)
-14. [Keyboard and mouse reference](#14-keyboard-and-mouse-reference)
-15. [Tips and troubleshooting](#15-tips-and-troubleshooting)
-16. [Code layout](#16-code-layout)
+11. [Best focus and which side of the object plane](#11-best-focus-and-which-side-of-the-object-plane)
+12. [Sizing fit, retrieval and depth of field](#12-sizing-fit-retrieval-and-depth-of-field)
+13. [Filters](#13-filters)
+14. [Files the workbench writes](#14-files-the-workbench-writes)
+15. [Keyboard and mouse reference](#15-keyboard-and-mouse-reference)
+16. [Tips and troubleshooting](#16-tips-and-troubleshooting)
+17. [Code layout](#17-code-layout)
 
 ---
 
@@ -59,7 +60,8 @@ python -m calibration
 |---|---|
 | Load MAT files | Drag files or folders onto the window, or use **+ Add MAT files** / **+ Add folder** (sidebar). Folders are searched recursively. |
 | Add another dataset | Use **+ Add folder** again (or **File → Add another dataset…**). Particles from every file are combined. |
-| Attach stage positions | **Stage CSV…** (sidebar). Choose the series (`beads` / `analogue`) and time basis (`roi` / `full_frame` / `stage`). |
+| Remove MAT files | **File → Remove MAT files from project…**, then tick the files. Their particles leave the project and batches lose them (empty batches are removed). Their decisions and labels are set aside in `<flags>_removed.csv` and come back automatically if you add the file again. The MAT files themselves are never deleted. |
+| Attach stage positions | **Stage CSV…** (sidebar). By default every row is used — you do **not** have to say whether the run was beads or analogues; that is decided later by flagging and labelling particles. You are only asked to choose when the CSV mixes several series or time bases (then *All series* and *roi* are the defaults). |
 | Import true sizes from a spreadsheet | **File → Import calibration spreadsheet…** (`.csv` or `.xlsx`). Labels (section 10) are usually easier. |
 | Reopen earlier work | **File → Open project…** |
 
@@ -68,8 +70,10 @@ be read are listed in a single message at the end rather than stopping the
 import.
 
 **Stage CSV format.** The CSV needs the columns `start_time` (ISO date-time),
-`stage_x_original` and `stage_z_original`. It may also have `series` and
-`time_basis` columns. Each particle takes the most recent stage position at
+`stage_x_original` and `stage_z_original`. Optional `series` and `time_basis`
+columns let one CSV hold several runs. If the same timestamp appears with
+different positions (overlapping series), you get a warning so you can
+restrict the import. Each particle takes the most recent stage position at
 or before its `ROI_N.Time` (zero-order hold, no look-ahead). Legacy
 whitespace-separated position logs (`X Z dd/mm/yy HH:MM:SS`) are also
 accepted.
@@ -79,6 +83,36 @@ When stage positions load, the X axis of the focus/size plots switches to
 
 ---
 
+### Projects: new, open, close
+
+* **File ▸ New project…** asks for a file name, saves the project you have
+  open, then starts an empty one.
+* **File ▸ Open project…** saves the open project, then loads the chosen one.
+* **File ▸ Close project** saves and closes, leaving an empty workbench.
+* **Starting over with different MAT files:** use **File ▸ New project…** (it starts empty), then add the new files. Or use **Remove MAT files from project…** to drop some files from the project you have open.
+* Closing the window also saves.
+* **File ▸ New window** opens another workbench window, so you can have
+  several projects open side by side, one per window.
+  * Opening a project that's already open in another window switches to that
+    window instead. Two windows on one project would overwrite each other's
+    saves.
+  * All windows share one label library, so a label edited in one updates the
+    others.
+  * To fit several projects together you don't need them open: use
+    Calibration ▸ Fit … from several projects (section 12).
+* **File ▸ Merge projects into a viewing copy…** makes one new project
+  containing everything from two or more projects, for looking at several
+  runs together (e.g. focus against d across days). The originals are not
+  changed.
+  * It brings in their data, flags, labels and batches (renamed
+    `<project> · …`) and every stage CSV.
+  * It is a **copy**: the title says so, and changes made in it don't reach
+    the originals. Label in the original projects, and fit with
+    **from several projects**, not by fitting a merged copy.
+
+The window title shows which project is open. A workbench with no project
+asks whether to create one before closing it, if you've made batches.
+
 ## 3. The window at a glance
 
 ```
@@ -87,7 +121,7 @@ When stage positions load, the X axis of the focus/size plots switches to
 ├──────────────────────────────────────────────────────────┬───────────────────┤
 │ ① Select on plots │ ② Gallery │ ③ Particle               │ + Add MAT / folder│
 │ Mouse [Select|Zoom|Pan|Xbest line]  Box [New|Add|Remove| │ Stage CSV / Save  │
-│ Keep only|Reject]   New/Add boxes pick [Unreviewed ▾]    ├───────────────────┤
+│ Keep only|Reject]   Boxes pick [Unreviewed ▾]            ├───────────────────┤
 │ ┌─────────────────┐ ┌──────────────────────────────────┐ │ Review │ Labels │ │
 │ │  Camera X–Y     │ │  Focus   vs  Stage X / d / time  │ │ Sets/X–Z│Filters│ │
 │ │                 │ ├──────────────────────────────────┤ │                   │
@@ -113,7 +147,7 @@ When stage positions load, the X axis of the focus/size plots switches to
   *Selection only*, *Unreviewed*, *Accepted* or *Rejected*. It also shows the
   current particle (☆).
 - **Sidebar tabs.** **Review** (counts, how-to, flag history), **Labels**,
-  **Sets / X–Z**, **Filters**, and **Advanced** (hidden; turn it on with
+  **Best focus**, **Filters**, and **Advanced** (hidden; turn it on with
   *View → Show experimental calibration tools*).
 - **Status bar.** Confirms each action. The bottom-right corner shows when
   the flags file was last saved.
@@ -130,7 +164,6 @@ The same colours are used on the plots, gallery frames, buttons and badges.
 | **blue ◉** | **Selected.** A temporary working selection, not saved as a decision. |
 | **green ●** | **Accepted.** Saved, and skipped by new selection boxes. |
 | **red ✕** | **Rejected.** Saved. |
-| teal ◎ ring | Member of a named calibration set (section 11). |
 | orange ☆ | **Current particle**, i.e. the one shown in the browse bar and Particle tab. |
 | orange ▲ | Peak of the median focus trace (section 9). |
 
@@ -147,8 +180,11 @@ by camera X/Y position.
 1. **Select a cluster on the camera.** On tab ①, drag a box on
    *Camera X–Y*. Unreviewed particles inside it turn **blue**.
 2. **Look at the cluster on the focus/length plots.** The same particles are
-   highlighted on the plots to the right. Tick **Show only the selection
-   here** to hide everything else on those plots.
+   highlighted on the plots to the right. **Only selection / current batch**
+   is on by default: while you have a selection (or a batch shown), the
+   focus/size plots show only that. With nothing selected they show
+   everything. Press **S** (or untick it) to see all particles at any time,
+   and S again to go back.
 3. **Drop or reject outliers.**
    - **Ctrl/⌘-drag** a box around outliers to *remove them from the
      selection*. They go back to grey and stay unreviewed.
@@ -156,9 +192,17 @@ by camera X/Y position.
      *flag them rejected* (red). With a selection active, only selected
      particles inside the box are rejected.
 4. **(Optional) choose a label** in **Accept as**, e.g. *PSL 20 µm beads*.
+   **One batch from several areas:** after the first box, hold **Shift** while
+   dragging (or click **＋ Add**). Each box adds to the selection, and Accept
+   makes them all one batch.
 5. **Accept.** Click **✓ Accept selection** or press **K**. The particles
-   turn **green**, receive the label and its true size, and the flags file is
-   saved immediately.
+   turn **green**, receive the label and its true size, and the batch is saved
+   with the cluster's own best focus (the orange line, which follows the
+   cluster's focus peak; section 11). The flags file is saved immediately.
+   With *Only selection / current batch* ticked, the focus/size plots keep
+   showing **the batch you just accepted** (in green), so you can check it.
+   The line above the plots says what is shown. Your next box releases it,
+   and **Esc** shows everything.
 6. **Repeat for the next cluster.** New boxes skip green and red particles,
    so the same particles are never picked twice.
 7. **Spot-check images** in the Gallery (section 8).
@@ -192,14 +236,19 @@ resets all plots.
 | **✕ Reject** | – | Flag particles inside the box as rejected (only selected ones, if there is a selection). |
 
 While you drag, the box outline is coloured by the mode it will apply: blue
-for select, orange for remove, red for reject.
+for select, orange for remove, red for reject. **Changed your mind mid-drag?
+Press Esc (or right-click) before releasing** — the box is discarded and
+nothing changes.
 
 ### Which particles a New/Add box can pick
 
-The drop-down **New/Add boxes pick** controls this:
+The drop-down **Boxes pick** controls this (New and Add boxes only):
 
-- **Unreviewed only** *(default)*: accepted and rejected particles are
-  skipped, and the status bar tells you how many were skipped.
+- **Unreviewed only** *(default)*: in a box that mixes states, accepted and
+  rejected particles are skipped, and the status bar says how many. **If the
+  box contains only flagged particles, they are selected anyway**, so you can
+  go back to an accepted cluster (to unflag, re-label or save it as a set)
+  without changing this setting.
 - **Unreviewed + accepted**
 - **Accepted only**: use this to grab green particles, e.g. to unflag them.
 - **Rejected only**
@@ -215,14 +264,13 @@ Remove, Keep only and Reject boxes ignore this setting.
 | Shift-click | Adds the dot to the selection. |
 | Ctrl/⌘-click | Toggles the dot in or out of the selection. |
 | Double-click | Opens the particle in tab ③. |
-| Hover | Shows a small card with the particle's **size in µm (length × width)**, status, label and focus. The image appears too if its MAT file is already in memory. |
+| Hover | Shows a small card with the particle's **size in µm (length × width)**, status, label, focus, local illumination, **which batch it is in and the X/Z it uses** (*own*, or borrowed from a nearby batch), and its **image**. If the particle's MAT file isn't in memory yet, rest on the dot for a moment: the file loads in the background ("loading image…") and the image appears. Clicking the dot also loads it. |
 
 Hover previews can be turned off under **View → Hover preview on plots**.
 
 Other ways to select:
 
-- **Review** tab: **Select** next to Unreviewed, Accepted, Rejected or
-  *In calibration sets*.
+- **Review** tab: **Select** next to Unreviewed, Accepted or Rejected.
 - **Labels** tab: **Select particles with label**.
 - **Flag history**: **Select batch**.
 - **Edit → Select all visible** (Ctrl+A).
@@ -231,23 +279,48 @@ Other ways to select:
 
 ## 7. Accept, reject, unflag and undo
 
+**Reject or remove?**
+
+- **Reject** (R, ✕ Reject box) is for particles that are **not usable at
+  all**: debris, overlapping particles, clipped images, artefacts. They turn
+  red and are excluded everywhere. Pick a reason (e.g. *debris*) in the
+  Particle tab if you like.
+- **Remove from selection** (Ctrl/⌘-drag, Del, − Remove) is for good
+  particles that just **don't belong in this batch** (e.g. a different bead
+  size). Nothing is flagged; they stay grey and unreviewed for a later batch.
+
+
 | Button (selection bar) | Key on tab ① | Effect on the selection |
 |---|---|---|
 | **✓ Accept selection** | **K** | Accepted (green). Applies the **Accept as** label. The selection is cleared. |
 | **✕ Reject selection** | **R** | Rejected (red). The selection is cleared. |
 | **↺ Unflag selection** | **U** | Back to **unreviewed** (grey) and the label is removed, i.e. the default. |
 | **Clear selection** | **Esc** | Deselect everything. Flags are unchanged. |
-| **↶ Undo** | **Ctrl+Z** | Undo the last selection, flag, label or set change (up to 60 steps). |
+| **↶ Undo** | **Ctrl+Z** | Undo the last selection, flag, label or best-focus change (up to 60 steps). |
+| **↷ Redo** | **Ctrl+Shift+Z** / **Ctrl+Y** | Redo what you just undid. Any new action clears the redo steps. |
 
-- Every flag change is **saved immediately** to the flags CSV (section 13).
+- Every flag change is **saved automatically** within about 1.5 s, in the background (section 14).
+- **Flag history shows each accepted batch's label** (🏷 *100 micron glass*,
+  *no label*, or *mixed: 2 labels*); hover over a batch for the full count
+  per label. To label a whole batch: double-click it in Flag history, then
+  **Labels → choose the label → Tag selection with label**.
 - Each Accept or Reject of a group is recorded in **Review → Flag history**
   as a batch, e.g. *Accepted batch 3 · 111 · 16 Oct 16:42*. **Select batch**
   re-selects those particles. **Undo batch…** returns them to unreviewed,
   unless they have been re-flagged since or are also in another batch with
   the same decision.
+- **Taking particles out of a batch:** select the batch (Flag history →
+  double-click), then **Reject** (R) the bad ones, or **Unflag** (U) ones that
+  don't belong. They leave the batch at once: its count drops, *Select batch*
+  no longer includes them, and a batch left empty disappears. Everything is
+  saved immediately (✓ Flags saved). Ctrl/⌘-drag and Del only change the
+  temporary selection and save nothing. Don't press K again on the rest: they
+  are already accepted, and K would create a duplicate batch. Rejected
+  particles are excluded everywhere; untick **Show ✕ Rejected** to hide them
+  from the plots too. The MAT files themselves are never changed.
 - To unflag accepted particles, do either of the following, then press
   **↺ Unflag** (U):
-  - set *New/Add boxes pick* to **Accepted only** and box them;
+  - box them (a box holding only accepted particles selects them);
   - use **Review → Accepted → Select**.
 
 **Keys act on what you are looking at:**
@@ -257,6 +330,47 @@ Other ways to select:
 - **Particle tab:** K/R/U act on the **displayed particle**.
 
 ---
+
+### Trimming a batch after Accept
+
+After **Accept**, the focus/length plots keep showing the batch you just
+accepted. Clicking a batch in **Flag history** shows that batch instead. To
+take particles out of it on the plots:
+
+* **Drag a box** around them (nothing needs to be selected). Only that
+  batch's particles inside the box are selected; other batches are never
+  touched. Then:
+  * **U** returns them to unreviewed and out of the batch;
+  * **R** rejects them as debris.
+* Or use the **✕ Reject** box mode and drag. With a batch on show and
+  nothing selected, it rejects that batch's particles inside the box.
+
+Both leave the rest of the batch accepted, and Ctrl+Z undoes. If you take out
+a lot of particles, re-centre the batch's Xbest/Zbest with **Set batch X/Z
+from their focus peaks** (section 11).
+
+### Changing labels, and working on several batches at once
+
+**Change a batch's label:** click it in **Flag history**, then press
+**Change label…** and pick the right label (or *New label…*). Every particle
+in the batch gets the new label and its true size. The accept/reject flags
+don't change, and Ctrl+Z undoes it.
+
+**Change the label of particles you've selected:** use **Edit ▸ Change label
+of selection…** or press **L**. For example, select a few accepted particles
+that really belong to another bead size.
+
+**Several batches together:** **Ctrl/⌘-click** or **Shift-click** batches in
+Flag history.
+
+* The focus/length plots then show all the chosen batches together, each at
+  its own saved Xbest/Zbest. The line above the plots says
+  "Showing: N batches".
+* **Select batch** selects all of their particles.
+* **Change label…** relabels all of them in one go.
+* The X/Z buttons (Save, Clear) still act on one batch at a time, the one
+  last clicked.
+* Esc shows everything again.
 
 ## 8. Checking images: Gallery and Particle tabs
 
@@ -317,7 +431,7 @@ With **Median ± IQR trace** ticked, every focus/size plot shows:
   inter-quartile band;
 - a dashed blue line: the median of the **selection** only;
 - on **Focus vs Stage X or Stage Z**, an orange ▲ at the peak of the median
-  trace. **Sets / X–Z → Snap to median focus peak** copies its position into
+  trace. **Best focus → Snap to the selection's focus peak** copies its position into
   Xbest or Zbest.
 
 Whether the peak is a maximum or a minimum follows *Advanced → Focus
@@ -325,6 +439,32 @@ optimum*, which defaults to maximum. The traces are descriptive only: no
 model is fitted and no values are changed.
 
 ---
+
+### Illumination and focus
+
+The focus metric measures edge sharpness, so to first order it scales with
+how brightly the particle is lit. Laser power drifts in time and the beam is
+not uniform across the camera. The workbench therefore measures each ROI's
+**local illumination**: the median brightness of the ROI's outer 2-pixel
+frame. That frame is the background immediately around the particle, at the
+moment and place it was imaged. It does not use the frame's overall image
+mean.
+
+- **Plot it:** choose *Local illumination* as the X axis (or Top/Bottom Y) of
+  the focus/size plots, or as the camera plot's **Colour**. *Focus* against
+  *Local illumination* shows the dependence directly.
+- **Remove it:** *Focus ÷ local illumination* is focus × (median
+  illumination / ROI illumination), i.e. focus rescaled to typical lighting.
+  Plot it against Stage X/Z like focus.
+- **Use it for best focus:** tick **Best focus → Find peaks with focus ÷
+  local illumination** so each cluster's peak, the line it moves, and the
+  one-click batch fill use normalised focus.
+- **Exclude badly lit ROIs:** **Filters → Local illumination** min/max. Very
+  low edge brightness usually means the particle fills the ROI, so the frame
+  isn't background and the normalisation is unreliable.
+
+The hover card, the Particle tab and the positions CSV (`local_illum`,
+`focus_normalised`) all show these values.
 
 ## 10. Labels with true sizes
 
@@ -374,34 +514,92 @@ use the label sizes. **Colour: Label** colours accepted particles by label.
 
 ---
 
-## 11. Best focus, calibration sets and which side of the object plane
+## 11. Best focus and which side of the object plane
 
 ### Setting the best-focus position
 
 1. Plot **Focus** against **Stage X** (or **Stage Z**). An orange dashed line
-   marks the draft *Xbest* (or *Zbest*).
-2. Move it in any of these ways:
+   marks *Xbest* (or *Zbest*). When you select a cluster it jumps to the
+   cluster's own focus peak.
+2. Override it in any of these ways:
    - drag it in **↔ Xbest line** mouse mode;
-   - type the value in **Sets / X–Z**;
-   - click **Snap to median focus peak**.
-3. The value stays a **draft** until you save it with a set.
+   - type the value in the **Best focus** tab;
+   - click **Snap to the selection's focus peak**.
+3. **Accept (K)** saves it with the new batch. For an existing batch, click it
+   in **Review → Flag history**, adjust, and press **Save Xbest/Zbest to
+   batch** (in Flag history or the Best focus tab).
 
-### Calibration sets
+The project stores every batch's X/Z, and the editor's current values are
+restored when the project is reopened.
 
-A calibration set is a named snapshot of particle IDs **plus** its Xbest/Zbest.
+### Best focus per batch (tilted slides)
 
-- **Save selection as set + X/Z** saves the current selection with the
-  current Xbest/Zbest. A handy way to build one: **Review → Accepted →
-  Select**, then save.
-- Click a set to make it **active**. Its X/Z then loads into the editor and
-  applies to its members on the plots.
-- **Save X/Z changes** corrects a set's X/Z without changing its members.
-  **Clear X/Z** removes the reference.
-- **Select set / Add to selection / Delete set… / Unflag members…** do what
-  they say.
-- **Add current / Remove current** add or remove the ☆ particle from the set.
+If the slide is not exactly parallel to the object plane, particles on
+different parts of the slide come into focus at different stage positions.
+So **each accepted batch, i.e. each cluster you boxed, gets its own
+Xbest/Zbest**, and this happens as part of accepting.
 
-Sets are stored in the project file, so **save a project** to keep them.
+1. **Box a cluster** on the camera plot. The focus plot shows the cluster's
+   own median trace (dashed blue) and its peak (blue ▲). **The orange
+   Xbest/Zbest line jumps to that peak** (*Line follows focus peak*). The
+   peak is found along the object-plane normal, so d = 0 lands on the focus
+   maximum. Xbest/Zbest are the median stage X and Z of the particles at the
+   peak step, so an X-only scan keeps its own Z.
+2. **Adjust if needed.** Drag the line (↔ Xbest line mode) or type a value.
+   Your value then stays put while you refine the cluster with more boxes.
+   It is released when you box a different cluster.
+3. **Accept (K).** The tick box next to *Accept as* says exactly what will
+   be saved. For example, **+ save Xbest 10.8 · Zbest 5** (in orange) means
+   the new batch gets those values; the status bar confirms them after the
+   accept. Other states:
+   * **no peak found — not saved** (red): no X/Z is saved, and the batch
+     borrows one (below). Move the line to set it.
+   * **kept from their batches** (grey): every selected particle already
+     belongs to a batch with its own X/Z. Accepting again never changes it.
+
+**Check the tilt:** set *Colour* to **Batch Xbest** (or **Batch Zbest**). A
+tilted slide shows a smooth gradient across the camera. A batch whose colour
+doesn't fit its neighbours probably has a wrong X/Z: click it in **Flag
+history** to see its peak, adjust the line, and press **Save Xbest/Zbest to
+batch**.
+
+**Set batch X/Z from their focus peaks (d = 0 at max focus)…** (Review →
+Flag history) puts each batch's d = 0 at the peak of its own median focus
+trace, in one step. It offers two choices:
+
+* **All batches (replace existing):** re-centres every accepted batch,
+  including ones whose X/Z you set before.
+* **Only those without X/Z:** for batches from older projects.
+
+Ctrl+Z undoes it. Batches too small to show a peak are listed and left
+unchanged.
+
+**Which X/Z a particle uses** (plots and exported CSV), in order:
+
+1. **Its own batch's or set's X/Z**, exactly as saved. This is true even
+   when you select all accepted particles, so *Accepted → Select* shows every
+   batch at its own d = 0.
+2. **Otherwise, the nearest calibrated batch on the camera in the same
+   session.** A session is a run of acquisition with no gap of 30 minutes or
+   more. On a tilted slide, the nearest cluster is the best guess.
+3. **Otherwise, the most recent X/Z defined earlier in time.**
+4. **While editing,** the Xbest/Zbest editor is previewed on the batch you
+   clicked in Flag history, and on selected particles that have no saved X/Z
+   yet (the new cluster). It is never previewed on particles that already
+   have a batch X/Z.
+
+The particle readout and the exported CSV say which rule applied
+(`reference_kind` = own / nearest / step) and which batch it came from.
+
+**Groups from older projects.** Earlier versions also had named
+"calibration sets". When such a project opens, its sets appear in Flag history
+(marked ◆) and behave like batches, X/Z included. *Undo batch…* on one simply
+removes the group. To name groups of particles now, use **labels**.
+
+Saving the project writes `<project>_particle_positions.csv`: one row per
+accepted particle, with its label, true and measured size, focus, stage X/Z,
+the Xbest/Zbest it uses and where that came from, X−Xbest, Z−Zbest and the
+signed distance *d*. This is the table to fit calibrations from.
 
 ### Which side of the object plane? The signed distance *d*
 
@@ -419,7 +617,7 @@ n = (cos θ, sin θ), with θ measured in the stage X–Z frame from +X towards
 +Z. *d* > 0 and *d* < 0 are **opposite sides of the plane**, and *d* = 0 is
 on it. Units are those of the stage log.
 
-To set θ, go to **Sets / X–Z → Object plane**:
+To set θ, go to **Best focus → Object plane**:
 
 - **Normal θ** defaults to **45°**. **Set this for your jig and instrument**
   (the CPI 1.0 object plane is flipped relative to CPI-3V).
@@ -430,13 +628,233 @@ To set θ, go to **Sets / X–Z → Object plane**:
 - **Check θ:** plot X = **Offset within object plane**. For a straight scan
   through the plane it should stay close to 0 if θ is right.
 
-The exported `*_relative_positions.csv` (section 13) contains
+The exported `*_relative_positions.csv` (section 14) contains
 `plane_normal_deg`, `d_signed_plane` and `d_in_plane` alongside the older
 columns.
 
 ---
 
-## 12. Filters
+## 12. Sizing fit, retrieval and depth of field
+
+Once particles are accepted, labelled with a true size and have a best-focus
+X/Z (so the signed distance *d* is known), **Calibration ▸ Fit size & focus
+model…** fits the calibration and tests it. The same thing runs from the
+command line with `cpi-fit` and `cpi-retrieve`. The fit writes one JSON file
+with everything the retrieval needs.
+
+### Why measured beads come out larger than 100 µm at best focus
+
+Mostly it is not the pixel size. `proc/imageStats.py` builds the particle
+mask with `Path(contour).contains_points(points, radius=2)`, which grows the
+outline by about a pixel on every side. Running known disks through exactly
+those processing steps shows a constant +2.0 px on the diameter:
+
+| true diameter | `radius=2` (current) | `radius=0` |
+|---|---|---|
+| 40 µm (17.4 px) | 44.4 µm | 40.2 µm |
+| 100 µm (43.5 px) | 104.6 µm | 100.5 µm |
+| 150 µm (65.2 px) | 154.5 µm | 150.4 µm |
+
+That is +4.6 µm whatever the size: +4.6% at 100 µm, +46% at 10 µm. A
+pixel-size error would instead scale with size. The fit therefore uses
+`L_app = s·L·(oversize) + b`, with *b* = 4.6 µm by default and *s* fitted.
+
+- *s* ≈ 1 means the 2.3 µm pixel is right and the excess is the mask pad
+  (plus edge blur).
+- With beads of a single size, *s* and *b* cannot be told apart. Tick **fit it**
+  only when two or more true sizes are labelled.
+
+The independent check is **bead tracking**. When a stage step moves the slide
+within the image plane (`d_in_plane` changes), every bead stuck to the slide
+shifts by the same vector. Image shift in pixels against the move in µm gives
+the pixel size directly, with no diffraction or edge detection involved. It
+appears in the report and figure whenever the scan provides such steps.
+
+### The model
+
+Each side of the object plane is fitted separately, because the papers and
+the data both show the oversizing is asymmetric.
+
+* **Length:** `L_app = s·L·(1 + A±·Zd^p±·(I/I_ref)^κ) + b`, where
+  `Zd = λ|d − d0|/(L/2)²` and λ = 0.85 µm. Using the Fresnel number
+  (Korolev; Connolly et al. 2007) is what lets a fit made from one size
+  extrapolate to other sizes. That extrapolation is theory, not tested, until
+  a second bead size is labelled.
+* **Focus:** `foc = F0·(I/I_ref)^γ·exp(−(|d − d0f|/w±)^q) + floor`. The
+* **Testing the Z/L² scaling.** With one bead size, Z and Z/L² can't be
+  told apart (L is constant), so Z/L² is assumed. With **two or more true
+  sizes**, three things are fitted instead:
+  * the power of L, `Zd ∝ |d|/L^m` (m = 2 is the Fresnel number);
+  * the size dependence of the focus peak, `× (L/L_ref)^c`;
+  * the size dependence of the focus width, `× (L/L_ref)^k`.
+
+  m ≈ 2 confirms Z/L²; c ≈ k ≈ 0 means focus depends on Z alone (Connolly et
+  al. 2007). The first panel then plots all sizes against signed Zd: if the
+  scaling holds they fall on one curve. Small beads sit higher at focus
+  because the edge offset *b* is a larger fraction of them. The depth of
+  field is reported per size, and the validation gives the error per bead
+  size, marking any size where the correction does not help.
+* **Small particles:** oversizing grows as 1/L², so near focus a small
+  particle slightly out of focus can look like a larger one in focus. Size
+  and focus alone may not separate them, and the per-size table shows
+  whether they do for your data. A size dependence of focus (c ≠ 0) is what
+  helps.
+  linear dependence on local illumination is the first-order laser-power
+  effect.
+* **Scatter about both models** (log-normal, widening away from focus). The
+  scatter is what makes the retrieval's uncertainties honest.
+* *d0* (size minimum) and *d0f* (focus peak) are fitted separately. A
+  difference tells you that "best focus" and "smallest image" are not the
+  same place.
+
+### Retrieval: side known vs side unknown
+
+For each particle the posterior over a grid of (L, d) is evaluated from its
+measured length, focus and local illumination. Priors are uniform in *d*
+across the calibrated range and uniform in log *L*.
+
+* **Side known** (`--side +` / `-`): for the calibration test.
+* **Side unknown** (`--side both`, the default): for cloud data. Both sides
+  stay in with equal prior weight. The reported size is the posterior median
+  with a 16–84 % interval, plus `p_plus` = P(d > 0).
+
+**Recommendation for real cloud data: marginalise over the side.** The
+alternatives either pick a side (the old least-squares solve, which jumps
+between two solutions and hides the ambiguity) or use a symmetric |d| model
+(which throws away the asymmetry that is really there).
+
+Marginalising is unbiased when the sides are genuinely ambiguous. Its
+intervals widen exactly where the two sides disagree, and it costs little
+near focus, where both sides give nearly the same size. The validation shows
+how much it costs: the "side unknown" against "side known" rows, and the
+fraction of particles whose side the data actually pins down (`p_plus` > 0.9
+or < 0.1). On synthetic beads with the asymmetry of the papers:
+
+* side known gives 5.7% mean error;
+* side unknown gives 7.7%;
+* uncorrected is 18.7%;
+* size and focus alone identify the side only ~60% of the time.
+
+If the bead data show that the image itself distinguishes the sides
+(Poisson spot, ring contrast), a side classifier trained on these labelled
+beads can replace the 50/50 prior. Adopt it only if it beats the
+"side identified" figure in held-out batches.
+
+### Which processing, and comparing edge methods
+
+Each particle records the edge method that measured it (`processing` in the
+particle table: `legacy`, or e.g. `transmittance T=0.5 denoise=1`). The fit
+report lists it. Particles cut off by the ROI border (`edge_touch = 1`, new
+method only) are left out of the fit, because their size is only a lower
+limit.
+
+To show what a new edge method changes, reprocess a copy of the data (see the
+main README, section 3.6). Then:
+
+1. **File ▸ Copy project onto reprocessed data…** gives the same particles,
+   flags, labels, batches and X/Z on the new measurements.
+2. **Calibration ▸ Compare processing runs…** puts the two calibrations side
+   by side.
+
+**Focus on transmittance (new edge method)** is available as a plot metric.
+
+### Validation is out-of-sample
+
+The papers validate on the particles they were fitted to. Here the fit is
+repeated leaving out one **batch** at a time, and only the held-out batch is
+retrieved. The report gives:
+
+* mean |ΔL|/L, bias and spread for uncorrected, side-known and side-unknown;
+* whether the 68 % interval really contains the true size about 68 % of the
+  time;
+* retrieved *d* against measured *d*;
+* **sizing error against the processing focus threshold**, with the
+  `foc_crit` that keeps the mean error ≤ 5 % and the depth of field at that
+  threshold.
+
+Near the edge of the depth of field the focus is close to its floor and stops
+constraining *d*. A smaller particle further out then explains the image as
+well as a larger one nearer, so particles there size poorly whatever the
+method. The table shows where that starts.
+
+### Depth of field
+
+The depth of field is evaluated at the same `foc_crit` that
+`proc/batchProcess.py` uses (default 5), as a function of local illumination:
+
+* **total:** where the mean focus curve crosses the threshold on each side;
+* **acceptance-weighted:** ∫ P(foc > foc_crit | d) dd. Scatter lets some
+  particles in from beyond the crossing and loses some inside it, and this is
+  the width the sample volume really needs.
+
+"≥" in the report means the scan did not reach the threshold on that side.
+Scan further out on that side to measure it.
+
+`proc/calcTimeseriesDriver.py` currently uses a fixed 3 mm depth for every
+size (`sv = sa·√2·3e-3`). The fitted DOF, or the DOF at a stricter
+`foc_crit`, is what should replace it.
+
+### Using it
+
+1. Accept and label the beads; make sure every batch has its own X/Z
+   (section 11).
+2. **Calibration ▸ Fit size & focus model…** Untick labels you don't want,
+   then set **Min local illumination** (e.g. 90 — focus is unreliable below
+   it), `foc_crit` and the edge offset. Press **Fit & validate**. With ~2,000
+   beads, expect up to about 10 s.
+3. Check the six panels:
+   * L_app/L against d with the model;
+   * focus against d with the DOF;
+   * DOF against illumination;
+   * held-out sizing errors;
+   * distance retrieval;
+   * pixel size from tracking.
+4. **Save model (JSON)…** writes `<project>_sizing_model.json`.
+
+**Fitting several runs together.** Keep **one project per calibration
+run**: one session on the rig, with its own MAT files, stage CSV, batches and
+Xbest/Zbest. Label and Save each run in its own project, then use
+**Calibration ▸ Fit size & focus model — from several projects (runs)…**
+and pick the runs.
+
+* The fit reads each project's **saved** particle table at the moment you
+  press it. There are no copies, so a label or X/Z you fix in a run is in the
+  next fit.
+* It **refuses** projects from different CPIs, or a project that has never
+  been saved.
+* It **warns** about tables older than their project (open and Save it), tables
+  from an older version, and merged copies (which would double-count).
+* The saved model lists **which projects it came from**, how many particles
+  each gave and when each was saved, so a model always says what went into
+  it.
+* Batches are tagged with their project, so the held-out-batch validation
+  never mixes runs.
+
+**Calibration ▸ Fit size & focus model — this project…** saves the open
+project and fits it the same way.
+
+Command line equivalents:
+
+```bash
+cpi-fit run_0302.json run_0309.json -o sizing_model.json --figure fit.png \
+        --label "100 micron glass" --illum-min 90          # projects (recommended), or one particle-table CSV
+cpi-retrieve sizing_model.json beads_particle_positions.csv -o check.csv --side +   # test, side known
+cpi-retrieve sizing_model.json /path/to/processed/flight -o flight_sizes.csv      # cloud, side unknown
+```
+
+`cpi-retrieve` accepts a CSV (columns `length_um`, `focus`, `local_illum`) or
+processed `.mat` files directly. It adds `retr_L_median`, `retr_L_p16`,
+`retr_L_p84`, `retr_abs_d_median`, `retr_d_median`, `retr_p_plus`,
+`retr_extrapolated` and `retr_in_dof`.
+
+The model knows only the sizes and distances it was calibrated on.
+`retr_extrapolated` marks retrieved sizes outside 0.7–1.4× the calibrated
+range, or |d| at the edge of the scanned range.
+
+`<project>_particle_positions.csv` now has a `batch` column; the
+leave-one-batch-out validation uses it.
+
+## 13. Filters
 
 The **Filters** tab hides particles from every view without changing them:
 
@@ -451,27 +869,112 @@ hints. Press **Apply** or Enter to apply.
 
 ---
 
-## 13. Files the workbench writes
+### Saved time windows (e.g. one bead size per run)
+
+When one dataset contains several runs, e.g. 15, 40 and 100 µm beads one
+after another, save each run as a named **time window** in **Filters ▸ Saved
+time windows**. Windows are stored in the project.
+
+There are three ways to create one:
+
+* **Suggest from gaps…** makes one window per run, split wherever
+  acquisition paused for longer than the gap you give (default 5 min).
+* **From selection…** spans the selected particles' times. Box a run on a
+  plot with X = Acquisition time, then press it.
+* **From time filter…** uses the start and end typed above.
+
+Then:
+
+* **Edit…** gives a window its name ("15 µm beads") and optionally a
+  **label**. Showing that window also sets *Accept as* to that label, so the
+  beads accepted there get the right true size.
+* **Show** (or double-click), or the **Window** box above the plots, filters
+  everything to that run. **All times** removes the filter.
+* Windows that overlap are pointed out, and each line shows how many
+  particles fall in it.
+
+## 14. Files the workbench writes
+
+### Which CPI was calibrated
+
+**Review → Calibrated instrument** records the instrument:
+
+- **CPI type** is detected from the particle image-type codes (89 = CPI-3V,
+  33857 = CPI 1.0), or you can choose it yourself. You are warned if the loaded
+  files come from different instruments, or don't match your choice.
+- **Name / serial** is free text, e.g. *FAAM CPI-3V s/n 12*.
+
+Both are saved in the project, shown in the window title, and written as
+`cpi_type` and `cpi_id` on every row of the particle table.
+
+### Exporting several projects to one CSV
+
+For fitting, use **Calibration ▸ Fit … from several projects** (section 12),
+which reads the projects directly. To get one table for your own analysis,
+use **File → Export several projects' particles to one CSV…**. It stacks the
+`_particle_positions.csv` tables of the projects you choose into one CSV. The
+leading columns are `project`, `cpi_type` and `cpi_id`, followed by the usual
+columns (label, true and measured size, focus, illumination, stage X/Z, batch
+Xbest/Zbest, *d* …). Labels come from the shared library, so the same bead
+type has the same name and size in every project. Projects themselves are not
+changed. A project that has never been saved has no table yet and is listed,
+not skipped silently. From a terminal:
+
+```bash
+cpi-combine combined.csv beads_2021.json ice_analogues_2002.json
+```
+
+
+### Reprocessing is safe
+
+You can reprocess the raw data with improved criteria and keep every flag,
+label, batch and best-focus value. Particles are identified by **ROI time (to the
+millisecond) and camera position (StartX+EndX, StartY+EndY)**, which come
+straight from the raw data. ROI numbers, lengths and focus can all change.
+When you open the project (or load the folder) against the reprocessed MAT
+files:
+
+- flags and labels are re-attached by time + position;
+- flag-history batches (with their X/Z) and the selection are remapped the
+  same way;
+- you get a summary such as *"630 of 630 saved particles matched; 630
+  re-identified by time + camera position (ROI numbering changed)"*;
+- new ROIs found by the new processing start unreviewed;
+- particles that no longer exist are reported as *not in the loaded files*.
+
+The new length/focus values are used in the plots. Flags made with earlier
+versions of the workbench match the same way, because every flags CSV stores
+each particle's time and ROI centre.
+
 
 | File | Contents | When written |
 |---|---|---|
-| `<project>.json` | Source file list, stage CSV, calibration sets with X/Z, flag-history batches, the selection, plot settings, θ, a copy of the labels used | **Save project**, and on every set change once a project exists |
-| `<project>_flags.csv` | One row per particle: `status` (undecided/keep/reject), `reject_reason`, `label`, true sizes, object-plane position, plus the measured values | **Immediately**, on every flag or label change |
+| `<project>.json` | Source file list, stage CSV, flag-history batches with their X/Z, the selection, plot settings, θ, a copy of the labels used, time windows, and `particle_keys` (time + position of every particle in a batch). Format 4 stores particle IDs grouped by file, so it is about a tenth of the old size. Older projects still open. | About 1.5 s after the last change (in the background), and on **Save project**, close or switching project |
+| `<project>_flags.csv` | One row per particle: `status` (undecided/keep/reject), `reject_reason`, `label`, true sizes, and what is needed to re-find the particle after reprocessing (ROI time, `start_x`/`end_x`/`start_y`/`end_y`, camera position). Measurements are not repeated here; they are in the MAT files and the particle-positions table. | About 1.5 s after the last flag or label change (in the background), and on save/close |
 | `calibration_selection.csv` | Same as above, used when **no project** is open. It sits next to the first data file and is reloaded automatically next time. | Immediately |
-| `<project>_relative_positions.csv` | One row per (calibration set, particle): stage X/Z, Xbest/Zbest, `x_minus_xbest`, `z_minus_zbest`, `z_p_radial`, `z_p_from_offsets`, `plane_normal_deg`, `d_signed_plane`, `d_in_plane` | On project save |
+| `<project>_particle_positions.csv` | One row per **accepted** particle: CPI type and name, label and true size, measured size and focus, stage X/Z, the X/Z it uses and where from (own / step), X−Xbest, Z−Zbest, `d_signed_plane`, `d_in_plane`, processing | On **Save project**, close, and before any fit or export (not after every click: it is large) |
+| `<project>_relative_positions.csv` | One row per (batch with its own X/Z, particle): stage X/Z, Xbest/Zbest, `x_minus_xbest`, `z_minus_zbest`, `z_p_radial`, `z_p_from_offsets`, `plane_normal_deg`, `d_signed_plane`, `d_in_plane` | Same as above |
 | `~/.cpi_calibration/labels.json` | The shared label library | When labels are created or edited |
 
-The status bar shows **✓ Flags saved hh:mm:ss** after each save, or a red
-warning if saving failed. **File → Save flags as…** writes the flags to
+The status bar shows **● saving…** while a save is pending, then **✓ Saved
+hh:mm:ss**, or a red warning if saving failed (the save is then retried).
+Saving is batched: several quick clicks give one write, done on a background
+thread so the window stays usable. Closing the window, opening or creating
+another project, and **Save project** always write everything first.
+
+**Rejects are plain flags, not batches.** Ctrl+Z undoes a reject, and
+**Select** next to *Rejected*, then **Unflag**, undoes rejects later. Reject
+batches from older projects are hidden from Flag history; **View ▸ Show
+reject batches** shows them. **File → Save flags as…** writes the flags to
 another CSV.
 
 When you close the window, it offers to save a project if you have
-calibration sets or flag history that is not yet in one. Flags are already
+flag history or best-focus values that are not yet in one. Flags are already
 safe either way.
 
 ---
 
-## 14. Keyboard and mouse reference
+## 15. Keyboard and mouse reference
 
 | Key | Tab ① plots | Gallery | Particle tab |
 |---|---|---|---|
@@ -480,11 +983,14 @@ safe either way.
 | **U** | Unflag selection | Unflag picked | Unflag particle |
 | **A** | Add current ☆ to selection | Add picked to selection | Add to selection |
 | **Del / Backspace** | Remove current ☆ from selection | Remove picked from selection | Remove from selection |
-| **Esc** | Clear selection | Clear picks (then selection) | Clear selection |
+| **Esc** | Cancel the box being drawn; otherwise clear selection | Clear picks (then selection) | Clear selection |
 | **Enter** | Open current ☆ | Open picked | – |
 | **← / →** | Previous / next particle | (move between thumbnails) | Previous / next particle |
 | **B** | – | – | Toggle boundary overlay |
+| **S** | Plots: only selection / current batch ↔ all particles | same | same |
+| **L** | Change label of the selection… | same | same |
 | **Ctrl+Z** | Undo | Undo | Undo |
+| **Ctrl+Shift+Z** / **Ctrl+Y** | Redo | Redo | Redo |
 | **Ctrl+A** | Select all visible (pickable) | | |
 
 | Mouse on plots | Effect |
@@ -499,11 +1005,15 @@ safe either way.
 
 ---
 
-## 15. Tips and troubleshooting
+## 16. Tips and troubleshooting
 
-- **"Box changed nothing … particles inside are not 'Unreviewed only'".**
-  Everything in the box is already accepted or rejected. Change *New/Add
-  boxes pick* if you meant to grab them.
+- **A box skipped some particles.** In a box that mixes unreviewed and
+  flagged particles, only unreviewed ones are taken (status bar: *skipped N
+  accepted*). Box just the flagged ones to take them, or set *Boxes pick* to
+  *Everything*.
+- **Nothing happens when I drag on the camera plot.** Check the *Box* mode.
+  It stays on what you last chose (e.g. *− Remove* or *✕ Reject* from the
+  focus plot); click **▭ New**.
 - **The focus/size plots say "No stage X/Z positions yet".** Import the
   Stage CSV. If none match, check the series (beads/analogue), time basis
   and clock conventions.
@@ -511,23 +1021,25 @@ safe either way.
   draft or saved Xbest/Zbest. Select particles, or activate a set with a
   reference.
 - **Plots look empty after filtering.** Check the **Filters** tab, the
-  **Show** toggles, and *Show only the selection here*.
+  **Show** toggles, and *Only selection / current batch*.
 - **Large files.** Each MAT file can be ~200 MB. The workbench holds one file
-  in memory at a time and caches thumbnails. Hover images appear only for
-  the file already in memory, to avoid freezing; click the dot to load it.
+  in memory at a time and caches thumbnails. Hovering on a particle from
+  another file loads that file in the background, which takes a moment.
 - **Zoom got stuck.** Press **⤢ Fit view**.
 - **Lost a selection.** **Ctrl+Z** restores it.
 
 ---
 
-## 16. Code layout
+## 17. Code layout
 
 | File | Purpose |
 |---|---|
 | `gui.py` | The PySide6 workbench window (`cpi-calibrate`). |
 | `data.py` | Reading MAT files (`ROI_N`, `dat`), the particle catalog, the flags CSV, stage-position logs. |
-| `selection_state.py` | Box/selection set operations, pick scopes, named sets and review batches. |
+| `selection_state.py` | Box/selection operations, pick scopes and review batches. |
 | `labels.py` | The shared label library and applying true sizes to particles. |
+| `combine.py` | Combine several projects' particle tables (`cpi-combine`). |
+| `sizing.py` | Size/focus calibration fit, Bayesian size & distance retrieval, depth of field, pixel size from bead tracking, leave-one-batch-out validation (`cpi-fit`, `cpi-retrieve`). |
 | `reference_sets.py` | Best-focus references, Zp variants, the **signed object-plane distance**, scan-direction estimate, CSV export rows. |
 | `plot_utils.py` | Data limits, median scan curves and median ± IQR traces. |
 | `focus_surface.py` | Experimental tilted best-focus surface fit (Advanced tab). |

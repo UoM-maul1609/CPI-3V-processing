@@ -41,6 +41,10 @@ dev = [
 
 [project.scripts]
 cpi-calibrate = "calibration.gui:main"
+cpi-combine = "calibration.combine:main"
+cpi-fit = "calibration.sizing:fit_main"
+cpi-retrieve = "calibration.sizing:retrieve_main"
+cpi-compare = "calibration.sizing:compare_main"
 
 [tool.setuptools]
 package-dir = {"" = "python"}

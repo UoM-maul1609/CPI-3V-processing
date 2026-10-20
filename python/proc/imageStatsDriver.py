@@ -7,6 +7,7 @@ when the child exits, all NumPy/SciPy/OpenCV allocations are returned to the OS.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -25,8 +26,8 @@ class _Job:
     retries: int = 0
 
 
-def _worker_command(path1, filename, find_particle_edges, cpiv1, position):
-    return [
+def _worker_command(path1, filename, find_particle_edges, cpiv1, position, edge_options=None):
+    command = [
         sys.executable,
         os.path.abspath(__file__),
         "worker",
@@ -36,6 +37,9 @@ def _worker_command(path1, filename, find_particle_edges, cpiv1, position):
         str(bool(cpiv1)),
         str(position),
     ]
+    if edge_options:
+        command.append(edge_options if isinstance(edge_options, str) else json.dumps(edge_options))
+    return command
 
 
 def imageStatsDriver(
@@ -46,6 +50,7 @@ def imageStatsDriver(
     num_cores,
     max_retries=1,
     poll_interval=0.2,
+    edge_options=None,
 ):
     """Process files concurrently, with one fresh subprocess per file."""
     print("====================particle properties===========================")
@@ -70,7 +75,7 @@ def imageStatsDriver(
 
                 filename = filenames[next_file]
                 command = _worker_command(
-                    path1, filename, find_particle_edges, cpiv1, slot
+                    path1, filename, find_particle_edges, cpiv1, slot, edge_options
                 )
                 print(" ".join(command))
                 active[slot] = _Job(
@@ -96,7 +101,7 @@ def imageStatsDriver(
                         f"retrying ({retry}/{max_retries})"
                     )
                     command = _worker_command(
-                        path1, job.filename, find_particle_edges, cpiv1, slot
+                        path1, job.filename, find_particle_edges, cpiv1, slot, edge_options
                     )
                     active[slot] = _Job(
                         subprocess.Popen(command),
@@ -128,7 +133,7 @@ def imageStatsDriver(
         raise RuntimeError(f"Particle-stat processing failed: {detail}")
 
 
-def mult_job(path1, filename1, find_particle_edges, cpiv1, position, lock):
+def mult_job(path1, filename1, find_particle_edges, cpiv1, position, lock, edge_options=None):
     """Process exactly one MAT file and atomically replace it with stats added."""
     import scipy.io as sio
     from imageStats import imageStats
@@ -142,7 +147,7 @@ def mult_job(path1, filename1, find_particle_edges, cpiv1, position, lock):
     BG = data["BG"]
 
     dat = imageStats(
-        ROI_N, BG, cpiv1, find_particle_edges, position, filename1, lock
+        ROI_N, BG, cpiv1, find_particle_edges, position, filename1, lock, options=edge_options
     )
 
     atomic_savemat(
@@ -161,9 +166,9 @@ class NullContextManager:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 7 or sys.argv[1] != "worker":
+    if len(sys.argv) not in (7, 8) or sys.argv[1] != "worker":
         raise SystemExit(
-            "usage: imageStatsDriver.py worker PATH FILE FIND_EDGES CPIV1 POSITION"
+            "usage: imageStatsDriver.py worker PATH FILE FIND_EDGES CPIV1 POSITION [EDGE_OPTIONS_JSON]"
         )
 
     path1 = sys.argv[2]
@@ -178,4 +183,5 @@ if __name__ == "__main__":
         cpiv1,
         position,
         NullContextManager(),
+        sys.argv[7] if len(sys.argv) == 8 else None,
     )

@@ -50,6 +50,12 @@ def normalise_sets(raw):
         reference = validate_reference(value.get("best_focus"))
         if reference is not None:
             entry["best_focus"] = reference
+            try:
+                t = float(value.get("ref_time_matlab"))
+                if t == t:  # not NaN
+                    entry["ref_time_matlab"] = t
+            except (TypeError, ValueError):
+                pass
         result[name] = entry
     return result
 
@@ -150,3 +156,61 @@ def apply_box(current, inside, mode, statuses, pick_scope="undecided"):
     if mode not in BOX_MODE_OPERATIONS:
         raise ValueError(f"Unknown box mode: {mode}")
     return combine_selection(current, inside, BOX_MODE_OPERATIONS[mode]), set()
+
+
+# ----------------------------------------------------------------------------- compact project storage
+# Particle IDs are "<absolute MAT path>#<roi>".  Writing every ID in full made
+# project files tens of MB (the path repeated for every particle of every
+# batch).  Projects (format 4) store them grouped by file instead; older plain
+# lists still load.
+
+def compact_ids(ids):
+    groups, other = {}, []
+    for pid in ids:
+        src, sep, roi = str(pid).rpartition("#")
+        if sep and roi.isdigit():
+            groups.setdefault(src, []).append(int(roi))
+        else:
+            other.append(pid)
+    out = {"by_source": [[src, sorted(set(rois))] for src, rois in sorted(groups.items())]}
+    if other:
+        out["other"] = other
+    return out
+
+
+def expand_ids(value):
+    if isinstance(value, dict) and "by_source" in value:
+        ids = [f"{src}#{roi}" for src, rois in value["by_source"] for roi in rois]
+        return ids + list(value.get("other", []))
+    return list(value or [])
+
+
+def compact_keys(keys):
+    """{pid: [ms, 2cx, 2cy]} grouped by file."""
+    groups = {}
+    for pid, key in keys.items():
+        src, sep, roi = str(pid).rpartition("#")
+        if sep and roi.isdigit():
+            groups.setdefault(src, []).append([int(roi)] + list(key))
+    return {"by_source": [[src, sorted(rows)] for src, rows in sorted(groups.items())]}
+
+
+def expand_keys(value):
+    if isinstance(value, dict) and "by_source" in value:
+        return {f"{src}#{row[0]}": list(row[1:]) for src, rows in value["by_source"] for row in rows}
+    return dict(value or {})
+
+
+def expand_project_config(config):
+    """Turn a format-4 (compact) project into the plain in-memory form, in place."""
+    for entry in (config.get("named_sets") or {}).values():
+        if isinstance(entry, dict):
+            entry["particle_ids"] = expand_ids(entry.get("particle_ids"))
+    config["particle_keys"] = expand_keys(config.get("particle_keys"))
+    config["selected_ids"] = expand_ids(config.get("selected_ids"))
+    return config
+
+
+def compact_project_sets(named_sets):
+    return {name: dict(entry, particle_ids=compact_ids(entry.get("particle_ids", ())))
+            for name, entry in named_sets.items()}

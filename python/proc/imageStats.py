@@ -11,6 +11,11 @@ from scipy.interpolate import RectBivariateSpline
 from skimage import measure
 from tqdm import tqdm
 
+try:
+    from edgeDetect import EdgeOptions, measure_transmittance, options_json
+except ImportError:  # imported as proc.imageStats
+    from .edgeDetect import EdgeOptions, measure_transmittance, options_json
+
 NB = 30
 LD = 3
 PIXEL_SIZE_UM = 2.3
@@ -42,9 +47,40 @@ def _points_for_shape(r, c, cache):
     return points
 
 
-def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock):
+def _remove_centre_strip(arr, start_x):
+    """CPI 1.0 centre-strip artefact (rows 511/512 of the full frame), as in the legacy code."""
+    h, _ = arr.shape
+    end1 = start_x + h
+    if end1 >= 512 and start_x < 511:
+        idx = 512 - start_x
+        if 2 <= idx <= h:
+            arr[idx - 1: idx, :] = arr[idx - 2: idx - 1, :]
+    if end1 >= 514 and start_x <= 512:
+        idx = 512 - start_x
+        if 0 <= idx < h - 1:
+            arr[idx: idx + 1, :] = arr[idx + 1: idx + 2, :]
+    return arr
+
+
+def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=None):
+    """Particle statistics for every particle ROI.
+
+    ``options`` (an EdgeOptions, a dict or a JSON string) selects the edge
+    method; the default is the legacy algorithm, unchanged.  The options used
+    are stored in ``dat["proc_options"]`` (JSON) so every processed file says
+    how it was made.
+    """
     # Avoid nested OpenCV threading when several file subprocesses run at once.
     setNumThreads(1)
+    if options is None:
+        options = EdgeOptions(pixel_um=PIXEL_SIZE_UM)
+    elif isinstance(options, str):
+        import json
+        options = EdgeOptions(**json.loads(options))
+    elif isinstance(options, dict):
+        options = EdgeOptions(**options)
+    if options.method == "transmittance":
+        return _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options)
 
     image_type = 33857 if cpiv1 else 89
     ind = np.flatnonzero(ROI_N["imageType"][0, 0][:, 0] == image_type)
@@ -68,6 +104,8 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock):
     foc.fill(np.nan)
     dat["foc"] = foc
     dat["Time"] = ROI_N["Time"][0, 0][:, 0]
+    dat["proc_options"] = options_json(options, {"note": "legacy algorithm (Otsu, 100 median passes, "
+                                                          "radius=2 mask, ellipse major axis, 30 boundary points)"})
     # Store the small classification field here so later stages do not need to
     # reload ROI_N, whose nested IMAGE field can dominate memory.
     dat["imageType"] = ROI_N["imageType"][0, 0][:, 0]
@@ -268,3 +306,68 @@ def calculate_focus(boundaries, IM, b_flag):
     if b_flag:
         foc["boundaries"][0] = boundaries2
     return foc
+
+
+def _unwrap(value):
+    """The 2-D image inside however many 1x1 MATLAB cell/struct wrappers loadmat produced."""
+    v = np.asarray(value)
+    while v.dtype == object and v.size == 1:
+        v = np.asarray(v.ravel()[0])
+    return v
+
+
+def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options):
+    """Transmittance edge method (see edgeDetect.py); variable-length boundaries."""
+    image_type = 33857 if cpiv1 else 89
+    ind = np.flatnonzero(ROI_N["imageType"][0, 0][:, 0] == image_type)
+    nroi = len(ROI_N["IMAGE"][0, 0][0, :])
+    nan = lambda *shape: np.full(shape, np.nan)
+    dat = {
+        "len": nan(nroi, 1), "wid": nan(nroi, 1), "area": nan(nroi, 1), "round": nan(nroi, 1),
+        "orientation": nan(nroi, 1), "centroid": nan(nroi, 2),
+        "len_ellipse": nan(nroi, 1), "perimeter": nan(nroi, 1), "deq": nan(nroi, 1),
+        "T_min": nan(nroi, 1), "T_centre": nan(nroi, 1), "T_border": nan(nroi, 1), "edge_level_used": nan(nroi, 1),
+        "n_boundary": np.zeros((nroi, 1)), "edge_touch": np.zeros((nroi, 1)),
+    }
+    if b_flag:
+        foc = np.zeros(nroi, dtype=[("focus", "float"), ("focus_T", "float"), ("boundaries", "O")])
+        for i in range(nroi):
+            foc[i]["boundaries"] = np.zeros((0, 2))
+    else:
+        foc = np.zeros(nroi, dtype=[("focus", "float"), ("focus_T", "float")])
+    foc["focus"] = np.nan
+    foc["focus_T"] = np.nan
+    dat["foc"] = foc
+    dat["Time"] = ROI_N["Time"][0, 0][:, 0]
+    dat["imageType"] = ROI_N["imageType"][0, 0][:, 0]
+    dat["proc_options"] = options_json(options)
+    if ind.size == 0:
+        return dat
+    with tqdm(total=len(ind), position=position, leave=True, desc=f"{desc} {position}", mininterval=0.5) as pbar:
+        for roi_index in ind:
+            pbar.update(1)
+            image = _unwrap(ROI_N["IMAGE"][0, 0][0, roi_index]["IM"])
+            background = _unwrap(BG[0, roi_index]["BG"])
+            if image.shape != background.shape or min(image.shape) < 3:
+                continue
+            image = image.astype(np.float64)
+            background = background.astype(np.float64)
+            if cpiv1:
+                start = int(ROI_N["StartX"][0, 0][0, roi_index])
+                image = _remove_centre_strip(image, start)
+                background = _remove_centre_strip(background, start)
+            try:
+                res = measure_transmittance(image, background, options)
+            except (ValueError, IndexError, FloatingPointError):
+                res = None
+            if res is None:
+                continue
+            for key in ("len", "wid", "area", "round", "orientation", "len_ellipse", "perimeter", "deq",
+                        "T_min", "T_centre", "T_border", "n_boundary", "edge_touch", "edge_level_used"):
+                dat[key][roi_index] = res[key]
+            dat["centroid"][roi_index, :] = res["centroid"]
+            foc[roi_index]["focus"] = res["focus"]
+            foc[roi_index]["focus_T"] = res["focus_T"]
+            if b_flag:
+                foc[roi_index]["boundaries"] = res["boundary"]
+    return dat

@@ -27,12 +27,15 @@ modified by the GUI.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import csv
 import json
 import math
 import os
+import shutil
 import sys
+import threading
 from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
@@ -42,7 +45,7 @@ import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
 from matplotlib.ticker import FuncFormatter
-from PySide6.QtCore import Qt, QDateTime, QRect, QSize, QTimer, QPoint
+from PySide6.QtCore import Qt, QItemSelectionModel, QObject, QDateTime, QRect, QSize, QTimer, QPoint, QThread, Signal
 from PySide6.QtGui import (QAction, QColor, QCursor, QFont, QIcon, QImage, QKeySequence,
                            QPainter, QPen, QPixmap, QShortcut)
 from PySide6.QtWidgets import (
@@ -50,33 +53,41 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMessageBox,
-    QPushButton, QScrollArea, QSizePolicy, QSlider, QSplitter, QStatusBar, QTabWidget,
+    QPlainTextEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QSplitter, QStatusBar, QTabWidget,
     QToolButton, QVBoxLayout, QWidget,
 )
 
 try:
     from .plot_utils import data_limits, median_trace, trace_extremum
     from .selection_state import (apply_box, normalise_sets, make_saved_set, exclusive_batch_ids,
+                                  expand_project_config, compact_project_sets, compact_ids, compact_keys,
                                   add_ids_to_saved_set, remove_ids_from_saved_set)
-    from .reference_sets import (make_reference, signed_plane_distance, in_plane_offset, scan_direction_deg, build_reference_index, calibrated_radial_position,
+    from .reference_sets import (make_reference, focus_peak_reference, focus_peak_on_plane, session_labels, nearest_group_reference, reference_steps, effective_reference, validate_reference, signed_plane_distance, in_plane_offset, scan_direction_deg, build_reference_index, calibrated_radial_position,
                                  corrected_stage_radius, relative_stage_position,
                                  materialized_reference_rows, committed_particle_ids)
     from .focus_surface import fit_surface, predict_best_radius
     from .metadata import read_truth_table, attach_truth
     from .labels import LabelLibrary, ParticleLabel, apply_label_dimensions, LABEL_KINDS
-    from .data import (FilterSpec, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog,
+    from .combine import combine_projects, project_instrument, load_projects_for_fit
+    from . import sizing
+    from .time_windows import window_bounds, make_window, suggest_windows, in_window, overlapping
+    from .data import (FilterSpec, CPI_DISPLAY, particle_key, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog,
                        datetime_to_matlab_datenum, matlab_datenum_to_datetime, _scan_via_subprocess)
 except ImportError:  # Support ``python gui.py`` from this directory.
     from plot_utils import data_limits, median_trace, trace_extremum
     from selection_state import (apply_box, normalise_sets, make_saved_set, exclusive_batch_ids,
+                                 expand_project_config, compact_project_sets, compact_ids, compact_keys,
                                  add_ids_to_saved_set, remove_ids_from_saved_set)
-    from reference_sets import (make_reference, signed_plane_distance, in_plane_offset, scan_direction_deg, build_reference_index, calibrated_radial_position,
+    from reference_sets import (make_reference, focus_peak_reference, focus_peak_on_plane, session_labels, nearest_group_reference, reference_steps, effective_reference, validate_reference, signed_plane_distance, in_plane_offset, scan_direction_deg, build_reference_index, calibrated_radial_position,
                                 corrected_stage_radius, relative_stage_position,
                                 materialized_reference_rows, committed_particle_ids)
     from focus_surface import fit_surface, predict_best_radius
     from metadata import read_truth_table, attach_truth
     from labels import LabelLibrary, ParticleLabel, apply_label_dimensions, LABEL_KINDS
-    from data import (FilterSpec, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog,
+    from combine import combine_projects, project_instrument, load_projects_for_fit
+    import sizing
+    from time_windows import window_bounds, make_window, suggest_windows, in_window, overlapping
+    from data import (FilterSpec, CPI_DISPLAY, particle_key, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog,
                       datetime_to_matlab_datenum, matlab_datenum_to_datetime, _scan_via_subprocess)
 
 
@@ -90,27 +101,29 @@ COMMITTED_COLOUR = "#0b8f87"
 CURRENT_COLOUR = "#f08c00"
 MEDIAN_COLOUR = "#13294b"
 
-METRICS = (("focus", "Focus"), ("length", "Length [µm]"), ("width", "Width [µm]"),
-           ("ratio", "Measured / actual length"), ("roundness", "Roundness"))
+METRICS = (("focus", "Focus"), ("focus_norm", "Focus ÷ local illumination"), ("length", "Length [µm]"),
+           ("width", "Width [µm]"), ("ratio", "Measured / actual length"), ("roundness", "Roundness"),
+           ("illum", "Local illumination (ROI edge)"), ("focus_T", "Focus on transmittance (new edge method)"))
 POSITIONS = (("time", "Acquisition time"), ("stage_x", "Stage X"), ("stage_z", "Stage Z"),
              ("plane_signed", "Signed distance to object plane  d = n·(ΔX, ΔZ)"),
              ("stage_x_relative", "X − Xbest"), ("stage_z_relative", "Z − Zbest"),
              ("plane_offset", "Offset within object plane (θ check)"),
              ("stage_radius", "Stage radius √(X² + Z²)"),
              ("relative", "Zp radial difference (best − measured radius) [legacy]"),
-             ("stage_offset_radius", "Zp = √(ΔX² + ΔZ²) [unsigned]"))
+             ("stage_offset_radius", "Zp = √(ΔX² + ΔZ²) [unsigned]"),
+             ("illum", "Local illumination (ROI edge brightness)"))
 BOX_MODES = (
     ("new", "▭ New", "Plain drag: replace the selection with the particles inside the box"),
     ("add", "＋ Add", "Add the particles inside the box (or hold Shift while dragging)"),
-    ("remove", "− Remove", "Drop the particles inside the box from the selection, without flagging "
-                           "them (or hold Ctrl/⌘ while dragging)"),
+    ("remove", "− Remove", "Leave particles out of THIS batch: drop them from the selection without flagging "
+                           "them — they stay unreviewed for later (or hold Ctrl/⌘ while dragging)"),
     ("keep", "∩ Keep only", "Keep only selected particles that are inside the box (or hold Alt/⌥)"),
-    ("reject", "✕ Reject", "Flag particles inside the box as REJECTED (red). With a selection, only "
-                           "selected particles inside the box are rejected"),
+    ("reject", "✕ Reject", "Not usable — debris, overlaps, artefacts: flag particles inside the box REJECTED "
+                           "(red). With a selection, only selected particles inside the box are rejected"),
 )
 PICK_SCOPES = (("undecided", "Unreviewed only"), ("unrejected", "Unreviewed + accepted"),
                ("keep", "Accepted only"), ("reject", "Rejected only"), ("any", "Everything"))
-BROWSE_SCOPES = (("auto", "Selection (all if none)"), ("all", "All particles"),
+BROWSE_SCOPES = (("auto", "Selection, else current batch"), ("all", "All particles"),
                  ("selection", "Selection only"), ("undecided", "Unreviewed"),
                  ("keep", "Accepted"), ("reject", "Rejected"))
 RELATIVE_AXES = ("stage_x_relative", "stage_z_relative", "stage_offset_radius", "plane_signed", "plane_offset")
@@ -189,6 +202,15 @@ class LiveSelectionCanvas(FigureCanvasQTAgg):
     def set_axes(self, axes_list):
         self.axes_list = list(axes_list)
 
+    def cancel_drag(self):
+        """Abandon a box (or best-focus line) being drawn. Returns True if one was."""
+        if self._drag is None and self._reference is None:
+            return False
+        self._drag = None
+        self._reference = None
+        self.update()
+        return True
+
     def set_select_mode(self, enabled):
         self.selection_enabled = bool(enabled)
         self._drag = None
@@ -212,6 +234,8 @@ class LiveSelectionCanvas(FigureCanvasQTAgg):
 
     def mousePressEvent(self, event):
         point = event.position().toPoint()
+        if event.button() == Qt.RightButton and self.cancel_drag():
+            event.accept(); return  # right-click while dragging = cancel
         index = self.axes_index_at(point)
         if event.button() == Qt.LeftButton and index is not None:
             if self.reference_enabled:
@@ -250,6 +274,8 @@ class LiveSelectionCanvas(FigureCanvasQTAgg):
             if math.isfinite(value) and self.on_reference_changed is not None:
                 self.on_reference_changed(value)
             event.accept(); return
+        if self._drag is None and event.button() == Qt.LeftButton and self.selection_enabled:
+            event.accept(); return  # the box was cancelled with Esc / right-click
         if self._drag is None or event.button() != Qt.LeftButton:
             super().mouseReleaseEvent(event)
             if self.on_navigation_changed is not None:
@@ -355,6 +381,24 @@ class HoverPreview(QFrame):
         self.raise_()
 
 
+class MatLoader(QThread):
+    """Load one processed MAT file's images off the GUI thread (for hover previews)."""
+    loaded = Signal(str, object)
+
+    def __init__(self, store_root, source_file, parent=None):
+        super().__init__(parent)
+        self.store_root, self.source_file = Path(store_root), source_file
+
+    def run(self):
+        import scipy.io as sio
+        try:
+            data = sio.loadmat(str(self.store_root / self.source_file), variable_names=["ROI_N", "BG", "dat"],
+                               simplify_cells=True)
+        except Exception:
+            data = None
+        self.loaded.emit(self.source_file, data)
+
+
 class LabelDialog(QDialog):
     """Create or edit a shared label: name, type, true size (µm), notes, colour."""
 
@@ -428,11 +472,182 @@ class LabelDialog(QDialog):
                              width_um=width, notes=self.notes.text().strip(), colour=self.colour)
 
 
+class _SaveNotifier(QObject):
+    """Carries 'save finished' from the writer thread back to the UI thread."""
+    done = Signal(str, str)        # (status "ok"/"error", message)
+
+
+class TimeWindowDialog(QDialog):
+    """Name, start/end and optional label of a saved time window."""
+
+    def __init__(self, parent, window, labels):
+        super().__init__(parent)
+        self.setWindowTitle("Time window")
+        form = QFormLayout(self)
+        self.name = QLineEdit(window.get("name", ""))
+        self.start = QDateTimeEdit(); self.end = QDateTimeEdit()
+        for widget, key in ((self.start, "start"), (self.end, "end")):
+            widget.setDisplayFormat("yyyy-MM-dd HH:mm:ss")
+            widget.setCalendarPopup(True)
+            widget.setDateTime(QDateTime.fromString(window.get(key, ""), "yyyy-MM-dd HH:mm:ss"))
+        self.label = QComboBox()
+        self.label.addItem("(no label)", "")
+        for name in labels:
+            self.label.addItem(name, name)
+        self.label.setCurrentIndex(max(0, self.label.findData(window.get("label", ""))))
+        self.label.setToolTip("Showing this window also picks this label in 'Accept as'.")
+        form.addRow("Name", self.name)
+        form.addRow("Start", self.start)
+        form.addRow("End", self.end)
+        form.addRow("Label", self.label)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        form.addRow(buttons)
+
+    def value(self):
+        return {"name": self.name.text().strip() or "Window",
+                "start": self.start.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+                "end": self.end.dateTime().toString("yyyy-MM-dd HH:mm:ss"),
+                "label": self.label.currentData() or ""}
+
+
+class SizingDialog(QDialog):
+    """Fit the size/focus model to accepted labelled particles and save it for retrieval."""
+
+    def __init__(self, rows, parent=None, inputs=None):
+        super().__init__(parent)
+        self.setWindowTitle("Fit size & focus model")
+        self.inputs = list(inputs or [])
+        self.resize(1250, 860)
+        self.rows = rows
+        self.model = self.validation = self.tracking = None
+        layout = QVBoxLayout(self)
+        controls = QHBoxLayout()
+        labels = sorted({r.get("label") or "" for r in rows} - {""})
+        self.label_box = QListWidget()
+        self.label_box.setMaximumHeight(70)
+        self.label_box.setMaximumWidth(260)
+        for name in labels:
+            n = sum(1 for r in rows if r.get("label") == name)
+            item = QListWidgetItem(f"{name}  ({n:,})")
+            item.setData(Qt.UserRole, name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Checked)
+            self.label_box.addItem(item)
+        form = QFormLayout()
+        self.flip = QCheckBox("Flip side (d → −d)")
+        self.flip.setToolTip("Use if the + side in the workbench is the side nearer the laser in your convention.")
+        self.illum_min = QDoubleSpinBox(); self.illum_min.setRange(0, 255); self.illum_min.setValue(0)
+        self.illum_min.setToolTip("Ignore particles whose local illumination (ROI border) is below this; 0 = use all")
+        self.foc_crit = QDoubleSpinBox(); self.foc_crit.setRange(0, 500); self.foc_crit.setValue(sizing.DEFAULT_FOC_CRIT)
+        self.foc_crit.setToolTip("Focus threshold used by proc/batchProcess.py (foc_crit); the depth of field is "
+                                 "evaluated here")
+        self.offset = QDoubleSpinBox(); self.offset.setRange(-20, 40); self.offset.setDecimals(2)
+        self.offset.setValue(sizing.PIPELINE_PAD_PX * sizing.NOMINAL_PIXEL_UM)
+        self.offset.setSuffix(" µm")
+        self.offset.setToolTip("Additive edge offset. proc/imageStats.py grows the particle mask by "
+                               "contains_points(radius=2) ≈ +2 px on the diameter.")
+        self.fit_offset = QCheckBox("fit it (needs ≥2 true sizes)")
+        off_row = QHBoxLayout(); off_row.addWidget(self.offset); off_row.addWidget(self.fit_offset)
+        form.addRow(self.flip)
+        form.addRow("Min local illumination", self.illum_min)
+        form.addRow("foc_crit", self.foc_crit)
+        form.addRow("Edge offset b", off_row)
+        self.run_button = QPushButton("Fit && validate")
+        self.run_button.setObjectName("primary")
+        self.run_button.clicked.connect(self.run)
+        self.save_button = QPushButton("Save model (JSON)…")
+        self.save_button.clicked.connect(self.save_model)
+        self.save_button.setEnabled(False)
+        self.figure_button = QPushButton("Save figure…")
+        self.figure_button.clicked.connect(self.save_figure)
+        self.figure_button.setEnabled(False)
+        buttons = QVBoxLayout()
+        for b in (self.run_button, self.save_button, self.figure_button):
+            buttons.addWidget(b)
+        buttons.addStretch(1)
+        left = QVBoxLayout(); left.addWidget(QLabel("Labels to fit")); left.addWidget(self.label_box)
+        controls.addLayout(left)
+        controls.addLayout(form)
+        controls.addLayout(buttons)
+        controls.addStretch(1)
+        layout.addLayout(controls)
+        split = QSplitter(Qt.Horizontal)
+        self.figure = Figure(figsize=(9, 6), layout="constrained")
+        self.canvas = FigureCanvasQTAgg(self.figure)
+        self.report = QPlainTextEdit(); self.report.setReadOnly(True)
+        self.report.setLineWrapMode(QPlainTextEdit.NoWrap)
+        self.report.setFont(QFont("Menlo, Consolas, DejaVu Sans Mono", 9))
+        source_text = "".join(f"  {i['project']}: {i['particles']:,} particles\n" for i in self.inputs)
+        self.report.setPlainText(
+            f"{len(rows):,} accepted particles with a true size and a best-focus reference"
+            + (f", from {len(self.inputs)} project(s):\n{source_text}" if self.inputs else ".\n") + "\n"
+            "Fit && validate fits the length and focus models on each side of the object plane, then refits "
+            "leaving out one batch at a time and retrieves that batch's sizes (side known, and side unknown "
+            "as for cloud data) to show how well the retrieval really works.")
+        split.addWidget(self.canvas); split.addWidget(self.report)
+        split.setSizes([820, 430])
+        layout.addWidget(split, 1)
+
+    def _table(self):
+        chosen = {self.label_box.item(i).data(Qt.UserRole) for i in range(self.label_box.count())
+                  if self.label_box.item(i).checkState() == Qt.Checked}
+        rows = [r for r in self.rows if (r.get("label") or "") in chosen]
+        table = sizing.CalibrationTable.from_rows(rows)
+        if self.flip.isChecked():
+            table.d = -table.d
+        return table
+
+    def run(self):
+        table = self._table()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self.model, self.validation, self.tracking = sizing.run_calibration(
+                table, illum_min=(self.illum_min.value() or None), foc_crit=self.foc_crit.value(),
+                offset_um=self.offset.value(), fit_offset=True if self.fit_offset.isChecked() else None)
+        except Exception as exc:   # report fitting problems instead of crashing the workbench
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Fit size & focus model", str(exc))
+            return
+        QApplication.restoreOverrideCursor()
+        if self.flip.isChecked():
+            self.model.sign_convention += " (flipped: d → −d)"
+        self.model.inputs = self.inputs
+        self.table = table
+        sizing.make_figure(self.model, table, self.validation, self.tracking, figure=self.figure)
+        self.canvas.draw_idle()
+        self.report.setPlainText(sizing.format_report(self.model, self.validation, self.tracking))
+        self.save_button.setEnabled(True)
+        self.figure_button.setEnabled(True)
+
+    def _default_path(self, suffix):
+        parent = self.parent()
+        project = getattr(parent, "project_file", None)
+        return str(project.with_name(project.stem + suffix)) if project else "sizing_model" + suffix[-5:]
+
+    def save_model(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save sizing model", self._default_path("_sizing_model.json"),
+                                              "JSON (*.json)")
+        if path:
+            self.model.save(path)
+            self.report.appendPlainText(f"\nSaved model → {path}")
+
+    def save_figure(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save figure", self._default_path("_sizing_fit.png"),
+                                              "PNG (*.png);;PDF (*.pdf)")
+        if path:
+            self.figure.savefig(path, dpi=130)
+
+
 class CalibrationWindow(QMainWindow):
+    _windows: list = []          # every open workbench window (File ▸ New window)
+
     def __init__(self, initial_directory: Optional[str] = None, position_file: Optional[str] = None,
                  z_min_um: float = -10000.0, z_max_um: float = 10000.0, z_step_um: float = 10.0):
         super().__init__()
-        self.setWindowTitle("CPI · Calibration Workbench v11")
+        CalibrationWindow._windows.append(self)
+        self.setWindowTitle("CPI · Calibration Workbench v12")
         self.setAcceptDrops(True)
         screen = QApplication.primaryScreen()
         available = screen.availableGeometry() if screen is not None else None
@@ -449,8 +664,13 @@ class CalibrationWindow(QMainWindow):
         self.project_file: Optional[Path] = None
         self.selection_file: Optional[Path] = None
         self.position_file = position_file
-        self.position_series = "beads"
-        self.position_time_basis = "roi"
+        self.position_series = None   # None = every series in a consolidated stage CSV
+        self.position_time_basis = None
+        # More stage CSVs (merged projects): [{"path", "series", "time_basis", "from"}]
+        self.extra_position_files: list[dict] = []
+        self.time_windows: list[dict] = []     # named time windows (e.g. one per bead size)
+        self._shown_batches: list[str] = []    # several Flag-history batches shown together
+        self.active_time_window = None
         self.z_min_um, self.z_max_um, self.z_step_um = z_min_um, z_max_um, z_step_um
         self._updating_z = False
         self.stage_segments = []
@@ -459,9 +679,19 @@ class CalibrationWindow(QMainWindow):
         self._reference_index = {}
         self._active_members = set()
         self._draft_reference_cache = None
+        self._steps_cache = None
+        self._groups_cache = None
+        self._session_of = {}
+        self._own_ref_names = {}
+        self._groups_of = {}
+        self._ref_manual = False      # True once the user moved Xbest/Zbest by hand
+        self._ref_set_for_cluster = False  # the line was placed (peak or by hand) for the current cluster
+        self._auto_placing = False
         self._last_filter_spec = None
+        others = [w for w in CalibrationWindow._windows if w is not self and hasattr(w, "labels")]
         try:
-            self.labels = LabelLibrary.load()
+            # Windows share one label library, so an edit in one is never overwritten by another.
+            self.labels = others[0].labels if others else LabelLibrary.load()
             self._label_error = None
         except Exception as exc:  # unreadable library: keep working, warn once
             self.labels = LabelLibrary()
@@ -471,6 +701,7 @@ class CalibrationWindow(QMainWindow):
         self.selected_ids: set[str] = set()
         self.regions = []          # history of box gestures (kept for project files)
         self.undo_stack = []
+        self.redo_stack = []
         self._base_indices: list[int] = []
         self.filtered: list[int] = []  # the browse list (gallery + particle viewer)
         self._filtered_pos: dict[str, int] = {}
@@ -496,6 +727,18 @@ class CalibrationWindow(QMainWindow):
         self._hover_timer.setSingleShot(True)
         self._hover_timer.timeout.connect(self._hover_load_image)
         self._hover_pending = None
+        self._mat_loader = None
+        # Writes are batched: an action marks what changed and the files are written
+        # once, shortly after the last change (and always on close / project switch).
+        self._pending_flags = False
+        self._pending_project = False
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.setInterval(1500)
+        self._save_timer.timeout.connect(lambda: self.flush_saves(background=True))
+        self._writer_thread = None
+        self._save_notifier = _SaveNotifier()
+        self._save_notifier.done.connect(self._save_finished)
 
         self._build_ui()
         self._build_menu()
@@ -572,13 +815,17 @@ class CalibrationWindow(QMainWindow):
                                        "Flag every selected particle ACCEPTED (green) and save. "
                                        "Accepted particles are skipped by new boxes. Key K on the plots tab.")
         self.reject_btn = self._button("✕  Reject selection", self.reject_selection, "reject",
-                                       "Flag every selected particle REJECTED (red) and save. Key R on the plots tab.")
+                                       "Not a usable calibration particle (debris, overlapping, clipped, out of focus …): "
+                                       "flag REJECTED (red), saved, excluded everywhere. Key R on the plots tab.\n"
+                                       "To merely leave a good particle out of THIS batch, use Remove (Ctrl/⌘-drag, "
+                                       "Del) instead — it stays unreviewed for a later batch.")
         self.unflag_btn = self._button("↺  Unflag selection", self.unflag_selection, "neutral",
                                        "Return selected particles to UNREVIEWED (grey), the default. "
                                        "Key U on the plots tab.")
         self.clear_sel_btn = self._button("Clear selection", self.clear_selection, None,
                                           "Deselect everything (Esc). Flags are not changed.")
         self.undo_btn = self._button("↶  Undo", self.undo, None, "Undo the last selection or flag change (Ctrl+Z)")
+        self.redo_btn = self._button("↷  Redo", self.redo, None, "Redo what was undone (Ctrl+Shift+Z or Ctrl+Y)")
         accept_as = QLabel("Accept as")
         accept_as.setToolTip("Label given to particles when you accept them (selection, gallery or viewer)")
         layout.addWidget(accept_as)
@@ -588,7 +835,14 @@ class CalibrationWindow(QMainWindow):
                                      "Manage labels in the Labels tab.")
         self.accept_label.activated.connect(self._accept_label_chosen)
         layout.addWidget(self.accept_label)
-        for button in (self.accept_btn, self.reject_btn, self.unflag_btn, self.clear_sel_btn, self.undo_btn):
+        self.save_ref_cb = QCheckBox("+ Xbest/Zbest")
+        self.save_ref_cb.setChecked(True)
+        self.save_ref_cb.setToolTip("Accepting also saves the current Xbest/Zbest (the orange line) as this batch's "
+                                    "own best focus. The line follows the selection's own focus peak unless you "
+                                    "move it.")
+        layout.addWidget(self.save_ref_cb)
+        for button in (self.accept_btn, self.reject_btn, self.unflag_btn, self.clear_sel_btn, self.undo_btn,
+                       self.redo_btn):
             layout.addWidget(button)
         return bar
 
@@ -630,13 +884,15 @@ class CalibrationWindow(QMainWindow):
             tools.addWidget(button)
         self.box_group.buttonClicked.connect(lambda b: self.set_box_mode(b.property("value")))
         tools.addSpacing(8)
-        tools.addWidget(QLabel("New/Add boxes pick"))
+        tools.addWidget(QLabel("Boxes pick"))
         self.pick_scope = QComboBox()
         for value, label in PICK_SCOPES:
             self.pick_scope.addItem(label, value)
-        self.pick_scope.setToolTip("Which review states a New or Add box can pick up. 'Unreviewed only' "
-                                   "stops you re-selecting accepted (green) or rejected (red) particles. "
-                                   "Choose 'Accepted only' to grab green particles and unflag them.")
+        self.pick_scope.setToolTip("Which particles a New or Add box picks up when the box contains a mix. "
+                                   "'Unreviewed only' (default) skips accepted (green) and rejected (red) ones, "
+                                   "so a cluster isn't picked twice. If a box contains ONLY flagged particles "
+                                   "they are selected anyway, so you never need 'Everything' just to grab an "
+                                   "accepted cluster again.")
         self.pick_scope.currentIndexChanged.connect(lambda _: self._update_hint())
         tools.addWidget(self.pick_scope)
         tools.addStretch(1)
@@ -665,6 +921,9 @@ class CalibrationWindow(QMainWindow):
         self.colour_by.addItem("Label", "label")
         self.colour_by.addItem("Camera X position", "image_x")
         self.colour_by.addItem("Camera Y position", "image_y")
+        self.colour_by.addItem("Local illumination", "illum")
+        self.colour_by.addItem("Batch Xbest (slide tilt)", "ref_x")
+        self.colour_by.addItem("Batch Zbest (slide tilt)", "ref_z")
         self.colour_by.currentIndexChanged.connect(lambda _: self._redraw_plots())
         head.addWidget(self.colour_by)
         camera_layout.addLayout(head)
@@ -708,17 +967,42 @@ class CalibrationWindow(QMainWindow):
             combo.currentIndexChanged.connect(lambda _: self._change_plot_axes())
         metric_layout.addLayout(head)
         options = QHBoxLayout()
-        self.selection_only_cb = QCheckBox("Show only the selection here")
-        self.selection_only_cb.setToolTip("Hide unselected particles on the focus/size plots so outliers "
-                                          "in the current cluster are easy to spot")
-        self.selection_only_cb.toggled.connect(lambda _: self._redraw_plots())
-        self.median_cb = QCheckBox("Median ± IQR trace")
+        self.selection_only_cb = QCheckBox("Only selection / current batch (S)")
+        self.selection_only_cb.setChecked(True)
+        self.selection_only_cb.setToolTip("On: while something is selected (or a batch is shown) the focus/size "
+                                          "plots show only that, so outliers are easy to spot; with nothing "
+                                          "selected they show everything. Off: always show all particles. "
+                                          "Press S to toggle.")
+        self.selection_only_cb.toggled.connect(lambda _: self._refresh_views())
+        self.median_cb = QCheckBox("Median ± IQR")
         self.median_cb.setChecked(True)
         self.median_cb.setToolTip("Median and inter-quartile band of every plotted metric along X "
                                   "(rejected particles excluded). Dashed blue: median of the selection.")
         self.median_cb.toggled.connect(lambda _: self._redraw_plots())
         options.addWidget(self.selection_only_cb)
         options.addWidget(self.median_cb)
+        self.window_combo = QComboBox()
+        self.window_combo.setToolTip("Show one saved time window (e.g. one bead size). Manage windows in the "
+                                     "Filters tab.")
+        self.window_combo.addItem("All times", None)
+        self.window_combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.window_combo.setMinimumWidth(150)
+        self.window_combo.activated.connect(
+            lambda _i: self.show_time_window(self.window_combo.currentData()))
+        options.addWidget(QLabel("Window"))
+        options.addWidget(self.window_combo)
+        self.follow_peak_cb = QCheckBox("Line follows focus peak")
+        self.follow_peak_cb.setChecked(True)
+        self.follow_peak_cb.setToolTip("When you select a cluster, Xbest/Zbest jump to the peak of the cluster's own "
+                                       "median focus (blue ▲). Drag the line to override; it then stays put until "
+                                       "you select a different cluster.")
+        self.follow_peak_cb.toggled.connect(lambda on: (self._auto_place_reference(force=True), self.update_plots())
+                                            if on else None)
+        options.addWidget(self.follow_peak_cb)
+        options.addStretch(1)
+        self.scope_label = QLabel("")
+        self.scope_label.setObjectName("hint")
+        options.addWidget(self.scope_label)
         options.addStretch(1)
         metric_layout.addLayout(options)
         self.plot_figure = Figure(figsize=(6, 6), constrained_layout=True)
@@ -749,7 +1033,7 @@ class CalibrationWindow(QMainWindow):
             self.show_status[status] = box
             legend.addWidget(box)
         legend.addSpacing(8)
-        for text, colour in (("◉ Selected", SELECTED_COLOUR), ("◎ In calibration set", COMMITTED_COLOUR),
+        for text, colour in (("◉ Selected", SELECTED_COLOUR),
                              ("☆ Current particle", CURRENT_COLOUR)):
             label = QLabel(text)
             label.setStyleSheet(f"color: {colour}; font-weight: 700;")
@@ -801,10 +1085,11 @@ class CalibrationWindow(QMainWindow):
         actions.addWidget(self.gallery_pick_label)
         self.gallery_actions = [
             self._button("− Remove from selection  (Del)", lambda: self.gallery_selection("remove"), "neutral",
-                         "Drop picked particles from the selection without flagging them"),
+                         "Leave picked particles out of this batch; they stay unreviewed for later"),
             self._button("+ Add to selection  (A)", lambda: self.gallery_selection("add")),
             self._button("✓ Accept  (K)", lambda: self.flag_gallery("keep"), "accept"),
-            self._button("✕ Reject  (R)", lambda: self.flag_gallery("reject"), "reject"),
+            self._button("✕ Reject  (R)", lambda: self.flag_gallery("reject"), "reject",
+                         "Debris / unusable: flag picked particles rejected"),
             self._button("↺ Unflag  (U)", lambda: self.flag_gallery("undecided"), "neutral"),
         ]
         for button in self.gallery_actions:
@@ -850,7 +1135,8 @@ class CalibrationWindow(QMainWindow):
         reason_row = QHBoxLayout()
         reason_row.addWidget(QLabel("Reject reason"))
         self.reject_reason = QComboBox()
-        self.reject_reason.addItems(["", "overlap", "clipped", "segmentation", "artefact", "wrong type", "other"])
+        self.reject_reason.addItems(["", "debris", "overlap", "clipped", "out of focus", "segmentation", "artefact",
+                                     "wrong type", "other"])
         reason_row.addWidget(self.reject_reason, 1)
         col.addLayout(reason_row)
         col.addWidget(self.undecided_button)
@@ -876,7 +1162,8 @@ class CalibrationWindow(QMainWindow):
         metrics = QFormLayout(metrics_box)
         self.metric_labels: Dict[str, QLabel] = {}
         for key, label in (("time", "Time"), ("length", "Length [µm]"), ("width", "Width [µm]"),
-                           ("focus", "Focus"), ("roundness", "Roundness"), ("xy", "Image x, y [px]"),
+                           ("focus", "Focus"), ("illum", "Local illumination"), ("roundness", "Roundness"),
+                           ("xy", "Image x, y [px]"),
                            ("stage", "Stage X, Z"), ("actual", "Actual L × W [µm]"),
                            ("instrument", "Instrument"), ("source", "Source")):
             widget = QLabel("—")
@@ -961,7 +1248,7 @@ class CalibrationWindow(QMainWindow):
 
         review_page = make_tab("Review")
         labels_page = make_tab("Labels")
-        sets_page = make_tab("Sets / X–Z")
+        sets_page = make_tab("Best focus")
         filter_page = make_tab("Filters")
         advanced_page = make_tab("Advanced")
         self.control_tabs.setTabVisible(4, False)
@@ -974,6 +1261,27 @@ class CalibrationWindow(QMainWindow):
         return panel
 
     def _build_review_page(self, page):
+        instrument = QGroupBox("Calibrated instrument")
+        grid = QGridLayout(instrument)
+        grid.addWidget(QLabel("CPI"), 0, 0)
+        self.cpi_type = QComboBox()
+        self.cpi_type.addItem("(detect from data)", "")
+        for key, text in CPI_DISPLAY.items():
+            self.cpi_type.addItem(text, key)
+        self.cpi_type.addItem("Other", "other")
+        grid.addWidget(self.cpi_type, 0, 1)
+        grid.addWidget(QLabel("Name / serial"), 1, 0)
+        self.cpi_id = QLineEdit()
+        self.cpi_id.setPlaceholderText("e.g. FAAM CPI-3V s/n 12")
+        grid.addWidget(self.cpi_id, 1, 1)
+        self.cpi_detected = QLabel("")
+        self.cpi_detected.setWordWrap(True)
+        self.cpi_detected.setTextFormat(Qt.RichText)
+        self.cpi_detected.setObjectName("hint")
+        grid.addWidget(self.cpi_detected, 2, 0, 1, 2)
+        self.cpi_type.currentIndexChanged.connect(lambda _: self._instrument_changed())
+        self.cpi_id.editingFinished.connect(self._instrument_changed)
+        page.addWidget(instrument)
         progress = QGroupBox("Progress (all loaded particles)")
         grid = QGridLayout(progress)
         grid.setHorizontalSpacing(4)
@@ -981,8 +1289,7 @@ class CalibrationWindow(QMainWindow):
         rows = (("undecided", "● Unreviewed", STATUS_COLOUR["undecided"]),
                 ("keep", "● Accepted", STATUS_COLOUR["keep"]),
                 ("reject", "✕ Rejected", STATUS_COLOUR["reject"]),
-                ("selected", "◉ Selected", SELECTED_COLOUR),
-                ("committed", "◎ In calibration sets", COMMITTED_COLOUR))
+                ("selected", "◉ Selected", SELECTED_COLOUR))
         for row, (key, text, colour) in enumerate(rows):
             name = QLabel(text)
             name.setStyleSheet(f"color:{colour}; font-weight:700;")
@@ -1013,11 +1320,13 @@ class CalibrationWindow(QMainWindow):
         text = QLabel(
             "<ol style='margin-left:-18px'>"
             "<li><b>Drag a box</b> on Camera X–Y → particles turn <b style='color:#1c64d6'>blue</b>.</li>"
-            "<li>On Focus / Length, <b>Ctrl/⌘-drag</b> round outliers to drop them, or use the "
-            "<b style='color:#e03b3b'>✕ Reject</b> box.</li>"
+            "<li>On Focus / Length: <b>Ctrl/⌘-drag</b> round particles that are fine but don't belong "
+            "in <i>this</i> batch (they stay unreviewed); use the <b style='color:#e03b3b'>✕ Reject</b> box "
+            "for debris / unusable ones.</li>"
             "<li><b>Accept selection</b> (K) → <b style='color:#2b9a48'>green</b>, saved, and skipped by "
             "new boxes.</li>"
-            "<li>Check images in the Gallery; Del removes, R rejects.</li>"
+            "<li>Check images in the Gallery: <b>Del</b> leaves a particle out of this batch, <b>R</b> rejects "
+            "debris.</li>"
             "<li>To undo a flag: <b>Unflag</b> (U), or Ctrl+Z.</li></ol>"
             "<span style='color:#516579'>Click a dot to inspect it · Shift-click adds · Ctrl/⌘-click toggles · "
             "double-click opens · wheel zooms.</span>")
@@ -1030,14 +1339,35 @@ class CalibrationWindow(QMainWindow):
         hist = QVBoxLayout(history)
         self.batch_list = QListWidget()
         self.batch_list.setMinimumHeight(90)
+        self.batch_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.batch_list.setToolTip("Click a batch to show it; Ctrl/⌘- or Shift-click to show several together. "
+                                   "Select batch and Change label act on all chosen batches.")
         self.batch_list.itemDoubleClicked.connect(lambda _: self.select_batch())
+        self.batch_list.itemClicked.connect(lambda _: self.batch_clicked())   # incl. Ctrl/Shift-click
         hist.addWidget(self.batch_list)
         row = QHBoxLayout()
         row.addWidget(self._button("Select batch", self.select_batch, None,
                                    "Make the particles of this batch the selection"))
+        row.addWidget(self._button("Change label…", self.relabel_batch_dialog, None,
+                                   "Give every particle in this batch a different label (and its true size)"))
         row.addWidget(self._button("Undo batch…", self.remove_classified_batch, "neutral",
                                    "Return this batch's particles to unreviewed (unless changed since)"))
         hist.addLayout(row)
+        row = QHBoxLayout()
+        row.addWidget(self._button("Save Xbest/Zbest to batch", self.save_batch_reference, "primary",
+                                   "Give this batch its own best focus: the Xbest/Zbest currently in the "
+                                   "Best focus tab. Later batches without their own X/Z inherit it."))
+        row.addWidget(self._button("Clear", self.clear_batch_reference, None,
+                                   "Remove the batch's own X/Z; it then borrows from the nearest calibrated batch"))
+        hist.addLayout(row)
+        hist.addWidget(self._button("Set batch X/Z from their focus peaks (d = 0 at max focus)…", self.fill_batch_references,
+                                    None, "For accepted batches with no Xbest/Zbest yet (e.g. from an older "
+                                    "project): use each batch's own median focus peak"))
+        self.batch_ref_label = QLabel("")
+        self.batch_ref_label.setWordWrap(True)
+        self.batch_ref_label.setTextFormat(Qt.RichText)
+        self.batch_ref_label.setObjectName("hint")
+        hist.addWidget(self.batch_ref_label)
         page.addWidget(history)
         page.addStretch(1)
 
@@ -1089,17 +1419,17 @@ class CalibrationWindow(QMainWindow):
         page.addStretch(1)
 
     def _build_sets_page(self, page):
-        box = QGroupBox("Calibration sets and best-focus X/Z")
-        sets_layout = QVBoxLayout(box)
-        sets_layout.setSpacing(4)
-        note = QLabel("A calibration set is a named snapshot of particles plus its best-focus Xbest/Zbest. "
-                      "Tip: Review → Accepted → Select, then save it here.")
+        box = QGroupBox("Best focus (Xbest / Zbest)")
+        col = QVBoxLayout(box)
+        col.setSpacing(4)
+        note = QLabel("This is the orange line on Focus vs Stage X / Z. It follows the selected cluster's own "
+                      "focus peak; drag it or type here to override. <b>Accept (K)</b> saves it with the new "
+                      "batch. To change an existing batch, click it in <b>Review → Flag history</b>, adjust, "
+                      "and save.")
         note.setWordWrap(True)
+        note.setTextFormat(Qt.RichText)
         note.setObjectName("hint")
-        sets_layout.addWidget(note)
-        self.set_name_field = QLineEdit()
-        self.set_name_field.setPlaceholderText("Set name, e.g. beads · jig placement 1")
-        sets_layout.addWidget(self.set_name_field)
+        col.addWidget(note)
         reference_row = QHBoxLayout()
         reference_row.addWidget(QLabel("Xbest"))
         self.best_x_set = QDoubleSpinBox()
@@ -1111,12 +1441,32 @@ class CalibrationWindow(QMainWindow):
             spin.setRange(-1e6, 1e6)
             spin.setDecimals(5)
             spin.setSingleStep(.05)
-            spin.valueChanged.connect(lambda _value: self._set_reference_changed())
+            spin.valueChanged.connect(lambda _value: self._reference_edited())
             spin.setToolTip("Original micrometer stage position at maximum focus")
-        sets_layout.addLayout(reference_row)
-        sets_layout.addWidget(self._button("Snap to median focus peak", self.snap_reference_to_median_peak, None,
-                                           "Set Xbest (or Zbest) to the peak of the median focus trace "
-                                           "currently plotted against Stage X (or Z)"))
+        col.addLayout(reference_row)
+        self.norm_peak_cb = QCheckBox("Find peaks with focus ÷ local illumination")
+        self.norm_peak_cb.setToolTip("Laser power and the beam profile scale the focus metric. Tick to find each "
+                                     "cluster's best focus from illumination-normalised focus (recommended if "
+                                     "illumination varied during the scan).")
+        self.norm_peak_cb.toggled.connect(lambda _on: (self._auto_place_reference(force=True), self.update_plots()))
+        col.addWidget(self.norm_peak_cb)
+        col.addWidget(self._button("Snap to the selection's focus peak", self.snap_reference_to_median_peak, None,
+                                   "Put Xbest/Zbest at the peak of the selected cluster's median focus "
+                                   "(or of all particles, if nothing is selected)"))
+        self.active_set_label = QLabel("")
+        self.active_set_label.setWordWrap(True)
+        self.active_set_label.setTextFormat(Qt.RichText)
+        self.active_set_label.setObjectName("hint")
+        col.addWidget(self.active_set_label)
+        self.save_to_batch_button = self._button("Save Xbest/Zbest to batch", self.save_batch_reference, "primary",
+                                                 "Save these values as the clicked batch's own best focus")
+        col.addWidget(self.save_to_batch_button)
+        self.set_radius_label = QLabel("")
+        self.set_radius_label.setWordWrap(True)
+        self.set_radius_label.setObjectName("hint")
+        col.addWidget(self.set_radius_label)
+        page.addWidget(box)
+
         plane = QGroupBox("Object plane (for signed distance d)")
         plane_layout = QGridLayout(plane)
         plane_layout.addWidget(QLabel("Normal θ"), 0, 0)
@@ -1143,42 +1493,16 @@ class CalibrationWindow(QMainWindow):
         self.plane_hint.setWordWrap(True)
         self.plane_hint.setObjectName("hint")
         plane_layout.addWidget(self.plane_hint, 2, 0, 1, 3)
-        sets_layout.addWidget(plane)
-        self.set_radius_label = QLabel("Best-focus radius = 0 (stage units)")
-        self.set_radius_label.setWordWrap(True)
-        sets_layout.addWidget(self.set_radius_label)
-        commit = self._button("Save selection as set + X/Z", self.commit_working_set, "primary",
-                              "Save the current particle-ID snapshot AND these two best-focus values together")
-        sets_layout.addWidget(commit)
-        individual = QHBoxLayout()
-        individual.addWidget(self._button("Add current", self.commit_current_particle, None,
-                                          "Add the current particle (☆) to the set named above"))
-        individual.addWidget(self._button("Remove current", self.remove_current_from_committed_set, None,
-                                          "Remove the current particle (☆) from the chosen set"))
-        sets_layout.addLayout(individual)
-        self.saved_sets_list = QListWidget()
-        self.saved_sets_list.setMinimumHeight(70)
-        self.saved_sets_list.setMaximumHeight(140)
-        self.saved_sets_list.itemClicked.connect(lambda _: self.saved_set_clicked())
-        self.saved_sets_list.itemDoubleClicked.connect(lambda _: self.load_named_set())
-        sets_layout.addWidget(self.saved_sets_list)
-        self.active_set_label = QLabel("No active calibrated set")
-        self.active_set_label.setWordWrap(True)
-        self.active_set_label.setObjectName("hint")
-        sets_layout.addWidget(self.active_set_label)
-        ref_actions = QHBoxLayout()
-        ref_actions.addWidget(self._button("Save X/Z changes", self.update_saved_set_reference, None,
-                                           "Correct the chosen set's X/Z without changing its particles"))
-        ref_actions.addWidget(self._button("Clear X/Z", self.clear_saved_set_reference))
-        sets_layout.addLayout(ref_actions)
-        set_actions = QGridLayout()
-        for label, action, row, col in (("Select set", self.load_named_set, 0, 0),
-                                        ("Add to selection", self.add_named_set, 0, 1),
-                                        ("Delete set…", self.delete_named_set, 1, 0),
-                                        ("Unflag members…", self.clear_named_set_flags, 1, 1)):
-            set_actions.addWidget(self._button(label, action), row, col)
-        sets_layout.addLayout(set_actions)
-        page.addWidget(box)
+        page.addWidget(plane)
+
+        timeline_box = QGroupBox("Batch best-focus values")
+        timeline_layout = QVBoxLayout(timeline_box)
+        self.timeline_label = QLabel("")
+        self.timeline_label.setWordWrap(True)
+        self.timeline_label.setTextFormat(Qt.RichText)
+        self.timeline_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        timeline_layout.addWidget(self.timeline_label)
+        page.addWidget(timeline_box)
         page.addStretch(1)
 
     def _build_filter_page(self, page):
@@ -1190,7 +1514,8 @@ class CalibrationWindow(QMainWindow):
         self.filter_fields: Dict[str, tuple] = {}
         row = 1
         for key, label in (("length", "Length [µm]"), ("width", "Width [µm]"), ("focus", "Focus"),
-                           ("x", "Image x [px]"), ("y", "Image y [px]"), ("ratio", "Meas./true length")):
+                           ("x", "Image x [px]"), ("y", "Image y [px]"), ("ratio", "Meas./true length"),
+                           ("illum", "Local illumination")):
             low, high = QLineEdit(), QLineEdit()
             low.setPlaceholderText("any")
             high.setPlaceholderText("any")
@@ -1226,7 +1551,189 @@ class CalibrationWindow(QMainWindow):
         filter_layout.addWidget(self._button("Apply", self.apply_filters, "primary"), row, 1)
         filter_layout.addWidget(self._button("Clear", self.clear_filters), row, 2)
         page.addWidget(filter_box)
+        windows_box = QGroupBox("Saved time windows")
+        wl = QVBoxLayout(windows_box)
+        hint = QLabel("Name parts of a dataset by time — e.g. the 15, 40 and 100 µm bead runs — and switch "
+                      "between them here or with <b>Window</b> above the plots. Saved in the project.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#516579;")
+        wl.addWidget(hint)
+        self.window_list = QListWidget()
+        self.window_list.setMinimumHeight(110)
+        self.window_list.itemDoubleClicked.connect(
+            lambda item: self.show_time_window(item.data(Qt.UserRole)))
+        wl.addWidget(self.window_list)
+        grid = QGridLayout()
+        for i, (text, slot, tip) in enumerate((
+                ("Show", lambda: self.show_time_window(self._chosen_window()), "Filter to the chosen window"),
+                ("All times", lambda: self.show_time_window(None), "Remove the time filter"),
+                ("Suggest from gaps…", self.suggest_time_windows,
+                 "One window per run, split where acquisition paused"),
+                ("From selection…", self.time_window_from_selection,
+                 "A window spanning the selected particles' times"),
+                ("From time filter…", self.time_window_from_filter, "A window from the time filter above"),
+                ("Edit…", self.edit_time_window, "Rename, change times or label"),
+                ("Delete", self.delete_time_window, "Delete the chosen window (particles are not affected)"))):
+            grid.addWidget(self._button(text, slot, "primary" if text == "Show" else None, tip), i // 2, i % 2)
+        wl.addLayout(grid)
+        page.addWidget(windows_box)
         page.addStretch(1)
+
+    # ------------------------------------------------------- time windows --
+    def _chosen_window(self):
+        item = self.window_list.currentItem() if hasattr(self, "window_list") else None
+        return item.data(Qt.UserRole) if item is not None else None
+
+    def _window(self, name):
+        return next((w for w in self.time_windows if w["name"] == name), None)
+
+    def _unique_window_name(self, name, ignore=None):
+        base, k, out = name, 2, name
+        while any(w["name"] == out and w is not ignore for w in self.time_windows):
+            out, k = f"{base} ({k})", k + 1
+        return out
+
+    def _refresh_time_windows(self):
+        times = np.array([r.time_matlab for r in self.catalog.records], float) if self.catalog else np.array([])
+        self.window_list.clear()
+        for w in self.time_windows:
+            try:
+                n = int(in_window(times, w).sum())
+            except ValueError:
+                n = 0
+            text = f"{w['name']}   {w['start'][11:]} – {w['end'][11:]}   ({n:,} particles)"
+            if w["start"][:10] != w["end"][:10] or not self.catalog:
+                text = f"{w['name']}   {w['start']} – {w['end']}   ({n:,} particles)"
+            if w.get("label"):
+                text += f"   🏷 {w['label']}"
+            item = QListWidgetItem(("▶ " if w["name"] == self.active_time_window else "") + text)
+            item.setData(Qt.UserRole, w["name"])
+            item.setToolTip(f"{w['start']} → {w['end']}")
+            self.window_list.addItem(item)
+        self.window_combo.blockSignals(True)
+        self.window_combo.clear()
+        self.window_combo.addItem("All times", None)
+        for w in self.time_windows:
+            self.window_combo.addItem(w["name"], w["name"])
+        self.window_combo.setCurrentIndex(max(0, self.window_combo.findData(self.active_time_window)))
+        self.window_combo.blockSignals(False)
+
+    def show_time_window(self, name):
+        window = self._window(name) if name else None
+        if window is None:
+            self.active_time_window = None
+            self.time_filter_checkbox.setChecked(False)
+            self.apply_filters()
+            self._refresh_time_windows()
+            self._toast("Showing all times.")
+            return
+        self.active_time_window = window["name"]
+        self._restore_date(self.time_low, window["start"])
+        self._restore_date(self.time_high, window["end"])
+        self.time_filter_checkbox.setChecked(True)
+        self.apply_filters()
+        note = ""
+        if window.get("label") and self.accept_label.findData(window["label"]) >= 0:
+            self.accept_label.setCurrentIndex(self.accept_label.findData(window["label"]))
+            note = f" · Accept as: {window['label']}"
+        self._refresh_time_windows()
+        self._toast(f"Window '{window['name']}': {len(self._base_indices):,} particles shown{note}.")
+
+    def _add_window(self, window, edit=True):
+        if edit:
+            dialog = TimeWindowDialog(self, window, sorted(self._label_names()))
+            if dialog.exec() != QDialog.Accepted:
+                return None
+            window = dialog.value()
+        if window["end"] < window["start"]:
+            QMessageBox.warning(self, "Time window", "The end is before the start.")
+            return None
+        window["name"] = self._unique_window_name(window["name"])
+        self.time_windows.append(window)
+        self.time_windows.sort(key=lambda w: w["start"])
+        clash = [pair for pair in overlapping(self.time_windows) if window["name"] in pair]
+        self._refresh_time_windows()
+        self.save_project_if_open()
+        if clash:
+            self._toast(f"Note: '{window['name']}' overlaps " + ", ".join(b if a == window['name'] else a
+                                                                         for a, b in clash) + ".")
+        return window
+
+    def _label_names(self):
+        names = getattr(self.labels, "names", None)
+        if callable(names):
+            return list(names())
+        return [self.accept_label.itemData(i) for i in range(self.accept_label.count())
+                if self.accept_label.itemData(i) not in (None, "", "__new__")]
+
+    def time_window_from_selection(self):
+        recs = [self.catalog._by_id[p] for p in self.selected_ids if self.catalog and p in self.catalog._by_id]
+        times = [r.time_matlab for r in recs if math.isfinite(r.time_matlab)]
+        if not times:
+            QMessageBox.information(self, "Time window", "Select some particles first (e.g. a box on a "
+                                    "time plot, or a batch).")
+            return None
+        labels = {r.label for r in recs if r.label}
+        label = labels.pop() if len(labels) == 1 else self._accept_label_name()
+        return self._add_window(make_window(label or f"Window {len(self.time_windows) + 1}", min(times), max(times),
+                                            label=label))
+
+    def time_window_from_filter(self):
+        return self._add_window({"name": f"Window {len(self.time_windows) + 1}", "label": "",
+                                 "start": self._date_text(self.time_low), "end": self._date_text(self.time_high)})
+
+    def suggest_time_windows(self, *_, gap_minutes=None):
+        if not self.catalog or not self.catalog.records:
+            return []
+        if gap_minutes is None:
+            gap_minutes, ok = QInputDialog.getDouble(
+                self, "Suggest time windows", "Start a new window after a pause in acquisition longer than "
+                "(minutes):", 5.0, 0.1, 1440.0, 1)
+            if not ok:
+                return []
+        found = suggest_windows([r.time_matlab for r in self.catalog.records], gap_minutes)
+        existing = {(w["start"], w["end"]) for w in self.time_windows}
+        added = []
+        for w in found:
+            if (w["start"], w["end"]) in existing:
+                continue
+            w["name"] = self._unique_window_name(w["name"])
+            self.time_windows.append(w)
+            added.append(w)
+        self.time_windows.sort(key=lambda w: w["start"])
+        self._refresh_time_windows()
+        self.save_project_if_open()
+        self._toast(f"Added {len(added)} window(s) split at pauses over {gap_minutes:g} min. Show each one, then "
+                    "Edit… to name it (e.g. '15 µm beads') and give it a label.", 15000)
+        return added
+
+    def edit_time_window(self):
+        window = self._window(self._chosen_window())
+        if window is None:
+            return
+        dialog = TimeWindowDialog(self, window, sorted(self._label_names()))
+        if dialog.exec() != QDialog.Accepted:
+            return
+        new = dialog.value()
+        new["name"] = self._unique_window_name(new["name"], ignore=window)
+        if self.active_time_window == window["name"]:
+            self.active_time_window = new["name"]
+        window.update(new)
+        self.time_windows.sort(key=lambda w: w["start"])
+        self._refresh_time_windows()
+        self.save_project_if_open()
+        if self.active_time_window == window["name"]:
+            self.show_time_window(window["name"])
+
+    def delete_time_window(self):
+        name = self._chosen_window()
+        if not name:
+            return
+        self.time_windows = [w for w in self.time_windows if w["name"] != name]
+        if self.active_time_window == name:
+            self.show_time_window(None)
+        self._refresh_time_windows()
+        self.save_project_if_open()
 
     def _build_advanced_page(self, page):
         z_box = QGroupBox("Object-plane position (current particle)")
@@ -1290,13 +1797,20 @@ class CalibrationWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("File")
-        for text, slot in (("New project…", self.create_project), ("Open project…", self.open_project_dialog),
-                           ("Save project", self.save_project), (None, None),
+        for text, slot in (("New window", self.new_window),
+                           ("New project…", self.create_project), ("Open project…", self.open_project_dialog),
+                           ("Save project", self.save_project), ("Close project", self.close_project),
+                           (None, None),
                            ("Add MAT files…", self.choose_files), ("Open processed directory…", self.choose_directory),
                            ("Add another dataset…", self.choose_add_directory),
+                           ("Remove MAT files from project…", self.remove_sources_dialog),
                            ("Import calibration spreadsheet…", self.choose_truth_table),
                            ("Import stage positions CSV…", self.choose_position_file),
-                           ("Save flags as…", self.save_as)):
+                           ("Reload stage positions CSV (after editing it)", self.reload_stage_positions),
+                           ("Save flags as…", self.save_as), (None, None),
+                           ("Merge projects into a viewing copy…", self.merge_projects_dialog),
+                           ("Copy project onto reprocessed data…", self.copy_project_to_reprocessed_dialog),
+                           ("Export several projects' particles to one CSV…", self.combine_projects_dialog)):
             if text is None:
                 file_menu.addSeparator()
                 continue
@@ -1305,21 +1819,37 @@ class CalibrationWindow(QMainWindow):
             file_menu.addAction(action)
         edit_menu = self.menuBar().addMenu("Edit")
         for text, slot, keys in (("Undo", self.undo, "Ctrl+Z"),
+                                 ("Redo", self.redo, "Ctrl+Shift+Z"),
                                  ("Select all visible (pickable)", self.select_all_visible, "Ctrl+A"),
                                  ("Clear selection", self.clear_selection, None),
                                  ("Accept selection", self.accept_selection, None),
                                  ("Reject selection", self.reject_selection, None),
-                                 ("Unflag selection", self.unflag_selection, None)):
+                                 ("Unflag selection", self.unflag_selection, None),
+                                 ("Change label of selection…", self.relabel_selection_dialog, "L")):
             action = QAction(text, self)
             action.triggered.connect(slot)
             if keys:
                 action.setShortcut(QKeySequence(keys))
             edit_menu.addAction(action)
+        calib_menu = self.menuBar().addMenu("Calibration")
+        fit_action = QAction("Fit size && focus model — this project…", self)
+        fit_action.triggered.connect(self.open_sizing_dialog)
+        calib_menu.addAction(fit_action)
+        multi_action = QAction("Fit size && focus model — from several projects (runs)…", self)
+        multi_action.triggered.connect(self.fit_from_projects_dialog)
+        calib_menu.addAction(multi_action)
+        compare_action = QAction("Compare processing runs (same particles, different edge methods)…", self)
+        compare_action.triggered.connect(self.compare_processing_dialog)
+        calib_menu.addAction(compare_action)
         view_menu = self.menuBar().addMenu("View")
         self.hover_action = QAction("Hover preview on plots", self)
         self.hover_action.setCheckable(True)
         self.hover_action.setChecked(True)
         view_menu.addAction(self.hover_action)
+        self.show_reject_batches_action = QAction("Show reject batches from older projects in Flag history", self)
+        self.show_reject_batches_action.setCheckable(True)
+        self.show_reject_batches_action.toggled.connect(lambda _: self._refresh_saved_sets())
+        view_menu.addAction(self.show_reject_batches_action)
         show_advanced = QAction("Show experimental calibration tools", self)
         show_advanced.setCheckable(True)
         show_advanced.toggled.connect(self._show_advanced)
@@ -1343,9 +1873,11 @@ class CalibrationWindow(QMainWindow):
         key(Qt.Key_Delete, lambda: self._key_selection("remove"))
         key(Qt.Key_Backspace, lambda: self._key_selection("remove"))
         key(Qt.Key_Escape, self._key_escape)
+        key("Ctrl+Y", self.redo)
         key(Qt.Key_Return, self._key_open)
         key(Qt.Key_Enter, self._key_open)
         key("B", lambda: self.boundary_checkbox.setChecked(not self.boundary_checkbox.isChecked()))
+        key("S", lambda: self.selection_only_cb.setChecked(not self.selection_only_cb.isChecked()))
         key("+", lambda: self.z_spin.setValue(self.z_spin.value() + self.z_step_um))
         key("-", lambda: self.z_spin.setValue(self.z_spin.value() - self.z_step_um))
 
@@ -1393,8 +1925,19 @@ class CalibrationWindow(QMainWindow):
 
     def _key_escape(self):
         self._hide_hover()
+        if any(canvas.cancel_drag() for canvas in (self.spatial_canvas, self.plot_canvas)):
+            self.statusBar().showMessage("Box cancelled", 3000)
+            return
         if self._current_tab() == "gallery" and self.gallery.selectedItems():
             self.gallery.clearSelection()
+            return
+        if not self.selected_ids and (self.active_reference_set or self._shown_batches):
+            self.active_reference_set = None
+            self._shown_batches = []
+            self._refresh_saved_sets()
+            self.batch_list.clearSelection()
+            self._after_change()
+            self._toast("Showing all particles", 4000)
             return
         self.clear_selection()
 
@@ -1416,31 +1959,51 @@ class CalibrationWindow(QMainWindow):
     def _shown_statuses(self):
         return {s for s, box in self.show_status.items() if box.isChecked()}
 
+    def _focus_group(self):
+        """(ids, description) the focus/size plots concentrate on.
+
+        The selection while there is one; otherwise the batch just accepted or
+        clicked in Flag history, so it stays on screen after Accept; else None.
+        """
+        if self.selected_ids:
+            return self.selected_ids, f"the selection ({len(self.selected_ids):,})"
+        shown = [n for n in self._shown_batches if n in self.saved_sets]
+        if len(shown) > 1:
+            ids = set().union(*(self.saved_sets[n].get("particle_ids", ()) for n in shown))
+            return ids, f"{len(shown)} batches ({len(ids):,}) — Esc shows everything"
+        name = self.active_reference_set
+        if name and name in self.saved_sets:
+            ids = set(self.saved_sets[name].get("particle_ids", ()))
+            if ids:
+                return ids, f"{name} ({len(ids):,}) — Esc shows everything"
+        return None, "all particles"
+
     def _visible_indices(self, kind):
         """Indices drawn (and box-selectable) on the camera or metric plots."""
         records = self._records()
         shown = self._shown_statuses()
         selected = self.selected_ids
-        only_selected = kind == "metric" and self.selection_only_cb.isChecked() and bool(selected)
+        group = None
+        if kind == "metric" and self.selection_only_cb.isChecked():
+            group = self._focus_group()[0]
         out = []
         for i in self._base_indices:
             r = records[i]
             if r.particle_id in selected:
                 out.append(i)
-            elif not only_selected and r.status in shown:
+            elif group is not None:
+                if r.particle_id in group and r.status in shown:
+                    out.append(i)
+            elif r.status in shown:
                 out.append(i)
         return out
 
     def _plot_position(self, record):
         if not (math.isfinite(record.stage_x) and math.isfinite(record.stage_y)):
             return float("nan")
-        reference, conflict = self._reference_index.get(record.particle_id, (None, False))
-        draft = self._draft_reference_for(record)
-        if conflict and draft is None:
-            return float("nan")
-        if reference is not None or draft is not None:
-            return calibrated_radial_position(record.stage_x, record.stage_y,
-                                              draft if draft is not None else reference)
+        reference = self._draft_reference_for(record)
+        if reference is not None:
+            return calibrated_radial_position(record.stage_x, record.stage_y, reference)
         radius = math.hypot(record.stage_x, record.stage_y)
         segment = next((seg for seg in self.stage_segments
                         if seg["start"] <= record.time_matlab < seg["end"]), None)
@@ -1451,10 +2014,15 @@ class CalibrationWindow(QMainWindow):
             return float(best - radius)
         return segment["best_radius"] - radius
 
-    @staticmethod
-    def _metric_value(record, metric):
+    def _metric_value(self, record, metric):
         if metric == "focus":
             return record.focus
+        if metric == "focus_norm":
+            return self._normalised_focus(record)
+        if metric == "illum":
+            return record.local_illum
+        if metric == "focus_T":
+            return record.focus_T
         if metric == "length":
             return record.length_um
         if metric == "width":
@@ -1470,8 +2038,28 @@ class CalibrationWindow(QMainWindow):
     def _plot_y(self, record, metric=None):
         return self._metric_value(record, metric or self.plot_metric.currentData())
 
+    def _normalised_focus(self, record):
+        """Focus scaled to the typical illumination: focus × median(illum) / illum.
+
+        The focus metric is an edge-gradient sharpness, so to first order it is
+        proportional to the illumination contrast; this removes that factor.
+        """
+        illum = record.local_illum
+        ref = self._illum_reference()
+        if not (math.isfinite(illum) and illum > 1 and math.isfinite(ref)):
+            return float("nan")
+        return record.focus * ref / illum
+
+    def _illum_reference(self):
+        if getattr(self, "_illum_ref_cache", None) is None:
+            values = [r.local_illum for r in self._records() if math.isfinite(r.local_illum) and r.local_illum > 1]
+            self._illum_ref_cache = float(np.median(values)) if values else float("nan")
+        return self._illum_ref_cache
+
     def _plot_x(self, record):
         mode = self.position_metric.currentData()
+        if mode == "illum":
+            return record.local_illum
         if mode == "stage_x":
             return record.stage_x
         if mode == "stage_z":
@@ -1496,13 +2084,75 @@ class CalibrationWindow(QMainWindow):
         return self._plot_position(record)
 
     def _draft_reference_for(self, record):
-        """Use the editor as a preview for the selection / active set only."""
-        if record.particle_id in self._active_members or record.particle_id in self.selected_ids:
-            if self._draft_reference_cache is None:
-                self._draft_reference_cache = make_reference(self.best_x_set.value(), self.best_z_set.value())
-            return self._draft_reference_cache
-        reference, conflict = self._reference_index.get(record.particle_id, (None, False))
-        return None if conflict else reference
+        return self._reference_for(record)[0]
+
+    def _reference_for(self, record, use_editor=True):
+        """(reference, source, kind) for a particle.
+
+        kind "editor": the Xbest/Zbest editor, previewed on the selection and the
+        active set/batch; "own": its set's/batch's saved X/Z; "step": the most
+        recently defined X/Z at or before its time; None: no reference at all.
+        """
+        pid = record.particle_id
+        if use_editor and pid in self._active_members:          # the batch being edited
+            return self._editor_reference(), "Xbest/Zbest editor", "editor"
+        ref, conflict = self._reference_index.get(pid, (None, False))
+        if ref is not None and not conflict:                     # saved with its batch: always used as saved
+            return ref, self._own_ref_names.get(pid), "own"
+        if use_editor and pid in self.selected_ids:              # a new cluster being chosen
+            return self._editor_reference(), "Xbest/Zbest editor", "editor"
+        self._reference_steps()  # builds groups + sessions too
+        ref, name = nearest_group_reference(record.image_x_px, record.image_y_px,
+                                            self._session_of.get(pid, -2), self._groups_cache or [])
+        if ref is not None:
+            return ref, name, "nearest"
+        return effective_reference(pid, record.time_matlab, {}, self._reference_steps())
+
+    def _editor_reference(self):
+        if self._draft_reference_cache is None:
+            self._draft_reference_cache = make_reference(self.best_x_set.value(), self.best_z_set.value())
+        return self._draft_reference_cache
+
+    def _has_own_reference(self, pid):
+        ref, conflict = self._reference_index.get(pid, (None, False))
+        return ref is not None and not conflict
+
+    def _selection_without_own_reference(self):
+        """Selected (non-rejected) particles that the editor X/Z would apply to."""
+        if not self.catalog:
+            return []
+        by_id = self.catalog._by_id
+        return [p for p in self.selected_ids
+                if p in by_id and by_id[p].status != "reject"
+                and (p in self._active_members or not self._has_own_reference(p))]
+
+    def _reference_steps(self):
+        if self._steps_cache is None:
+            records = self._records()
+            times = {r.particle_id: r.time_matlab for r in records}
+            self._steps_cache = reference_steps(self.saved_sets, times)
+            if self._session_of is None or len(self._session_of) != len(records):
+                labels = session_labels([r.time_matlab for r in records])
+                self._session_of = {r.particle_id: int(s) for r, s in zip(records, labels)}
+            groups = []
+            by_id = self.catalog._by_id if self.catalog else {}
+            for name, entry in self.saved_sets.items():
+                ref = validate_reference(entry.get("best_focus"))
+                members = [by_id[p] for p in entry.get("particle_ids", ()) if p in by_id]
+                if ref is None or not members:
+                    continue
+                sessions = [self._session_of.get(m.particle_id, -1) for m in members]
+                groups.append(dict(name=name, reference=ref, session=max(set(sessions), key=sessions.count),
+                                   cx=float(np.nanmedian([m.image_x_px for m in members])),
+                                   cy=float(np.nanmedian([m.image_y_px for m in members]))))
+            self._groups_cache = groups
+        return self._steps_cache
+
+    def _invalidate_reference_steps(self):
+        self._steps_cache = None
+        self._groups_cache = None
+        if hasattr(self, "timeline_label"):
+            self._refresh_timeline()
 
     def _values(self, kind, records, metric=None):
         if kind == "camera":
@@ -1532,8 +2182,23 @@ class CalibrationWindow(QMainWindow):
         und = good & (status == "undecided") & ~selected
         acc = good & (status == "keep") & ~selected
         rej = good & (status == "reject") & ~selected
-        if colour_by in ("image_x", "image_y"):
-            values = np.fromiter(((r.image_x_px if colour_by == "image_x" else r.image_y_px) for r in records),
+        if colour_by in ("ref_x", "ref_z"):
+            key = "x_best" if colour_by == "ref_x" else "z_best"
+            def own_value(r):
+                ref, _, kind = self._reference_for(r, use_editor=False)
+                return ref[key] if kind == "own" else float("nan")
+            values = np.fromiter((own_value(r) for r in records), float, len(records))
+            has = (und | acc) & np.isfinite(values)
+            rest = (und | acc) & ~np.isfinite(values)
+            if rest.any():
+                ax.scatter(xs[rest], ys[rest], c=STATUS_COLOUR["undecided"], s=8, alpha=.35, linewidths=0,
+                           rasterized=True, zorder=2)
+            if has.any():
+                mappable = ax.scatter(xs[has], ys[has], c=values[has], cmap="viridis", s=18, alpha=.9,
+                                      edgecolors="#222", linewidths=.25, rasterized=True, zorder=3)
+        elif colour_by in ("image_x", "image_y", "illum"):
+            values = np.fromiter(((r.image_x_px if colour_by == "image_x" else
+                                   r.image_y_px if colour_by == "image_y" else r.local_illum) for r in records),
                                  float, len(records))
             base = (und | acc) & np.isfinite(values)
             if base.any():
@@ -1587,6 +2252,11 @@ class CalibrationWindow(QMainWindow):
                     or records[i].particle_id == self.current_id)
         return [i for i in indices if i in keep]
 
+    def _colourbar_label(self):
+        return {"image_x": "Camera X [px]", "image_y": "Camera Y [px]", "illum": "Local illumination (ROI edge)",
+                "ref_x": "Batch's own Xbest",
+                "ref_z": "Batch's own Zbest"}.get(self.colour_by.currentData(), "")
+
     def _placeholder(self, ax, message):
         ax.text(.5, .5, message, transform=ax.transAxes, ha="center", va="center", color="#7b2a33",
                 fontsize=10, wrap=True, bbox=dict(facecolor="#fff4f2", edgecolor="#e5bfc1", pad=10))
@@ -1613,7 +2283,7 @@ class CalibrationWindow(QMainWindow):
             if mappable is not None:
                 self._colorbars["camera"] = self.spatial_figure.colorbar(
                     mappable, ax=ax, fraction=.045, pad=.02,
-                    label="Camera X [px]" if self.colour_by.currentData() == "image_x" else "Camera Y [px]")
+                    label=self._colourbar_label())
         else:
             self._placeholder(ax, "Drop MAT files or a folder on the window,\nor use + Add MAT files"
                               if not records else "No particles to show — check Filters / Show")
@@ -1719,7 +2389,7 @@ class CalibrationWindow(QMainWindow):
         if mappable is not None:
             self._colorbars["metric"] = self.plot_figure.colorbar(
                 mappable, ax=self.metric_axes, fraction=.04, pad=.02,
-                label="Camera X [px]" if self.colour_by.currentData() == "image_x" else "Camera Y [px]")
+                label=self._colourbar_label())
         if saved:
             for ax, xl, yl in zip(self.metric_axes, saved[0], saved[1]):
                 ax.set_xlim(xl); ax.set_ylim(yl)
@@ -1738,7 +2408,7 @@ class CalibrationWindow(QMainWindow):
             line, = ax.plot(trace["x"], trace["median"], color=MEDIAN_COLOUR, lw=2.2, marker="o", ms=3,
                             zorder=7, label="Median ± IQR (non-rejected)")
             handles.append(line)
-            if metric == "focus" and xmode != "time":
+            if metric in ("focus", "focus_norm") and xmode not in ("time", "illum"):
                 peak = trace_extremum(trace, self.peak_combo.currentData())
                 if peak is not None:
                     self._median_peak[xmode] = peak[0]
@@ -1753,6 +2423,13 @@ class CalibrationWindow(QMainWindow):
                 line, = ax.plot(strace["x"], strace["median"], color=SELECTED_COLOUR, lw=1.8, ls="--",
                                 zorder=8, label="Median of selection")
                 handles.append(line)
+                if metric in ("focus", "focus_norm") and xmode in ("stage_x", "stage_z"):
+                    speak = trace_extremum(strace, self.peak_combo.currentData())
+                    if speak is not None:
+                        mark, = ax.plot([speak[0]], [speak[1]], marker="^", ms=11, color=SELECTED_COLOUR,
+                                        markeredgecolor="white", ls="none", zorder=9.5,
+                                        label=f"Selection's peak at {speak[0]:.5g}")
+                        handles.append(mark)
         if handles:
             ax.legend(handles=handles, loc="best", fontsize=8, framealpha=.85)
 
@@ -1874,7 +2551,7 @@ class CalibrationWindow(QMainWindow):
             return
         pick = self.pick_scope.currentText().lower()
         if self.plot_tool == "select":
-            text = {"new": f"<b>Drag</b> a box to select ({pick}).",
+            text = {"new": f"<b>Drag</b> a box to select ({pick}; a box of only flagged particles takes them).",
                     "add": f"<b>Drag</b> to add particles ({pick}).",
                     "remove": "<b>Drag</b> round particles to drop them from the selection.",
                     "keep": "<b>Drag</b> a box: only selected particles inside it stay selected.",
@@ -1887,7 +2564,7 @@ class CalibrationWindow(QMainWindow):
             text = {"zoom": "<b>Zoom</b>: drag a rectangle to enlarge (selection unchanged). ⤢ Fit view resets.",
                     "pan": "<b>Pan</b>: drag to move the view.",
                     "reference": "<b>Move Xbest/Zbest</b>: drag on the focus plot (X = Stage X or Z); "
-                                 "then Sets / X–Z → Save."}[self.plot_tool]
+                                 "then Best focus tab, or just Accept."}[self.plot_tool]
         self.selection_preview.setText(text)
 
     def _lock_plot_navigation(self, kind):
@@ -1945,10 +2622,27 @@ class CalibrationWindow(QMainWindow):
         elif modifiers & Qt.ShiftModifier:
             self._change_selection(set(self.selected_ids) | {pid}, f"Added ROI {record.roi_index}", current=pid)
         else:
+            self._load_image_now(record)
             self.set_current(pid)
             self.statusBar().showMessage(
                 f"Inspecting ROI {record.roi_index} ({STATUS_NAME[record.status]}). "
                 "Shift-click adds it, Ctrl/⌘-click toggles, double-click opens it.", 7000)
+
+    def _load_image_now(self, record):
+        """Explicit request (click): read the image even if its MAT file must be loaded."""
+        if record.particle_id in self._thumbs or self.store is None:
+            return
+        if self.store._source != record.source_file:
+            self.statusBar().showMessage(f"Loading images from {Path(record.source_file).name}…")
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            QApplication.processEvents()
+        try:
+            image = self._thumb_image(record, allow_load=True)
+        finally:
+            if QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
+        if image is not None and self.hover.isVisible() and self.hover.particle_id == record.particle_id:
+            self.hover.image.setPixmap(self._plain_pixmap(image, 96))
 
     def _on_double_click(self, canvas, index, pixel):
         record = self._nearest_record(canvas, index, pixel)
@@ -1977,14 +2671,30 @@ class CalibrationWindow(QMainWindow):
         inside = {visible[i].particle_id for i in np.flatnonzero(inside_mask)}
         statuses = {r.particle_id: r.status for r in visible}
         new, to_reject = apply_box(self.selected_ids, inside, mode, statuses, self.pick_scope.currentData())
+        fallback_note = ""
+        if mode in ("new", "add") and inside and new == (set(self.selected_ids) if mode == "add" else set()):
+            # Everything in the box is already flagged: the user clearly means
+            # these particles, so take them rather than doing nothing.
+            new, _ = apply_box(self.selected_ids, inside, mode, statuses, "any")
+            flagged = {}
+            for pid in inside:
+                flagged[statuses[pid]] = flagged.get(statuses[pid], 0) + 1
+            fallback_note = (" — all were already " + " / ".join(STATUS_NAME[k].lower() for k in sorted(flagged))
+                             + ", so they were selected anyway (U unflags them)")
         region = (axis_info[0], x0, x1, y0, y1, *axis_info[1:], mode)
+        if mode == "reject" and not to_reject and not self.selected_ids:
+            # Nothing selected but a batch is on show (just accepted, or clicked in Flag
+            # history): the box means "reject these members of that batch".
+            name = self.active_reference_set
+            if name and name in self.saved_sets:
+                members = set(self.saved_sets[name].get("particle_ids", ()))
+                to_reject = {pid for pid in inside & members if statuses.get(pid) != "reject"}
         if mode == "reject":
             if not to_reject:
                 self.statusBar().showMessage("Reject box: nothing to reject inside the box", 6000)
                 return
             self._push_undo(f"Reject {len(to_reject)} in box", status_ids=to_reject, sets=True)
             self._set_flags(to_reject, "reject", reason=f"box on {where}")
-            self._record_classified_batch("reject", to_reject)
             self.selected_ids = new
             self.regions.append(region)
             self.autosave()
@@ -2011,9 +2721,11 @@ class CalibrationWindow(QMainWindow):
         for pid in inside - new if mode in ("new", "add") else ():
             skipped_by[statuses[pid]] = skipped_by.get(statuses[pid], 0) + 1
         note = (" (skipped " + ", ".join(f"{n:,} {STATUS_NAME[k].lower()}" for k, n in sorted(skipped_by.items()))
-                + ")") if skipped_by else ""
+                + " — box only those to select them)") if skipped_by else fallback_note
+        tip = ("  —  Shift-drag to add another area to this batch" if mode == "new" and canvas.kind == "camera"
+               else "")
         self._change_selection(new, f"{verb} {count:,} particles on the {where}{note} · "
-                                    f"{len(new):,} selected", push=True)
+                                    f"{len(new):,} selected{tip}", push=True)
 
     def _on_hover(self, canvas, index, pixel):
         if not self.hover_action.isChecked() or self.catalog is None:
@@ -2035,21 +2747,51 @@ class CalibrationWindow(QMainWindow):
                         + (f" ({label.size_text()})" if label else ""))
         html = (f"<span style='font-size:16px; font-weight:800'>{self._format(record.length_um, 0)} × "
                 f"{self._format(record.width_um, 0)} µm</span><br>"
-                f"{' · '.join(tags)}<br>Focus {self._format(record.focus, 1)} · ROI {record.roi_index} · "
-                f"<span style='color:#516579'>{Path(record.source_file).name} {record.time_iso[11:19]}</span>")
+                f"{' · '.join(tags)}<br>Focus {self._format(record.focus, 1)} · illum. "
+                f"{self._format(record.local_illum, 0)} · ROI {record.roi_index} · "
+                f"<span style='color:#516579'>{Path(record.source_file).name} {record.time_iso[11:19]}</span>"
+                + (f"<br>🗂 {self._batch_text(record)}" if self._groups_of.get(record.particle_id)
+                   or record.status == "keep" else ""))
         image = self._thumbs.get(record.particle_id)
         self.hover.show_at(QCursor.pos(), html, self._plain_pixmap(image, 96) if image is not None else None)
-        if image is None and self.store is not None and self.store._source == record.source_file:
+        if image is None and self.store is not None:
             self._hover_pending = record
-            self._hover_timer.start(120)  # same MAT file already in memory: cheap
+            if self.store._source == record.source_file:
+                self._hover_timer.start(60)   # MAT file already in memory: cheap
+            else:
+                self.hover.image.setText("<span style='color:#8292a3;font-size:10px'>loading<br>image…</span>")
+                self._hover_timer.start(250)  # rest on the dot briefly, then load its file in the background
 
     def _hover_load_image(self):
         record = self._hover_pending
         if record is None or not self.hover.isVisible() or self.hover.particle_id != record.particle_id:
             return
+        if self.store is not None and self.store._source != record.source_file:
+            if self._mat_loader is None:  # one background load at a time
+                self._mat_loader = MatLoader(self.store.root, record.source_file, self)
+                self._mat_loader.loaded.connect(self._mat_loaded)
+                self._mat_loader.start()
+            return
         image = self._thumb_image(record, allow_load=False)
         if image is not None:
             self.hover.image.setPixmap(self._plain_pixmap(image, 96))
+
+    def _mat_loaded(self, source_file, data):
+        loader, self._mat_loader = self._mat_loader, None
+        if loader is not None:
+            loader.wait()
+            loader.deleteLater()
+        if data is None or self.store is None:
+            if self.hover.isVisible():
+                self.hover.image.setText("<span style='color:#c92a2a;font-size:10px'>image<br>unavailable</span>")
+            return
+        self.store._data, self.store._source = data, source_file
+        record = self._hover_pending
+        if record is not None and self.hover.isVisible() and self.hover.particle_id == record.particle_id:
+            if record.source_file == source_file:
+                self._hover_load_image()
+            else:
+                self._hover_timer.start(60)  # cursor moved on to another file meanwhile
 
     def _hide_hover(self):
         self._hover_timer.stop()
@@ -2058,23 +2800,23 @@ class CalibrationWindow(QMainWindow):
             self.hover.particle_id = None
 
     # ------------------------------------------------------- selection core --
-    def _push_undo(self, label, status_ids=(), sets=False):
+    def _snapshot(self, label, status_ids=(), sets=False):
+        """Everything one action may change: selection, the given particles' flags, groups."""
         records = self.catalog._by_id if self.catalog else {}
-        entry = {"label": label, "selected": set(self.selected_ids), "regions": list(self.regions),
-                 "current": self.current_id,
-                 "statuses": {pid: (records[pid].status, records[pid].reject_reason, records[pid].label,
-                                    records[pid].actual_length_um, records[pid].actual_width_um)
-                              for pid in status_ids if pid in records},
-                 "sets": copy.deepcopy(self.saved_sets) if sets else None,
-                 "active_set": self.active_reference_set}
-        self.undo_stack.append(entry)
-        del self.undo_stack[:-60]
+        return {"label": label, "selected": set(self.selected_ids), "regions": list(self.regions),
+                "current": self.current_id,
+                "statuses": {pid: (records[pid].status, records[pid].reject_reason, records[pid].label,
+                                   records[pid].actual_length_um, records[pid].actual_width_um)
+                             for pid in status_ids if pid in records},
+                "sets": copy.deepcopy(self.saved_sets) if sets else None,
+                "active_set": self.active_reference_set}
 
-    def undo(self):
-        if not self.undo_stack:
-            self.statusBar().showMessage("Nothing to undo", 4000)
-            return
-        entry = self.undo_stack.pop()
+    def _push_undo(self, label, status_ids=(), sets=False):
+        self.undo_stack.append(self._snapshot(label, status_ids, sets))
+        del self.undo_stack[:-60]
+        self.redo_stack.clear()   # a new action ends the redo chain
+
+    def _restore(self, entry):
         self.selected_ids = set(entry["selected"])
         self.regions = list(entry["regions"])
         records = self.catalog._by_id if self.catalog else {}
@@ -2091,12 +2833,45 @@ class CalibrationWindow(QMainWindow):
         if entry["statuses"]:
             self.autosave()
         self._after_change()
-        self._toast(f"↶ Undid: {entry['label']}")
+
+    def _step_history(self, source, target, verb):
+        if not source:
+            self.statusBar().showMessage(f"Nothing to {verb.lower()}", 4000)
+            return
+        entry = source.pop()
+        # Record the present state of exactly what this entry touches, so it can be stepped back.
+        target.append(self._snapshot(entry["label"], entry["statuses"].keys(), entry["sets"] is not None))
+        del target[:-60]
+        self._restore(entry)
+        self._toast(f"{'↶' if verb == 'Undid' else '↷'} {verb}: {entry['label']}")
+
+    def undo(self):
+        self._step_history(self.undo_stack, self.redo_stack, "Undid")
+
+    def redo(self):
+        self._step_history(self.redo_stack, self.undo_stack, "Redid")
 
     def _change_selection(self, new_ids, message=None, push=True, current=None):
         if push:
             self._push_undo(message or "selection change")
-        self.selected_ids = set(new_ids)
+        new_ids = set(new_ids)
+        active = self.saved_sets.get(self.active_reference_set, {}) if self.active_reference_set else {}
+        # Selecting (part of) the batch being edited is not a new cluster: the editor keeps the
+        # batch's saved X/Z, or the user's unsaved edit, instead of jumping to the focus peak.
+        within_active = bool(new_ids) and new_ids <= set(active.get("particle_ids", ()))
+        if not (new_ids & self.selected_ids) and not within_active:
+            self._ref_manual = False  # a different cluster: let the line follow its peak again
+            self._ref_set_for_cluster = False
+            if new_ids and self._shown_batches:
+                self._shown_batches = []
+            if new_ids and self.active_reference_set and not (new_ids <= set(
+                    self.saved_sets.get(self.active_reference_set, {}).get("particle_ids", ()))):
+                self.active_reference_set = None   # working on something new: release the shown batch
+                self._refresh_saved_sets()
+                self.batch_list.clearSelection()
+        self.selected_ids = new_ids
+        if not (within_active and (validate_reference(active.get("best_focus")) is not None or self._ref_manual)):
+            self._auto_place_reference()
         if current is not None:
             self.current_id = current
         self._after_change()
@@ -2110,8 +2885,11 @@ class CalibrationWindow(QMainWindow):
 
     def _refresh_views(self):
         self._update_counts()
+        if hasattr(self, "scope_label"):
+            showing = self._focus_group()[1] if self.selection_only_cb.isChecked() else "all particles"
+            self.scope_label.setText(f"Showing: {showing}")
         if hasattr(self, "label_list"):
-            self._refresh_label_widgets()
+            self._refresh_label_widgets(update_batches=False)   # batches refresh themselves when they change
         self._update_selection_bar()
         self._redraw_plots()
         self._gallery_dirty = True
@@ -2122,7 +2900,36 @@ class CalibrationWindow(QMainWindow):
     def _toast(self, message, ms=9000):
         self.statusBar().showMessage(message, ms)
 
+    def _update_save_ref_text(self):
+        """Say exactly which Xbest/Zbest an Accept will save with the new batch."""
+        if not hasattr(self, "save_ref_cb"):
+            return
+        cb = self.save_ref_cb
+        x, z = self.best_x_set.value(), self.best_z_set.value()
+        if not self.selected_ids:
+            cb.setText("+ save Xbest/Zbest")
+            tip = "Accepting saves the Xbest/Zbest shown on the line as the new batch's own best focus."
+            colour = ""
+        elif not self._selection_without_own_reference():
+            cb.setText("Xbest/Zbest: kept from their batches")
+            tip = ("Every selected particle already belongs to a batch with its own saved X/Z; accepting again "
+                   "does not change it. Click a batch in Flag history to edit its X/Z.")
+            colour = "color:#516579;"
+        elif self._ref_set_for_cluster:
+            cb.setText(f"+ save Xbest {x:.5g} · Zbest {z:.5g}")
+            tip = (f"Accepting saves Xbest = {x:.6g}, Zbest = {z:.6g} (the orange line) as this batch's own best "
+                   "focus. The line follows the selection's focus peak unless you move it.")
+            colour = "color:#a34a00; font-weight:600;"
+        else:
+            cb.setText("+ Xbest/Zbest: no peak found — not saved")
+            tip = ("No focus peak was found for this selection and the line hasn't been moved, so nothing will be "
+                   "saved; the batch borrows from the nearest calibrated batch. Move the line to set it.")
+            colour = "color:#a61e4d;"
+        cb.setToolTip(tip)
+        cb.setStyleSheet(colour)
+
     def _update_selection_bar(self):
+        self._update_save_ref_text()
         n = len(self.selected_ids)
         if not self.catalog:
             self.selection_summary.setText("<span style='color:#516579'>Load data to start.</span>")
@@ -2146,6 +2953,9 @@ class CalibrationWindow(QMainWindow):
         self.undo_btn.setEnabled(bool(self.undo_stack))
         if self.undo_stack:
             self.undo_btn.setToolTip(f"Undo: {self.undo_stack[-1]['label']} (Ctrl+Z)")
+        self.redo_btn.setEnabled(bool(self.redo_stack))
+        if self.redo_stack:
+            self.redo_btn.setToolTip(f"Redo: {self.redo_stack[-1]['label']} (Ctrl+Shift+Z or Ctrl+Y)")
 
     def _update_counts(self):
         records = self._records()
@@ -2157,7 +2967,8 @@ class CalibrationWindow(QMainWindow):
             for key in counts:
                 self.count_labels[key].setText(f"{counts[key]:,}")
             self.count_labels["selected"].setText(f"{len(self.selected_ids):,}")
-            self.count_labels["committed"].setText(f"{len(committed):,}")
+            if "committed" in self.count_labels:
+                self.count_labels["committed"].setText(f"{len(committed):,}")
             total = max(1, len(records))
             done = counts["keep"] + counts["reject"]
             self.progress_bar.setText(
@@ -2216,6 +3027,35 @@ class CalibrationWindow(QMainWindow):
                     self._set_label(record, self._accept_label_name())
                 elif status == "undecided":
                     self._set_label(record, "")  # back to the default: unreviewed, unlabelled
+        self._prune_batches(ids, status)
+
+    def _prune_batches(self, ids, status):
+        """A particle leaves review batches whose decision it no longer has.
+
+        Rejecting or unflagging an accepted particle removes it from its
+        accepted batch (and vice versa), so batch counts, "Select batch" and
+        the batch's own X/Z only reflect what is still accepted.  Empty
+        batches are removed.  Groups from older projects (sets) are kept.
+        """
+        ids = set(ids)
+        changed = False
+        for name in list(self.saved_sets):
+            entry = self.saved_sets[name]
+            description = entry.get("description", "")
+            if not description.startswith("Review batch: ") or description.endswith(": " + status):
+                continue
+            members = entry.get("particle_ids", [])
+            if ids.isdisjoint(members):
+                continue
+            entry["particle_ids"] = [p for p in members if p not in ids]
+            changed = True
+            if not entry["particle_ids"]:
+                del self.saved_sets[name]
+                if self.active_reference_set == name:
+                    self.active_reference_set = None
+        if changed:
+            self._refresh_saved_sets()
+            self.save_project_if_open()
 
     def _set_label(self, record, name):
         """Tag a record with a library label (and its true size), or clear it."""
@@ -2240,8 +3080,8 @@ class CalibrationWindow(QMainWindow):
         ids = [pid for pid in dict.fromkeys(ids) if pid in self.catalog._by_id]
         if not ids:
             return 0
-        batch = batch and status in ("keep", "reject")
-        self._push_undo(label, status_ids=ids, sets=batch)
+        batch = batch and status == "keep"     # rejects are plain flags (Ctrl+Z / Select rejected → Unflag undo them)
+        self._push_undo(label, status_ids=ids, sets=True)  # batches may lose members
         self._set_flags(ids, status, reason if reason is not None else
                         (self.reject_reason.currentText() or "manual"))
         if batch:
@@ -2256,14 +3096,49 @@ class CalibrationWindow(QMainWindow):
         return len(ids)
 
     def accept_selection(self):
-        n = self._flag_ids(self.selected_ids, "keep", f"Accept {len(self.selected_ids):,}", clear_selection=True)
+        with self._bulk():
+            return self._accept_selection_impl()
+
+    def _accept_selection_impl(self):
+        ids = set(self.selected_ids)
+        by_id = self.catalog._by_id if self.catalog else {}
+        has_stage = any(p in by_id and math.isfinite(by_id[p].stage_x) and math.isfinite(by_id[p].stage_y)
+                        for p in ids)
+        self._last_batch_name = None
+        needs_ref = bool(self._selection_without_own_reference())
+        has_stage = has_stage and needs_ref     # particles already in a calibrated batch keep its X/Z
+        n = self._flag_ids(ids, "keep", f"Accept {len(ids):,}", clear_selection=True)
         if n:
+            ref_note = "" if needs_ref else " (they keep their batches' own Xbest/Zbest)"
+            if self.save_ref_cb.isChecked() and has_stage and self._last_batch_name and not self._ref_set_for_cluster:
+                ref_note = (" (no Xbest/Zbest saved: no focus peak found for this cluster and the line wasn't "
+                            "moved — it borrows from the nearest calibrated batch)")
+            if self.save_ref_cb.isChecked() and has_stage and self._last_batch_name and self._ref_set_for_cluster:
+                self._store_editor_reference(self._last_batch_name)
+                self._refresh_saved_sets()
+                self.save_project_if_open()
+                ref = self.saved_sets[self._last_batch_name]["best_focus"]
+                ref_note = f" with Xbest={ref['x_best']:.5g}, Zbest={ref['z_best']:.5g}"
+            self._ref_manual = False
+            self._ref_set_for_cluster = False
+            if self._last_batch_name in self.saved_sets:
+                self.active_reference_set = self._last_batch_name   # keep showing what was just accepted
+                self._shown_batches = []
+                self._refresh_saved_sets()
+                if getattr(self, "_bulk_depth", 0):
+                    self._select_batch_after = self._last_batch_name
+                else:
+                    self._select_batch_row(self._last_batch_name)
             self._after_change()
             label = self._accept_label_name()
-            self._toast(f"✓ Accepted {n:,} particles" + (f" as '{label}'" if label else "") +
+            self._toast(f"✓ Accepted {n:,} particles" + (f" as '{label}'" if label else "") + ref_note +
                         " — now green, saved, and skipped by new boxes. Ctrl+Z undoes; Unflag resets them.")
 
     def reject_selection(self):
+        with self._bulk():
+            return self._reject_selection_impl()
+
+    def _reject_selection_impl(self):
         n = self._flag_ids(self.selected_ids, "reject", f"Reject {len(self.selected_ids):,}",
                            clear_selection=True, reason="graphical selection")
         if n:
@@ -2271,6 +3146,10 @@ class CalibrationWindow(QMainWindow):
             self._toast(f"✕ Rejected {n:,} particles — now red and saved. Ctrl+Z undoes.")
 
     def unflag_selection(self):
+        with self._bulk():
+            return self._unflag_selection_impl()
+
+    def _unflag_selection_impl(self):
         n = self._flag_ids(self.selected_ids, "undecided", f"Unflag {len(self.selected_ids):,}",
                            clear_selection=True, batch=False)
         if n:
@@ -2284,6 +3163,7 @@ class CalibrationWindow(QMainWindow):
         while f"{prefix} batch {idx}" in self.saved_sets:
             idx += 1
         self.saved_sets[f"{prefix} batch {idx}"] = make_saved_set(ids, description=f"Review batch: {decision}")
+        self._last_batch_name = f"{prefix} batch {idx}"
         self._refresh_saved_sets()
         self.save_project_if_open()
 
@@ -2361,7 +3241,9 @@ class CalibrationWindow(QMainWindow):
     def _effective_browse_scope(self):
         scope = self.view_selector.currentData()
         if scope == "auto":
-            return "selection" if self.selected_ids else "all"
+            if self.selected_ids:
+                return "selection"
+            return "batch" if self._focus_group()[0] else "all"
         return scope
 
     def _rebuild_browse(self):
@@ -2369,6 +3251,9 @@ class CalibrationWindow(QMainWindow):
         scope = self._effective_browse_scope()
         if scope == "selection":
             filtered = [i for i in self._base_indices if records[i].particle_id in self.selected_ids]
+        elif scope == "batch":
+            group = self._focus_group()[0] or set()
+            filtered = [i for i in self._base_indices if records[i].particle_id in group]
         elif scope in ("undecided", "keep", "reject"):
             filtered = [i for i in self._base_indices if records[i].status == scope]
         else:
@@ -2450,6 +3335,7 @@ class CalibrationWindow(QMainWindow):
             f"<b style='color:{STATUS_COLOUR[record.status]}'>{STATUS_NAME[record.status]}</b>"
             + (f" · <b style='color:{SELECTED_COLOUR}'>selected</b>" if in_sel else "")
             + (f" · 🏷 {record.label}" if record.label else "")
+            + (f" · 🗂 {', '.join(self._groups_of.get(pid, ())[-1:])}" if self._groups_of.get(pid) else "")
             + f" · F {self._format(record.focus, 1)} · L {self._format(record.length_um, 1)} µm")
         image = self._thumb_image(record, allow_load=self._current_tab() != "select" or
                                   (self.store is not None and self.store._source == record.source_file))
@@ -2475,26 +3361,29 @@ class CalibrationWindow(QMainWindow):
         self.particle_badge.setStyleSheet(
             f"background:{STATUS_COLOUR[record.status]}; color:white; font-size:17px; font-weight:800;"
             "border-radius:6px; padding:8px;")
-        committed = [name for name, s in self.saved_sets.items()
-                     if not s.get("description", "").startswith("Review batch") and pid in s["particle_ids"]]
         self.particle_membership.setText(
             (f"<b style='color:{SELECTED_COLOUR}'>In the selection</b>" if in_sel else "Not selected")
-            + (f"<br><span style='color:{COMMITTED_COLOUR}'>In set: {', '.join(committed)}</span>"
-               if committed else ""))
+            + f"<br>🗂 {self._batch_text(record)}")
         self.particle_membership.setTextFormat(Qt.RichText)
         self.toggle_selection_button.setText("− Remove from selection  (Del)" if in_sel
                                              else "+ Add to selection  (A)")
         self.metric_labels["time"].setText(record.time_iso or "—")
         self.metric_labels["length"].setText(self._format(record.length_um, 2))
         self.metric_labels["width"].setText(self._format(record.width_um, 2))
-        self.metric_labels["focus"].setText(self._format(record.focus, 3))
+        self.metric_labels["focus"].setText(f"{self._format(record.focus, 3)}  (÷ illum.: "
+                                            f"{self._format(self._normalised_focus(record), 3)})")
+        self.metric_labels["illum"].setText(self._format(record.local_illum, 1))
         self.metric_labels["roundness"].setText(self._format(record.roundness, 3))
         self.metric_labels["xy"].setText(f"{self._format(record.image_x_px, 1)}, {self._format(record.image_y_px, 1)}")
-        reference = self._draft_reference_for(record)
+        reference, source, kind = self._reference_for(record)
         side = ""
         if reference is not None and math.isfinite(record.stage_x) and math.isfinite(record.stage_y):
             d = signed_plane_distance(record.stage_x, record.stage_y, reference, self.plane_normal.value())
-            side = f"\nd = {d:+.4g} ({'+' if d > 0 else '−' if d < 0 else 'on the'} side{'' if d else ' plane'})"
+            how = {"editor": "editor (unsaved preview)", "own": f"own — {source}",
+                   "nearest": f"nearest calibrated batch on camera — {source}",
+                   "step": f"earlier in time — {source}"}[kind]
+            side = (f"\nd = {d:+.4g} ({'+' if d > 0 else '−' if d < 0 else 'on the'} side{'' if d else ' plane'})"
+                    f"\nXbest/Zbest {reference['x_best']:g}/{reference['z_best']:g}: {how}")
         self.metric_labels["stage"].setText(f"{self._format(record.stage_x, 3)}, {self._format(record.stage_y, 3)}"
                                             + side)
         self.metric_labels["actual"].setText(
@@ -2642,7 +3531,8 @@ class CalibrationWindow(QMainWindow):
             item.setForeground(QColor(STATUS_COLOUR[record.status] if record.status != "undecided" else "#33475b"))
             item.setToolTip(f"{Path(record.source_file).name} · ROI {record.roi_index}\n"
                             f"Focus {self._format(record.focus, 2)} · Length {self._format(record.length_um, 1)} µm"
-                            f"\nCamera ({self._format(record.image_x_px, 0)}, {self._format(record.image_y_px, 0)})")
+                            f"\nCamera ({self._format(record.image_x_px, 0)}, {self._format(record.image_y_px, 0)})"
+                            f"\n{self._batch_text(record, html=False)}")
             self.gallery.addItem(item)
             if record.particle_id in picked:
                 item.setSelected(True)
@@ -2650,7 +3540,7 @@ class CalibrationWindow(QMainWindow):
         pages = max(1, (len(self.filtered) + GALLERY_PAGE - 1) // GALLERY_PAGE)
         scope = self._effective_browse_scope()
         label = {"selection": "selected", "all": "", "undecided": "unreviewed", "keep": "accepted",
-                 "reject": "rejected"}[scope]
+                 "reject": "rejected", "batch": f"'{self.active_reference_set}'"}[scope]
         self.gallery_info.setText(f"Page {self._gallery_page + 1} / {pages} · {len(self.filtered):,} "
                                   f"{label + ' ' if label else ''}particles")
         self._gallery_picks_changed()
@@ -2723,9 +3613,11 @@ class CalibrationWindow(QMainWindow):
                 counts[record.label] = counts.get(record.label, 0) + 1
         return counts
 
-    def _refresh_label_widgets(self):
+    def _refresh_label_widgets(self, update_batches: bool = True):
         if not hasattr(self, "label_list"):
             return
+        if update_batches and hasattr(self, "batch_list") and self.catalog:
+            self._refresh_saved_sets()        # batch lines show their labels
         counts = self._label_counts()
         chosen = self._accept_label_name()
         self.accept_label.blockSignals(True)
@@ -2798,6 +3690,10 @@ class CalibrationWindow(QMainWindow):
             self.labels.save()
         except OSError as exc:
             QMessageBox.warning(self, "Label library", f"Could not save {self.labels.path}:\n{exc}")
+        for window in CalibrationWindow._windows:
+            if window is not self and window.labels is self.labels and window.catalog is not None:
+                apply_label_dimensions(window.catalog.records, window.labels)
+                window._refresh_label_widgets()
 
     def new_label(self):
         dialog = LabelDialog(self)
@@ -2935,77 +3831,835 @@ class CalibrationWindow(QMainWindow):
         self._toast(f"Using label library {filename}. Set CPI_CALIBRATION_LABELS to make this permanent.")
 
     # ------------------------------------------------------- calibration sets --
-    def _calibration_set_names(self):
-        return sorted(name for name, s in self.saved_sets.items()
-                      if not s.get("description", "").startswith("Review batch: "))
+
+    @contextlib.contextmanager
+    def _bulk(self):
+        """Inside one user action, rebuild the batch list / indexes once at the end, not per step."""
+        self._bulk_depth = getattr(self, "_bulk_depth", 0) + 1
+        try:
+            yield
+        finally:
+            self._bulk_depth -= 1
+            if self._bulk_depth == 0 and getattr(self, "_sets_dirty", False):
+                self._sets_dirty = False
+                self._refresh_sets_display()
+                name = getattr(self, "_select_batch_after", None)
+                self._select_batch_after = None
+                if name:
+                    self._select_batch_row(name)
 
     def _refresh_saved_sets(self):
         self._reference_index = build_reference_index(self.saved_sets, self.active_reference_set)
         self._active_members = set(self.saved_sets.get(self.active_reference_set, {}).get("particle_ids", ()))
         self._draft_reference_cache = None
-        if not hasattr(self, "saved_sets_list"):
+        own = {}
+        for name, entry in sorted(self.saved_sets.items()):
+            if entry.get("best_focus"):
+                for pid in entry.get("particle_ids", ()):
+                    own.setdefault(pid, name)
+        active = self.saved_sets.get(self.active_reference_set, {})
+        if active.get("best_focus"):
+            for pid in active.get("particle_ids", ()):
+                own[pid] = self.active_reference_set
+        self._own_ref_names = own
+        groups_of = {}
+        for name, entry in self.saved_sets.items():
+            for pid in entry.get("particle_ids", ()):
+                groups_of.setdefault(pid, []).append(name)
+        self._groups_of = groups_of
+        self._steps_cache = None
+        self._groups_cache = None
+        if getattr(self, "_bulk_depth", 0):
+            self._sets_dirty = True          # display part once, at the end of the action
             return
-        current = self._selected_saved_set_name()
-        self.saved_sets_list.blockSignals(True)
-        self.saved_sets_list.clear()
-        active_row = -1
-        for name in self._calibration_set_names():
-            spec = self.saved_sets[name]
-            ref = spec.get("best_focus")
-            desc = f"{name}   ({len(spec['particle_ids']):,})"
-            if ref is not None:
-                desc += f"   X={ref['x_best']:g}  Z={ref['z_best']:g}"
-            if name == self.active_reference_set:
-                desc = "● " + desc
-            item = QListWidgetItem(desc)
-            item.setData(Qt.UserRole, name)
-            self.saved_sets_list.addItem(item)
-            if name == current:
-                active_row = self.saved_sets_list.count() - 1
-        self.saved_sets_list.blockSignals(False)
-        if active_row >= 0:
-            self.saved_sets_list.setCurrentRow(active_row)
+        self._refresh_sets_display()
+
+    def _refresh_sets_display(self):
+        """Timeline, reference hint and the Flag history list (the slow, visible part)."""
+        self._invalidate_reference_steps()
         self._update_reference_hint()
         # Flag history (review batches), newest first.
         if hasattr(self, "batch_list"):
             selected_batch = self._selected_batch_name()
+            # Keep a multi-selection only while several batches are deliberately shown.
+            really = set(self._selected_batch_names())
+            chosen = set(self._shown_batches) if len(self._shown_batches) > 1 else (
+                {selected_batch} & really)
+            self.batch_list.blockSignals(True)
             self.batch_list.clear()
-            batches = [(n, s) for n, s in self.saved_sets.items()
-                       if s.get("description", "").startswith("Review batch: ")]
+            show_rejects = getattr(self, "show_reject_batches_action", None) is not None and \
+                self.show_reject_batches_action.isChecked()
+            batches = [(n, e) for n, e in self.saved_sets.items()   # review batches + sets from older projects
+                       if show_rejects or e.get("description") != "Review batch: reject"]
             batches.sort(key=lambda item: item[1].get("created_utc", ""), reverse=True)
             for name, spec in batches:
-                keep = spec["description"].endswith("keep")
+                description = spec.get("description", "")
+                is_batch = description.startswith("Review batch: ")
+                keep = description.endswith("keep") or not is_batch
                 try:
                     stamp = datetime.fromisoformat(spec.get("created_utc", "")).astimezone().strftime("%d %b %H:%M")
                 except ValueError:
                     stamp = ""
-                item = QListWidgetItem(f"{'✓' if keep else '✕'} {name} · {len(spec['particle_ids']):,}"
-                                       + (f" · {stamp}" if stamp else ""))
-                item.setForeground(QColor(STATUS_COLOUR["keep" if keep else "reject"]))
+                ref = spec.get("best_focus")
+                symbol = ("✓" if keep else "✕") if is_batch else "◆"
+                label_text, label_tip = self._group_label_summary(spec)
+                item = QListWidgetItem(f"{symbol} {name} · {len(spec['particle_ids']):,}"
+                                       + (f" · {stamp}" if stamp else "")
+                                       + (f"  🏷 {label_text}" if keep else "")
+                                       + (f"  ⌖ X={ref['x_best']:g} Z={ref['z_best']:g}" if ref else ""))
+                item.setToolTip(label_tip)
+                item.setForeground(QColor(STATUS_COLOUR["keep" if keep else "reject"] if is_batch else COMMITTED_COLOUR))
+                if not is_batch:
+                    item.setToolTip("Group from an older project (calibration set). It works like a batch.")
                 item.setData(Qt.UserRole, name)
                 self.batch_list.addItem(item)
                 if name == selected_batch:
+                    self.batch_list.setCurrentItem(item, QItemSelectionModel.NoUpdate)
+                if name in chosen:
                     item.setSelected(True)
-                    self.batch_list.setCurrentItem(item)
+            self.batch_list.blockSignals(False)
 
-    def _selected_saved_set_name(self):
-        item = self.saved_sets_list.currentItem()
-        return item.data(Qt.UserRole) if item is not None else None
+    def _batch_text(self, record, html=True):
+        """Which batch(es) a particle is in, and the X/Z it uses (for hover / readouts)."""
+        names = sorted(self._groups_of.get(record.particle_id, ()),
+                       key=lambda n: self.saved_sets.get(n, {}).get("created_utc", ""))
+        ref, source, kind = self._reference_for(record, use_editor=False)
+        if ref is not None:
+            how = {"own": "own", "nearest": f"from nearest: {source}", "step": f"from earlier: {source}"}.get(kind, "")
+            xz = f"X/Z {ref['x_best']:.4g}/{ref['z_best']:.4g} ({how})"
+        else:
+            xz = "no X/Z yet"
+        if not names:
+            batch = "no batch"
+        elif len(names) == 1:
+            batch = names[0]
+        else:
+            batch = f"{names[-1]} (+{len(names) - 1} earlier: {', '.join(names[:-1])})"
+        if html:
+            return f"<b>{batch}</b> · {xz}"
+        return f"{batch} · {xz}"
+
+    def _detected_cpi(self):
+        counts = {}
+        for r in self._records():
+            if r.detected_cpi:
+                counts[r.detected_cpi] = counts.get(r.detected_cpi, 0) + 1
+        return counts
+
+    def instrument_info(self):
+        """(type, id) of the calibrated CPI: the chosen type, else the one detected in the data."""
+        chosen = self.cpi_type.currentData()
+        if not chosen:
+            counts = self._detected_cpi()
+            chosen = max(counts, key=counts.get) if counts else ""
+        return chosen, self.cpi_id.text().strip()
+
+    def _instrument_changed(self):
+        counts = self._detected_cpi()
+        if counts:
+            detected = ", ".join(f"{CPI_DISPLAY.get(k, k)} ({n:,} ROIs)" for k, n in sorted(counts.items()))
+            text = f"Detected from the image-type codes: <b>{detected}</b>."
+            chosen = self.cpi_type.currentData()
+            if len(counts) > 1:
+                text += " <span style='color:#c92a2a'>The loaded files come from different instruments.</span>"
+            elif chosen in CPI_DISPLAY and chosen not in counts:
+                text += (f" <span style='color:#c92a2a'>This differs from the chosen type "
+                         f"({CPI_DISPLAY[chosen]}) — check.</span>")
+        else:
+            text = "Load data to detect the CPI type."
+        self.cpi_detected.setText(text)
+        self._update_window_title()
+
+    def _update_window_title(self):
+        cpi, ident = self.instrument_info()
+        parts = [self.project_file.stem if self.project_file else "no project"]
+        if getattr(self, "merged_from", None):
+            parts[0] += " (merged viewing copy — label in the original projects)"
+        parts += [v for v in (CPI_DISPLAY.get(cpi, cpi), ident) if v]
+        self.setWindowTitle("CPI · Calibration Workbench v12 — " + " · ".join(parts))
+
+    def open_sizing_dialog(self):
+        if self.project_file is not None:
+            self.save_project()                       # fit exactly what is saved, and record it
+            return self.fit_from_projects([str(self.project_file)])
+        rows = [r for r in self._particle_position_rows()
+                if r.get("actual_length_um") not in ("", None) and r.get("d_signed_plane") not in ("", None)]
+        if len(rows) < 20:
+            QMessageBox.information(
+                self, "Fit size & focus model",
+                "The fit needs accepted particles that have a label with a true size and a best-focus X/Z "
+                f"(so d is known). Found {len(rows)}.")
+            return None
+        dialog = SizingDialog(rows, self)
+        dialog.show()
+        self._sizing_dialog = dialog
+        return dialog
+
+    def fit_from_projects_dialog(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Calibration runs to fit together (one project per run)",
+            str(self.project_file.parent) if self.project_file else "", "Project JSON (*.json)")
+        if files:
+            return self.fit_from_projects(files)
+        return None
+
+    def fit_from_projects(self, files, confirm=True):
+        """Fit from the projects' saved particle tables, read live (no copies), recording which were used."""
+        if self.project_file is not None and str(self.project_file.resolve()) in {str(Path(f).resolve()) for f in files}:
+            self.save_project()
+        rows, inputs, problems = load_projects_for_fit(files)
+        if problems:
+            QMessageBox.warning(self, "Fit from projects", "\n".join(problems))
+            return None
+        warnings = [f"{i['project']}: {w}" for i in inputs for w in i["warnings"]]
+        if warnings and confirm and QMessageBox.question(
+                self, "Fit from projects", "\n".join(warnings) + "\n\nFit anyway?") != QMessageBox.Yes:
+            return None
+        usable = [r for r in rows
+                  if r.get("actual_length_um") not in ("", None) and r.get("d_signed_plane") not in ("", None)]
+        if len(usable) < 20:
+            QMessageBox.information(
+                self, "Fit size & focus model",
+                "The fit needs accepted particles that have a label with a true size and a best-focus X/Z "
+                f"(so d is known). Found {len(usable)}.")
+            return None
+        for item in inputs:
+            item["usable"] = sum(1 for r in usable if r["project"] == item["project"])
+        dialog = SizingDialog(usable, self, inputs=inputs)
+        names = ", ".join(i["project"] for i in inputs)
+        dialog.setWindowTitle(f"Fit size & focus model — {names}")
+        dialog.show()
+        self._sizing_dialog = dialog
+        return dialog
+
+    def open_sizing_table_dialog(self, *_, path=None):
+        if path is None:
+            path, _ = QFileDialog.getOpenFileName(self, "Particle table to fit",
+                                                  str(self.project_file.parent) if self.project_file else "",
+                                                  "CSV files (*.csv)")
+        if not path:
+            return None
+        with open(path, newline="", encoding="utf-8") as handle:
+            rows = [r for r in csv.DictReader(handle)
+                    if r.get("actual_length_um") not in ("", None) and r.get("d_signed_plane") not in ("", None)]
+        if len(rows) < 20:
+            QMessageBox.information(self, "Fit size & focus model",
+                                    f"{Path(path).name} has only {len(rows)} particles with a true size and d.")
+            return None
+        instruments = {(r.get("cpi_type") or "", r.get("cpi_id") or "") for r in rows}
+        if len(instruments) > 1:
+            names = ", ".join(" ".join(x for x in i if x) or "unnamed" for i in sorted(instruments))
+            QMessageBox.warning(self, "Fit size & focus model",
+                                f"This table mixes instruments ({names}). A calibration belongs to one CPI — "
+                                "combine only that CPI's projects, or untick labels accordingly.")
+        dialog = SizingDialog(rows, self)
+        dialog.setWindowTitle(f"Fit size & focus model — {Path(path).name}")
+        dialog.show()
+        self._sizing_dialog = dialog
+        return dialog
+
+    def copy_project_to_reprocessed_dialog(self):
+        if self.project_file is None:
+            QMessageBox.information(self, "Copy project", "Open (and save) the project to copy first.")
+            return None
+        folder = QFileDialog.getExistingDirectory(
+            self, "Folder with the reprocessed MAT files (same file names)", str(self.project_file.parent))
+        if not folder:
+            return None
+        default = str(Path(folder) / (self.project_file.stem + "_" + Path(folder).name + ".json"))
+        output, _ = QFileDialog.getSaveFileName(self, "New project for the reprocessed data", default,
+                                                "Project JSON (*.json)")
+        if not output:
+            return None
+        return self.copy_project_to_reprocessed(folder, output)
+
+    def copy_project_to_reprocessed(self, folder, output, open_it=True):
+        """Same flags, labels, batches and X/Z, pointing at reprocessed MAT files.
+
+        Particles are re-found by ROI time + camera position, so a different
+        edge method (or ROI numbering) does not lose any decision.
+        """
+        self.save_project()
+        source = self.project_file
+        config = json.loads(source.read_text(encoding="utf-8"))
+        folder, output = Path(folder).resolve(), Path(output).resolve()
+        missing, sources = [], []
+        for location in config.get("sources", []):
+            old = Path(location)
+            if not old.is_absolute():
+                old = (source.parent / old).resolve()
+            new = folder / old.name
+            if not new.exists():
+                missing.append(old.name)
+                continue
+            sources.append(os.path.relpath(str(new), str(output.parent)))
+        if missing:
+            QMessageBox.warning(self, "Copy project", f"{len(missing)} file(s) not found in {folder}:\n"
+                                + "\n".join(missing[:10]))
+            if not sources:
+                return None
+        config["sources"] = sources
+        flags = source.with_name(config.get("flags_file", source.stem + "_flags.csv"))
+        new_flags = output.with_name(output.stem + "_flags.csv")
+        if flags.exists():
+            shutil.copyfile(flags, new_flags)
+        config["flags_file"] = new_flags.name
+        for key in ("position_file",):
+            if config.get(key):
+                pos = Path(config[key])
+                pos = pos if pos.is_absolute() else (source.parent / pos).resolve()
+                config[key] = os.path.relpath(str(pos), str(output.parent))
+        extras = []
+        for entry in config.get("extra_position_files", []) or []:
+            pos = Path(entry["path"])
+            pos = pos if pos.is_absolute() else (source.parent / pos).resolve()
+            extras.append(dict(entry, path=os.path.relpath(str(pos), str(output.parent))))
+        config["extra_position_files"] = extras
+        config["copied_from"] = {"project": str(source), "data_folder": str(folder),
+                                 "copied_utc": datetime.now().astimezone().isoformat(timespec="seconds")}
+        output.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        if open_it:
+            self.open_project(str(output))
+            self.save_project()      # writes the particle table with the reprocessed measurements
+            self._update_window_title()
+        return output
+
+    def compare_processing_dialog(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Projects to compare (the same particles processed different ways)",
+            str(self.project_file.parent) if self.project_file else "", "Project JSON (*.json)")
+        if len(files) < 2:
+            if files:
+                QMessageBox.information(self, "Compare processing runs", "Pick two or more projects.")
+            return None
+        if self.project_file is not None and str(self.project_file.resolve()) in {str(Path(f).resolve()) for f in files}:
+            self.save_project()
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            text = sizing.compare_processing(files)
+        except Exception as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "Compare processing runs", str(exc))
+            return None
+        QApplication.restoreOverrideCursor()
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Compare processing runs")
+        layout = QVBoxLayout(dialog)
+        view = QPlainTextEdit(text)
+        view.setReadOnly(True)
+        view.setLineWrapMode(QPlainTextEdit.NoWrap)
+        view.setFont(QFont("Menlo, Consolas, DejaVu Sans Mono", 9))
+        layout.addWidget(view)
+        dialog.resize(1000, 560)
+        dialog.show()
+        self._compare_dialog = dialog
+        return text
+
+    def merge_projects_dialog(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Projects to merge (pick two or more)", str(self.project_file.parent) if self.project_file else "",
+            "Project JSON (*.json)")
+        if not files:
+            return
+        if len(files) < 2:
+            QMessageBox.information(self, "Merge projects", "Pick at least two projects (Ctrl/⌘-click).")
+            return
+        start = str(Path(files[0]).with_name("merged_calibration_project.json"))
+        output, _ = QFileDialog.getSaveFileName(self, "Merged project (a new file; the originals are not changed)",
+                                                start, "Project JSON (*.json)")
+        if output:
+            self.merge_projects(files, output)
+
+    def merge_projects(self, project_files, output, ask=True):
+        """New project containing every listed project's data, flags, labels, batches and stage CSVs."""
+        output = Path(output).resolve()
+        if output in {Path(f).resolve() for f in project_files}:
+            QMessageBox.warning(self, "Merge projects", "Save the merged project under a new name — the originals "
+                                "are left unchanged.")
+            return False
+        instruments = {}
+        for f in project_files:
+            cpi_type, cpi_id = project_instrument(f)
+            instruments[Path(f).stem] = (cpi_type, cpi_id)
+        types = {t for t, _ in instruments.values() if t}
+        ids = {i for _, i in instruments.values() if i}
+        if len(types) > 1 or len(ids) > 1:
+            listing = "\n".join(f"  {n}: {' '.join(v for v in pair if v) or 'not set'}"
+                                 for n, pair in instruments.items())
+            QMessageBox.warning(self, "Merge projects", "These projects are from different CPIs, and a calibration "
+                                "belongs to one instrument:\n" + listing)
+            return False
+        if self.project_file is not None and self.project_file.resolve() in {Path(f).resolve() for f in project_files}:
+            self.save_project()       # merge what is on screen, not an older save
+        if not self._finish_current_project():
+            return False
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            self._restoring = True
+            self._reset_data(output.parent)
+            self.project_file = output
+            self.selection_file = output.with_name(output.stem + "_flags.csv")
+            self.position_file, self.position_series, self.position_time_basis = None, None, None
+            self.additional_roots = set()
+            notes = []
+            seen_sources = {}
+            for f in project_files:
+                notes += self._merge_one_project(Path(f).resolve(), seen_sources)
+            self.merged_from = [Path(f).stem for f in project_files]
+            if self.extra_position_files:
+                first = self.extra_position_files.pop(0)
+                self.position_file, self.position_series, self.position_time_basis = (
+                    first["path"], first.get("series"), first.get("time_basis"))
+            matched = self._apply_stage_positions()
+            apply_label_dimensions(self.catalog.records, self.labels)
+            self._save_label_library()
+            self._restoring = False
+            self._invalidate_reference_steps()
+            self._refresh_saved_sets()
+            self._view_locked = {"camera": False, "metric": False}
+            self._use_stage_axis_after_import(matched)
+            self.save_project()
+            self.apply_filters()
+            self._update_window_title()
+        finally:
+            self._restoring = False
+            QApplication.restoreOverrideCursor()
+        log = self._position_log()
+        if log is not None and log.conflicting_times():
+            notes.append(f"{log.conflicting_times()} stage-log timestamps clash between the projects' stage CSVs "
+                         "(their times overlap) — check stage positions.")
+        kept = sum(r.status == "keep" for r in self.catalog.records)
+        summary = (f"Merged {len(project_files)} projects into {output.name}: {len(self.catalog.records):,} "
+                   f"particles, {kept:,} accepted, {len(self.saved_sets)} batches/groups.")
+        self._toast(summary, 15000)
+        if ask and notes:
+            QMessageBox.information(self, "Merge projects", summary + "\n\n" + "\n".join(notes))
+        return True
+
+    def _merge_one_project(self, path, seen_sources):
+        """Add one project's data and decisions to the current (merged) project."""
+        config = expand_project_config(json.loads(path.read_text(encoding="utf-8")))
+        base, stem, notes = path.parent, path.stem, []
+        for location in config.get("sources", []):
+            source = Path(location)
+            if not source.is_absolute():
+                source = (base / source).resolve()
+            if str(source) in seen_sources:
+                notes.append(f"{source.name} is in both {seen_sources[str(source)]} and {stem}; where both flagged "
+                             f"the same particle, {stem}'s decision is kept.")
+                continue
+            seen_sources[str(source)] = stem
+            if source.is_file():
+                self.import_file(source, refresh=False)
+            else:
+                notes.append(f"{stem}: data file not found: {source}")
+        flags = base / config.get("flags_file", stem + "_flags.csv")
+        report = self.catalog.apply_selection_file(flags)
+        keys = config.get("particle_keys", {})
+        for name, entry in normalise_sets(config.get("named_sets", {})).items():
+            entry["particle_ids"] = sorted(set(self._remap_ids(entry["particle_ids"], report.id_map, keys)))
+            new_name, k = f"{stem} · {name}", 2
+            while new_name in self.saved_sets:
+                new_name, k = f"{stem} · {name} ({k})", k + 1
+            entry.setdefault("merged_from", stem)
+            self.saved_sets[new_name] = entry
+        self.labels.merge(config.get("labels", []))
+        for w in config.get("time_windows", []) or []:
+            if w.get("start") and w.get("end"):
+                self.time_windows.append(dict(w, name=self._unique_window_name(f"{stem} · {w.get('name', 'Window')}")))
+        specs = []
+        if config.get("position_file"):
+            specs.append({"path": config["position_file"],
+                          "series": config.get("position_series") if "position_series" in config else None,
+                          "time_basis": config.get("position_time_basis") if "position_time_basis" in config else None})
+        specs += list(config.get("extra_position_files", []) or [])
+        for spec in specs:
+            pos = Path(spec["path"])
+            if not pos.is_absolute():
+                pos = (base / pos).resolve()
+            if not pos.exists():
+                notes.append(f"{stem}: stage CSV not found: {pos}")
+                continue
+            entry = {"path": str(pos), "series": spec.get("series"), "time_basis": spec.get("time_basis"),
+                     "from": stem}
+            if not any(e["path"] == entry["path"] and e.get("series") == entry["series"]
+                       and e.get("time_basis") == entry["time_basis"] for e in self.extra_position_files):
+                self.extra_position_files.append(entry)
+        if not self.cpi_type.currentData() and (config.get("instrument") or {}).get("type"):
+            inst = config["instrument"]
+            self.cpi_type.setCurrentIndex(max(0, self.cpi_type.findData(inst.get("type", ""))))
+            self.cpi_id.setText(str(inst.get("id", "")))
+        if report.rows and report.unmatched:
+            notes.append(f"{stem}: {report.summary()}")
+        return notes
+
+    def combine_projects_dialog(self):
+        files, _ = QFileDialog.getOpenFileNames(self, "Projects to combine", str(self.project_file.parent)
+                                                if self.project_file else "", "Project JSON (*.json)")
+        if not files:
+            return
+        output, _ = QFileDialog.getSaveFileName(self, "Combined particle table", "combined_particle_positions.csv",
+                                                "CSV files (*.csv)")
+        if not output:
+            return
+        if self.project_file is not None and str(self.project_file) in {str(Path(f).resolve()) for f in files}:
+            self.save_project()   # make sure the open project's table is current
+        try:
+            summary = combine_projects(files, output)
+        except OSError as exc:
+            QMessageBox.critical(self, "Combine projects", str(exc))
+            return
+        lines = [f"{n:,} particles · {Path(f).name}" for f, n in summary["projects"]]
+        if summary["missing"]:
+            lines.append("\nNo particle table yet (open each and Save project first):")
+            lines += [f"  {Path(f).name}" for f in summary["missing"]]
+        QMessageBox.information(self, "Combine projects",
+                                f"Wrote {summary['rows']:,} accepted particles to\n{output}\n\n" + "\n".join(lines))
+
+    def _group_label_summary(self, spec):
+        """Short text + tooltip describing the labels carried by a group's particles."""
+        by_id = self.catalog._by_id if self.catalog else {}
+        counts, total = {}, 0
+        for pid in spec.get("particle_ids", ()):
+            record = by_id.get(pid)
+            if record is None:
+                continue
+            total += 1
+            counts[record.label or ""] = counts.get(record.label or "", 0) + 1
+        if not total:
+            return "?", "Particles not loaded"
+        named = {k: v for k, v in counts.items() if k}
+        unlabelled = counts.get("", 0)
+        if not named:
+            text = "no label"
+        elif len(named) == 1 and not unlabelled:
+            text = next(iter(named))
+        elif len(named) == 1:
+            text = f"{next(iter(named))} ({named[next(iter(named))]:,} of {total:,})"
+        else:
+            text = f"mixed: {len(named)} labels"
+        tip = "\n".join(f"{name or '(no label)'}: {n:,}" for name, n in sorted(counts.items(), key=lambda kv: -kv[1]))
+        return text, "Labels of this batch's particles:\n" + tip
 
     def _selected_batch_name(self):
         item = self.batch_list.currentItem() if hasattr(self, "batch_list") else None
         return item.data(Qt.UserRole) if item is not None else None
 
+    def _select_batch_row(self, name):
+        for row in range(self.batch_list.count()):
+            if self.batch_list.item(row).data(Qt.UserRole) == name:
+                self.batch_list.clearSelection()
+                self.batch_list.setCurrentRow(row)
+                return
+
+    def _selected_batch_names(self):
+        """All batches chosen in Flag history (Ctrl/Shift-click), in list order."""
+        if not hasattr(self, "batch_list"):
+            return []
+        return [self.batch_list.item(i).data(Qt.UserRole) for i in range(self.batch_list.count())
+                if self.batch_list.item(i).isSelected()]
+
+    def _choose_label(self, title, text, current=""):
+        """Pick a library label (or none, or a new one). Returns name, "" for no label, or None if cancelled."""
+        names = sorted(self.labels.names()) if hasattr(self.labels, "names") else []
+        options = ["(no label)"] + names + ["New label…"]
+        start = options.index(current) if current in options else 0
+        choice, ok = QInputDialog.getItem(self, title, text, options, start, False)
+        if not ok:
+            return None
+        if choice == "New label…":
+            return self.new_label() or None
+        return "" if choice == "(no label)" else choice
+
+    def relabel_ids(self, ids, name, what="particles"):
+        """Change the label (and true size) of the given particles; flags unchanged; undoable."""
+        records = self.catalog._by_id if self.catalog else {}
+        ids = [p for p in ids if p in records and records[p].status != "reject"]
+        if not ids:
+            return 0
+        self._push_undo(f"Label {len(ids):,} {what} '{name or 'no label'}'", status_ids=ids)
+        for pid in ids:
+            self._set_label(records[pid], name)
+        self.autosave()
+        self.save_project_if_open()
+        self._refresh_saved_sets()
+        self._after_change()
+        self._toast(f"🏷 {len(ids):,} {what} now labelled '{name or 'no label'}'"
+                    + (f" ({self.labels.get(name).size_text()})" if name and self.labels.get(name) is not None
+                       and hasattr(self.labels.get(name), "size_text") else "") + ". Ctrl+Z undoes.")
+        return len(ids)
+
+    def relabel_batch_dialog(self, *_, name=None, names=None):
+        names = names or ([name] if name else None) or self._selected_batch_names() or \
+            ([self._selected_batch_name()] if self._selected_batch_name() else [])
+        names = [n for n in names if n in self.saved_sets]
+        if not names:
+            self.statusBar().showMessage("Choose a batch in Flag history first", 4000)
+            return None
+        members = list(dict.fromkeys(p for n in names for p in self.saved_sets[n].get("particle_ids", ())))
+        current = {self.catalog._by_id[p].label for p in members if p in self.catalog._by_id} - {""}
+        what = f"'{names[0]}'" if len(names) == 1 else f"the {len(names)} chosen batches"
+        label = self._choose_label("Change label", f"New label for every particle in {what} "
+                                   f"(now: {', '.join(sorted(current)) or 'no label'}):",
+                                   next(iter(current)) if len(current) == 1 else "")
+        if label is None:
+            return None
+        return self.relabel_ids(members, label, f"particles of {what}")
+
+    def relabel_selection_dialog(self):
+        if not self.selected_ids:
+            self.statusBar().showMessage("Select particles first", 4000)
+            return None
+        label = self._choose_label("Label selection", f"Label for the {len(self.selected_ids):,} selected "
+                                   "particles (their accept/reject flag is not changed):")
+        if label is None:
+            return None
+        return self.relabel_ids(self.selected_ids, label, "selected particles")
+
     def select_batch(self):
-        name = self._selected_batch_name()
-        if not name or not self.catalog:
+        names = self._selected_batch_names() or ([self._selected_batch_name()] if self._selected_batch_name() else [])
+        if not names or not self.catalog:
             self.statusBar().showMessage("Choose a batch in Flag history first", 4000)
             return
-        ids = set(self.saved_sets[name]["particle_ids"]) & set(self.catalog._by_id)
-        status = self.saved_sets[name]["description"].partition(": ")[2]
-        if status in self.show_status:
-            self.show_status[status].setChecked(True)
-        self._change_selection(ids, f"Selected the {len(ids):,} particles of '{name}'")
+        ids = set()
+        for name in names:
+            ids |= set(self.saved_sets[name]["particle_ids"]) & set(self.catalog._by_id)
+            status = self.saved_sets[name]["description"].partition(": ")[2]
+            if status in self.show_status:
+                self.show_status[status].setChecked(True)
+        what = f"'{names[0]}'" if len(names) == 1 else f"{len(names)} batches"
+        self._change_selection(ids, f"Selected the {len(ids):,} particles of {what}")
+
+    def _members_start_time(self, name):
+        by_id = self.catalog._by_id if self.catalog else {}
+        times = [by_id[p].time_matlab for p in self.saved_sets[name].get("particle_ids", ())
+                 if p in by_id and math.isfinite(by_id[p].time_matlab)]
+        return min(times) if times else None
+
+    def _store_editor_reference(self, name):
+        """Save the editor's Xbest/Zbest as set/batch ``name``'s own reference."""
+        entry = self.saved_sets[name]
+        entry["best_focus"] = make_reference(self.best_x_set.value(), self.best_z_set.value())
+        start = self._members_start_time(name)
+        if start is not None:
+            entry["ref_time_matlab"] = start  # where it starts applying on the timeline
+
+    def batch_clicked(self):
+        """Show a batch's X/Z — its own, or the one it inherits — in the editor.
+
+        With several batches chosen, the plots show them together, each at its
+        own saved X/Z (the editor is not previewed on any of them).
+        """
+        names = self._selected_batch_names()
+        if len(names) > 1:
+            self._shown_batches = names
+            self.active_reference_set = None
+            self._refresh_saved_sets()
+            self._refresh_views()
+            n = len(set().union(*(self.saved_sets[x].get("particle_ids", ()) for x in names)))
+            self.batch_ref_label.setText(f"<b>{len(names)} batches</b> shown together ({n:,} particles), each at "
+                                         "its own X/Z. <b>Select batch</b> and <b>Change label…</b> act on all "
+                                         "of them; X/Z buttons act on one batch at a time.")
+            return
+        self._shown_batches = names
+        name = names[0] if names else None
+        if not name:
+            return
+        entry = self.saved_sets[name]
+        ref = validate_reference(entry.get("best_focus"))
+        if ref is not None:
+            source = f"its own X/Z"
+        else:
+            ref, why = self._group_peak(name)
+            if ref is not None:
+                source = "no X/Z of its own yet — <b>proposed from its own focus peak</b>"
+            else:
+                start = self._members_start_time(name)
+                inherited = None
+                if start is not None:
+                    from_steps = [s for s in self._reference_steps() if s[2] != name]
+                    if from_steps:
+                        k = max([i for i, s in enumerate(from_steps) if s[0] <= start] or [0])
+                        _, ref, inherited = from_steps[k]
+                source = (f"no focus peak ({why}); showing <b>{inherited}</b>'s X/Z" if ref is not None
+                          else f"no X/Z yet and no focus peak ({why})")
+        if ref is not None:
+            for spin, value in ((self.best_x_set, ref["x_best"]), (self.best_z_set, ref["z_best"])):
+                spin.blockSignals(True); spin.setValue(value); spin.blockSignals(False)
+        self.active_reference_set = name
+        self._refresh_saved_sets()
+        self._refresh_views()           # plots and the "Showing: …" line follow the clicked batch
+        self.batch_ref_label.setText(f"<b>{name}</b>: {source}. The editor now previews on this batch — adjust "
+                                     "Xbest/Zbest (Best focus tab or drag the line), then <b>Save Xbest/Zbest to "
+                                     "batch</b>.")
+
+    def _group_peak(self, name):
+        by_id = self.catalog._by_id if self.catalog else {}
+        members = [by_id[p] for p in self.saved_sets[name].get("particle_ids", ())
+                   if p in by_id and by_id[p].status != "reject"]
+        return self._peak_reference(members)
+
+    def fill_batch_references(self, *_, scope=None):
+        """Give every accepted batch without X/Z its own, from its median focus peak."""
+        accepted = [n for n, e in self.saved_sets.items() if e.get("description") == "Review batch: keep"]
+        missing = [n for n in accepted if not self.saved_sets[n].get("best_focus")]
+        if not accepted:
+            QMessageBox.information(self, "Batch X/Z", "There are no accepted batches yet.")
+            return
+        if scope in ("all", "missing"):          # scripted use: no dialog
+            return self._apply_peak_references(accepted if scope == "all" else missing)
+        box = QMessageBox(self)
+        box.setWindowTitle("Set X/Z from focus peaks")
+        box.setIcon(QMessageBox.Question)
+        box.setText("Put d = 0 at the peak of each batch's own median focus trace?")
+        box.setInformativeText(
+            f"{len(accepted)} accepted batches: {len(accepted) - len(missing)} already have X/Z, "
+            f"{len(missing)} have none.\n\nThe peak is found along the object-plane normal "
+            f"(θ = {self.plane_normal.value():g}°), so d = 0 lands on the focus maximum. "
+            "Ctrl+Z undoes this.")
+        all_button = box.addButton(f"All {len(accepted)} batches (replace existing)", QMessageBox.AcceptRole)
+        missing_button = box.addButton(f"Only the {len(missing)} without X/Z", QMessageBox.AcceptRole)
+        missing_button.setEnabled(bool(missing))
+        box.addButton(QMessageBox.Cancel)
+        box.setDefaultButton(missing_button if missing else all_button)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is all_button:
+            todo = accepted
+        elif clicked is missing_button:
+            todo = missing
+        else:
+            return
+        self._apply_peak_references(todo)
+
+    def _apply_peak_references(self, todo, report=True):
+        """Set each named batch's X/Z from its own focus peak (undoable)."""
+        self._push_undo("Set batch X/Z from focus peaks", sets=True)
+        done, skipped = [], []
+        for name in sorted(todo, key=lambda n: self._members_start_time(n) or 0):
+            ref, why = self._group_peak(name)
+            if ref is None:
+                skipped.append(f"{name}: {why}")
+                continue
+            entry = self.saved_sets[name]
+            entry["best_focus"] = ref
+            start = self._members_start_time(name)
+            if start is not None:
+                entry["ref_time_matlab"] = start
+            done.append(name)
+        self._refresh_saved_sets()
+        self.save_project_if_open()
+        self._after_change()
+        msg = f"Set Xbest/Zbest for {len(done)} batch(es) from their focus peaks."
+        if skipped:
+            msg += (f"\n\n{len(skipped)} skipped (unchanged — a batch with its own X/Z keeps it, one without "
+                    "keeps borrowing from nearby batches):\n" + "\n".join(skipped[:10]))
+        if report:
+            QMessageBox.information(self, "Batch X/Z", msg)
+        return done, skipped
+
+    def save_batch_reference(self):
+        name = self._selected_batch_name() or (self.active_reference_set
+                                               if self.active_reference_set in self.saved_sets else None)
+        if not name:
+            self.statusBar().showMessage("Choose a batch in Flag history first", 4000)
+            return
+        self._push_undo(f"X/Z for '{name}'", sets=True)
+        self._store_editor_reference(name)
+        self.active_reference_set = name
+        self._refresh_saved_sets()
+        self.save_project_if_open()
+        self._after_change()
+        ref = self.saved_sets[name]["best_focus"]
+        self.batch_ref_label.setText(f"<b>{name}</b> now has its own X/Z: Xbest={ref['x_best']:g}, "
+                                     f"Zbest={ref['z_best']:g}. Later batches without their own inherit it.")
+        self._toast(f"Saved Xbest={ref['x_best']:g}, Zbest={ref['z_best']:g} to '{name}'.")
+
+    def clear_batch_reference(self):
+        name = self._selected_batch_name()
+        if not name or "best_focus" not in self.saved_sets[name]:
+            return
+        self._push_undo(f"Clear X/Z of '{name}'", sets=True)
+        self.saved_sets[name].pop("best_focus", None)
+        self.saved_sets[name].pop("ref_time_matlab", None)
+        self._refresh_saved_sets()
+        self.save_project_if_open()
+        self._after_change()
+        self.batch_ref_label.setText(f"<b>{name}</b> now inherits X/Z from the timeline.")
+
+    def _refresh_timeline(self):
+        steps = self._reference_steps()
+        if not steps:
+            self.timeline_label.setText(
+                "<span style='color:#516579'>No batch has best focus yet. Accept a cluster (K), or use Review → "
+                "Flag history → <i>Set X/Z of all batches from their focus peaks</i>.</span>")
+            return
+        lines = []
+        for start, ref, name in steps:
+            try:
+                when = matlab_datenum_to_datetime(start).strftime("%d %b %H:%M:%S")
+            except (ValueError, OverflowError):
+                when = f"{start:.6f}"
+            lines.append(f"<b>{name}</b> · {when} · X={ref['x_best']:g}, Z={ref['z_best']:g}")
+        missing = sum(1 for e in self.saved_sets.values()
+                      if e.get("description") == "Review batch: keep" and not e.get("best_focus"))
+        tail = (f"<br><span style='color:#a61e4d'>{missing} accepted batch(es) have no X/Z of their own.</span>"
+                if missing else "")
+        self.timeline_label.setText("<br>".join(lines) + tail + "<br><span style='color:#516579'>Particles without "
+                                    "their own X/Z use the nearest of these on the camera (same session), else the "
+                                    "latest earlier one.</span>")
+
+    def _reference_edited(self):
+        if not self._auto_placing:
+            self._ref_manual = True   # the user moved the line / typed: stop following the peak
+            self._ref_set_for_cluster = True
+        self._set_reference_changed()
+
+    def _selection_peak(self):
+        """(reference, reason) from the selection's own median focus traces."""
+        if not self.catalog or not self.selected_ids:
+            return None, "nothing selected"
+        pids = self._selection_without_own_reference()
+        if not pids:
+            return None, "every selected particle already uses its batch's saved X/Z"
+        return self._peak_reference([self.catalog._by_id[p] for p in pids])
+
+    def _peak_reference(self, recs):
+        """Xbest/Zbest that puts d = 0 at the median focus peak (along the plane normal)."""
+        xs, zs = [r.stage_x for r in recs], [r.stage_y for r in recs]
+        fs = [self._peak_focus(r) for r in recs]
+        ref, why = focus_peak_on_plane(xs, zs, fs, self.plane_normal.value(), self.peak_combo.currentData())
+        if ref is None:
+            ref2, why2 = focus_peak_reference(xs, zs, fs, self.peak_combo.currentData())
+            if ref2 is not None:
+                return ref2, why2
+        return ref, why
+
+    def _peak_focus(self, record):
+        """Focus value used to find best-focus peaks (raw, or illumination-normalised)."""
+        if getattr(self, "norm_peak_cb", None) is not None and self.norm_peak_cb.isChecked():
+            return self._normalised_focus(record)
+        return record.focus
+
+    def _auto_place_reference(self, force=False):
+        """Move Xbest/Zbest to the selection's focus peak unless the user overrode it."""
+        if not self.follow_peak_cb.isChecked() or (self._ref_manual and not force) or not self.selected_ids:
+            return False
+        ref, _ = self._selection_peak()
+        if ref is None:
+            return False
+        self._auto_placing = True
+        try:
+            for spin, value in ((self.best_x_set, ref["x_best"]), (self.best_z_set, ref["z_best"])):
+                spin.blockSignals(True)
+                spin.setValue(value)
+                spin.blockSignals(False)
+            self._ref_manual = False
+            self._ref_set_for_cluster = True
+            self._set_reference_changed(redraw=False)
+        finally:
+            self._auto_placing = False
+        return True
 
     def _set_reference_changed(self, redraw=True):
         if hasattr(self, "best_x_set") and hasattr(self, "best_z_set"):
@@ -3015,7 +4669,8 @@ class CalibrationWindow(QMainWindow):
             offset = (f" · current ROI: ΔX={rec.stage_x - self.best_x_set.value():.4g}, "
                       f"ΔZ={rec.stage_y - self.best_z_set.value():.4g}"
                       if rec is not None and math.isfinite(rec.stage_x) and math.isfinite(rec.stage_y) else "")
-            self.set_radius_label.setText(f"Draft best radius = {radius:.5g}" + offset)
+            self.set_radius_label.setText(("Current particle (☆)" + offset.replace(" · current ROI", "")) if offset else "")
+            self._update_save_ref_text()
             if redraw and hasattr(self, "plot_canvas"):
                 self.update_plots()
 
@@ -3023,18 +4678,25 @@ class CalibrationWindow(QMainWindow):
         if not hasattr(self, "active_set_label"):
             return
         name = self.active_reference_set
-        if name and name in self.saved_sets and self.saved_sets[name].get("best_focus"):
-            self.active_set_label.setText(f"Active reference: {name}. It applies to its members; overlapping "
-                                          "sets with conflicting references need an active set.")
+        if name and name in self.saved_sets:
+            own = self.saved_sets[name].get("best_focus")
+            self.active_set_label.setText(
+                f"Editing batch <b>{name}</b> ({'has its own X/Z' if own else 'no X/Z of its own yet'}). "
+                "Its particles preview these values.")
+            self.save_to_batch_button.setEnabled(True)
+            self.save_to_batch_button.setText(f"Save Xbest/Zbest to '{name}'")
         else:
-            self.active_set_label.setText("No active set. Unique saved X/Z references apply automatically.")
+            self.active_set_label.setText("No batch chosen: values preview on the selection and are saved with "
+                                          "the next Accept.")
+            self.save_to_batch_button.setEnabled(False)
+            self.save_to_batch_button.setText("Save Xbest/Zbest to batch")
 
     def move_reference_line(self, value):
         axis = self.position_metric.currentData()
         if axis not in ("stage_x", "stage_z"):
             return
         (self.best_x_set if axis == "stage_x" else self.best_z_set).setValue(value)
-        self._toast(f"Draft {axis[-1].upper()}best = {value:.5g}; Sets / X–Z → Save to keep it", 7000)
+        self._toast(f"Draft {axis[-1].upper()}best = {value:.5g}; Accept saves it with the batch", 7000)
 
     def _plane_changed(self):
         theta = self.plane_normal.value()
@@ -3064,6 +4726,15 @@ class CalibrationWindow(QMainWindow):
                     f"{'the selection' if self.selected_ids else 'all particles'}. Use Flip side to swap signs.")
 
     def snap_reference_to_median_peak(self):
+        if self.selected_ids:
+            ref, why = self._selection_peak()
+            if ref is None:
+                QMessageBox.information(self, "Selection's focus peak", f"No focus peak: {why}.")
+                return
+            self._auto_place_reference(force=True)
+            self.update_plots()
+            self._toast(f"Xbest/Zbest set to the selection's focus peak: {ref['x_best']:.5g} / {ref['z_best']:.5g}")
+            return
         axis = self.position_metric.currentData()
         if axis not in ("stage_x", "stage_z") or axis not in self._median_peak:
             QMessageBox.information(self, "Median focus peak",
@@ -3074,194 +4745,48 @@ class CalibrationWindow(QMainWindow):
         self._toast(f"Draft {axis[-1].upper()}best set to the median focus peak "
                     f"{self._median_peak[axis]:.5g}. Save it with the set.")
 
-    def saved_set_clicked(self):
-        name = self._selected_saved_set_name()
-        if name is None:
-            return
-        self.active_reference_set = name
-        spec = self.saved_sets[name]
-        self.set_name_field.setText(name)
-        ref = spec.get("best_focus")
-        if ref is not None:
-            self.best_x_set.blockSignals(True); self.best_z_set.blockSignals(True)
-            self.best_x_set.setValue(ref["x_best"]); self.best_z_set.setValue(ref["z_best"])
-            self.best_x_set.blockSignals(False); self.best_z_set.blockSignals(False)
-        self._refresh_saved_sets()
-        self.update_plots()
-        self.save_project_if_open()
+    def _restore_reference_editor(self, draft=None):
+        """Put Xbest/Zbest back in the editor when a project opens.
 
-    def commit_working_set(self):
-        """Atomically save particle IDs and typed X/Z as one named snapshot."""
-        if not self.selected_ids:
-            QMessageBox.information(self, "Nothing selected", "Select particles first (e.g. Review → Accepted → "
-                                                              "Select).")
+        Use the values that were in the editor when the project was saved;
+        projects from before that was stored fall back to the active set's
+        saved reference, then to any set with a reference.
+        """
+        ref = None
+        if isinstance(draft, dict):
+            try:
+                ref = make_reference(draft["x_best"], draft["z_best"])
+            except (KeyError, TypeError, ValueError):
+                ref = None
+        if ref is None and self.active_reference_set in self.saved_sets:
+            ref = self.saved_sets[self.active_reference_set].get("best_focus")
+        if ref is None:
+            ref = next((s.get("best_focus") for n, s in sorted(self.saved_sets.items()) if s.get("best_focus")), None)
+        if ref is None:
             return
-        name = self.set_name_field.text().strip()
-        if not name:
-            name, ok = QInputDialog.getText(self, "Name calibration set", "Set name:")
-            if not ok or not name.strip():
-                return
-            name = name.strip()
-            self.set_name_field.setText(name)
-        if name in self.saved_sets and self.saved_sets[name].get("description", "").startswith("Review batch"):
-            QMessageBox.warning(self, "Name in use", "That name belongs to a flag-history batch. Choose another.")
-            return
-        if name in self.saved_sets and QMessageBox.question(
-                self, "Replace calibration set?",
-                f"Replace '{name}' with the current {len(self.selected_ids):,} particles and X/Z values?"
-        ) != QMessageBox.Yes:
-            return
-        old = copy.deepcopy(self.saved_sets.get(name))
-        self._push_undo(f"Save set '{name}'", sets=True)
-        entry = make_saved_set(self.selected_ids, description="Calibration working set")
-        entry["best_focus"] = make_reference(self.best_x_set.value(), self.best_z_set.value())
-        self.saved_sets[name] = entry
-        self.active_reference_set = name
-        self._refresh_saved_sets()
-        if self.project_file is None:
-            self.save_project()
-            if self.project_file is None:
-                if old is None:
-                    del self.saved_sets[name]
-                else:
-                    self.saved_sets[name] = old
-                self.active_reference_set = None
-                self.undo_stack.pop()
-                self._refresh_saved_sets()
-                return
-        else:
-            self.save_project()
-        self._after_change()
-        self._toast(f"Saved set '{name}' with {len(self.selected_ids):,} particles and best X/Z.")
-
-    def save_named_set(self):
-        self.commit_working_set()
-
-    def commit_current_particle(self):
-        record = self.current_record()
-        if record is None:
-            return
-        name = self.set_name_field.text().strip() or self._selected_saved_set_name()
-        if not name:
-            name, ok = QInputDialog.getText(self, "Add particle to set", "Calibration set name:")
-            if not ok or not name.strip():
-                return
-            name = name.strip()
-        old_entry = copy.deepcopy(self.saved_sets.get(name))
-        try:
-            add_ids_to_saved_set(self.saved_sets, name, [record.particle_id],
-                                 make_reference(self.best_x_set.value(), self.best_z_set.value()))
-        except ValueError as exc:
-            QMessageBox.warning(self, "Add particle", str(exc))
-            return
-        self.active_reference_set = name
-        self.set_name_field.setText(name)
-        self._refresh_saved_sets()
-        self.save_project()
-        if self.project_file is None:
-            if old_entry is None:
-                self.saved_sets.pop(name, None)
-            else:
-                self.saved_sets[name] = old_entry
-            self.active_reference_set = None
-            self._refresh_saved_sets()
-            return
-        self._after_change()
-        self._toast(f"Added ROI {record.roi_index} to '{name}'")
-
-    def remove_current_from_committed_set(self):
-        record = self.current_record()
-        name = self._selected_saved_set_name() or self.active_reference_set
-        if record is None or name not in self.saved_sets:
-            QMessageBox.information(self, "Remove particle", "Choose a calibration set in the list first.")
-            return
-        if record.particle_id not in self.saved_sets[name]["particle_ids"]:
-            self.statusBar().showMessage("This particle is not in the chosen set", 5000)
-            return
-        self._push_undo(f"Remove ROI from '{name}'", sets=True)
-        remove_ids_from_saved_set(self.saved_sets, name, [record.particle_id])
-        self._refresh_saved_sets()
-        self.save_project_if_open()
-        self._after_change()
-        self._toast(f"Removed ROI {record.roi_index} from '{name}'. X/Z unchanged.")
-
-    def update_saved_set_reference(self):
-        name = self._selected_saved_set_name()
-        if not name:
-            QMessageBox.information(self, "Choose a set", "Select a calibration set in the list first.")
-            return
-        self._push_undo(f"Update X/Z of '{name}'", sets=True)
-        self.saved_sets[name]["best_focus"] = make_reference(self.best_x_set.value(), self.best_z_set.value())
-        self.active_reference_set = name
-        self._refresh_saved_sets()
-        self.update_plots()
-        self.save_project_if_open()
-        self._toast(f"Updated best X/Z for '{name}' (its particles are unchanged).")
-
-    def clear_saved_set_reference(self):
-        name = self._selected_saved_set_name()
-        if not name or "best_focus" not in self.saved_sets[name]:
-            return
-        if QMessageBox.question(self, "Clear best-focus reference?",
-                                f"Remove saved X/Z for '{name}'? Its particles are kept.") != QMessageBox.Yes:
-            return
-        self._push_undo(f"Clear X/Z of '{name}'", sets=True)
-        self.saved_sets[name].pop("best_focus", None)
-        self._refresh_saved_sets()
-        self.update_plots()
-        self.save_project_if_open()
-
-    def load_named_set(self):
-        name = self._selected_saved_set_name()
-        if name is None or not self.catalog:
-            return
-        valid = set(self.catalog._by_id)
-        self.active_reference_set = name
-        self._refresh_saved_sets()
-        self.regions.clear()
-        self._change_selection(set(self.saved_sets[name]["particle_ids"]) & valid,
-                               f"Selected the particles of set '{name}'")
-
-    def add_named_set(self):
-        name = self._selected_saved_set_name()
-        if name is None or not self.catalog:
-            return
-        valid = set(self.catalog._by_id)
-        self._change_selection(set(self.selected_ids) | (set(self.saved_sets[name]["particle_ids"]) & valid),
-                               f"Added set '{name}' to the selection")
-
-    def delete_named_set(self):
-        name = self._selected_saved_set_name()
-        if name is None:
-            return
-        if QMessageBox.question(self, "Delete calibration set?",
-                                f"Delete '{name}'? Review flags and MAT files are not changed.") != QMessageBox.Yes:
-            return
-        self._push_undo(f"Delete set '{name}'", sets=True)
-        del self.saved_sets[name]
-        if name == self.active_reference_set:
-            self.active_reference_set = None
-        self._refresh_saved_sets()
-        self.save_project_if_open()
-        self._after_change()
-
-    def clear_named_set_flags(self):
-        name = self._selected_saved_set_name()
-        if name is None or not self.catalog:
-            return
-        ids = set(self.saved_sets[name]["particle_ids"])
-        if QMessageBox.question(self, "Unflag set members?",
-                                f"Return the {len(ids):,} members of '{name}' to unreviewed? "
-                                "The set itself is kept.") != QMessageBox.Yes:
-            return
-        self._flag_ids(ids, "undecided", f"Unflag set '{name}'", batch=False)
-        self._after_change()
+        for spin, value in ((self.best_x_set, ref["x_best"]), (self.best_z_set, ref["z_best"])):
+            spin.blockSignals(True)
+            spin.setValue(float(value))
+            spin.blockSignals(False)
+        self._draft_reference_cache = None
 
     def remove_classified_batch(self):
         """Undo one accepted/rejected batch without changing unrelated statuses."""
         name = self._selected_batch_name()
         if name is None or not self.catalog:
             self.statusBar().showMessage("Choose a batch in Flag history first", 4000)
+            return
+        if not self.saved_sets[name].get("description", "").startswith("Review batch: "):
+            if QMessageBox.question(self, "Remove group?", f"Remove the group '{name}' (from an older project)? "
+                                    "Flags and labels are not changed.") != QMessageBox.Yes:
+                return
+            self._push_undo(f"Remove group '{name}'", sets=True)
+            del self.saved_sets[name]
+            if name == self.active_reference_set:
+                self.active_reference_set = None
+            self._refresh_saved_sets()
+            self.save_project_if_open()
+            self._after_change()
             return
         status = self.saved_sets[name].get("description", "").partition(": ")[2]
         ids = exclusive_batch_ids(self.saved_sets, name)
@@ -3274,7 +4799,7 @@ class CalibrationWindow(QMainWindow):
             return
         self._push_undo(f"Undo batch '{name}'", status_ids=affected, sets=True)
         self._set_flags(affected, "undecided")
-        del self.saved_sets[name]
+        self.saved_sets.pop(name, None)   # may already be gone if it emptied
         if name == self.active_reference_set:
             self.active_reference_set = None
         self._refresh_saved_sets()
@@ -3406,10 +4931,6 @@ class CalibrationWindow(QMainWindow):
         self.apply_filters()
         event.acceptProposedAction()
 
-    def save_project_if_open(self):
-        if self.project_file:
-            self.save_project()
-
     def choose_directory(self) -> None:
         directory = QFileDialog.getExistingDirectory(self, "Processed CPI calibration directory")
         if directory:
@@ -3421,35 +4942,118 @@ class CalibrationWindow(QMainWindow):
             self.add_directory(directory)
 
     def _reset_data(self, root):
+        if hasattr(self, "cpi_type"):
+            self.cpi_type.setCurrentIndex(0)
+            self.cpi_id.clear()
         self.catalog = ParticleCatalog(root, [])
         self.store = ParticleStore(root)
         self.sources = []
         self.saved_sets = {}
+        self._shown_batches = []
+        self.extra_position_files = []
+        self.merged_from = []
+        self.time_windows = []
+        self.active_time_window = None
+        if hasattr(self, "window_list"):
+            self._refresh_time_windows()
         self.active_reference_set = None
         self.selected_ids.clear()
         self.regions.clear()
         self.undo_stack.clear()
+        self.redo_stack.clear()
         self.current_id = None
         self._thumbs.clear()
         self._refresh_saved_sets()
 
+    def new_window(self):
+        """Another workbench window, for working on a second project side by side."""
+        window = CalibrationWindow()
+        window.resize(self.size())
+        window.move(self.pos() + QPoint(40, 40))
+        window.show()
+        return window
+
+    def _window_with_project(self, filename):
+        target = Path(filename).resolve()
+        for window in CalibrationWindow._windows:
+            if window is not self and window.project_file is not None and window.project_file.resolve() == target:
+                return window
+        return None
+
+    def _finish_current_project(self) -> bool:
+        """Save the open project (or offer to) before it is closed or replaced. False = cancelled."""
+        if self.project_file is None and self.saved_sets:
+            choice = QMessageBox.question(
+                self, "Save project?",
+                "Review flags and labels are already saved in the flags CSV. Save a project too, so your "
+                "batches, X/Z references and flag history are kept?",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.Yes)
+            if choice == QMessageBox.Cancel:
+                return False
+            if choice == QMessageBox.Yes:
+                self.save_project()
+                if self.project_file is None:
+                    return False
+        if self.project_file is not None:
+            self.save_project()
+        elif self.catalog is not None and self.catalog.records:
+            self._write_flags()
+        return True
+
+    def close_project(self) -> bool:
+        """Save and close the current project, leaving an empty workbench."""
+        if not self._finish_current_project():
+            return False
+        closed = self.project_file.stem if self.project_file else None
+        self._reset_data(Path.cwd())
+        self.project_file = None
+        self.selection_file = None
+        self.position_file = None
+        self.position_series = self.position_time_basis = None
+        self.additional_roots = set()
+        self.apply_filters()
+        self._update_window_title()
+        self._toast(f"Saved and closed '{closed}'." if closed else "Closed. Start with File ▸ New project… "
+                    "or Open project….")
+        return True
+
     def create_project(self) -> None:
-        filename, _ = QFileDialog.getSaveFileName(self, "New calibration project", "calibration_project.json",
-                                                  "Project JSON (*.json)")
-        if filename:
+        start = str(self.project_file.parent / "calibration_project.json") if self.project_file else \
+            "calibration_project.json"
+        filename, _ = QFileDialog.getSaveFileName(self, "New calibration project", start, "Project JSON (*.json)")
+        if filename and self._finish_current_project():
+            self.position_file = None
+            self.position_series = self.position_time_basis = None
+            self.additional_roots = set()
             self._reset_data(Path(filename).parent)
             self.project_file = Path(filename).resolve()
             self.selection_file = self.project_file.with_name(self.project_file.stem + "_flags.csv")
             self.save_project()
             self.apply_filters()
+            self._update_window_title()
+            self._toast(f"New project '{self.project_file.stem}'. Add data with + Add folder / + Add MAT files, "
+                        "then Stage CSV….")
 
     def open_project_dialog(self) -> None:
-        filename, _ = QFileDialog.getOpenFileName(self, "Open calibration project", "", "Project JSON (*.json)")
-        if filename:
+        filename, _ = QFileDialog.getOpenFileName(
+            self, "Open calibration project", str(self.project_file.parent) if self.project_file else "",
+            "Project JSON (*.json)")
+        if not filename:
+            return
+        other = self._window_with_project(filename)
+        if other is not None:
+            QMessageBox.information(self, "Open project", f"'{Path(filename).stem}' is already open in another "
+                                    "window — switching to it. (Two windows on one project would overwrite each "
+                                    "other's saves.)")
+            other.raise_()
+            other.activateWindow()
+            return
+        if self._finish_current_project():
             self.open_project(filename)
+            self._update_window_title()
 
     def open_project(self, filename: str) -> None:
-        config = json.loads(Path(filename).read_text(encoding="utf-8"))
+        config = expand_project_config(json.loads(Path(filename).read_text(encoding="utf-8")))
         self._restoring = True
         self.project_file = Path(filename).resolve()
         self._reset_data(self.project_file.parent)
@@ -3464,7 +5068,8 @@ class CalibrationWindow(QMainWindow):
                 source = (self.project_file.parent / source).resolve()
             if source.is_file():
                 self.import_file(source, refresh=False)
-        self.catalog.apply_selection_file(self.selection_file)
+        report = self.catalog.apply_selection_file(self.selection_file)
+        self._remap_saved_ids(report.id_map, config.get("particle_keys", {}))
         added = self.labels.merge(config.get("labels", []))
         if added:
             self._save_label_library()
@@ -3495,31 +5100,61 @@ class CalibrationWindow(QMainWindow):
         if isinstance(shown, dict):
             for status, box in self.show_status.items():
                 box.blockSignals(True); box.setChecked(bool(shown.get(status, True))); box.blockSignals(False)
-        self.selection_only_cb.setChecked(bool(config.get("selection_only", False)))
+        self.selection_only_cb.setChecked(bool(config.get("selection_only", True)))
         self.median_cb.setChecked(bool(config.get("show_median", True)))
         self.set_box_mode(config.get("box_mode", "new") if config.get("box_mode") in dict(
             (k, 1) for k, _, _ in BOX_MODES) else "new")
         self.plane_normal.setValue(float(config.get("plane_normal_deg", 45.0)))
+        inst = config.get("instrument") or {}
+        self.cpi_type.blockSignals(True)
+        self.cpi_type.setCurrentIndex(max(0, self.cpi_type.findData(inst.get("type", ""))))
+        self.cpi_type.blockSignals(False)
+        self.cpi_id.setText(str(inst.get("id", "")))
+        self.norm_peak_cb.blockSignals(True)
+        self.norm_peak_cb.setChecked(bool(config.get("normalised_focus_peaks", False)))
+        self.norm_peak_cb.blockSignals(False)
+        self._restore_reference_editor(config.get("draft_reference"))
         self.stage_segments = config.get("stage_segments", [])
         self._refresh_reference_list()
         self.regions = [tuple(r) for r in config.get("regions", [])]
-        self.selected_ids = set(config.get("selected_ids", [])) & set(self.catalog._by_id)
-        self.position_series = config.get("position_series", "beads")
-        self.position_time_basis = config.get("position_time_basis", "roi")
+        self.selected_ids = set(self._remap_ids(config.get("selected_ids", []), report.id_map,
+                                                config.get("particle_keys", {}))) & set(self.catalog._by_id)
+        self.position_series = config.get("position_series", "beads") if "position_series" in config else None
+        self.position_time_basis = config.get("position_time_basis", "roi") if "position_time_basis" in config \
+            else None
         self.position_file = config.get("position_file")
         if self.position_file:
             pos = Path(self.position_file)
             if not pos.is_absolute():
                 pos = (self.project_file.parent / pos).resolve()
             self.position_file = str(pos)
-            if pos.exists():
-                self._apply_stage_positions()
+        self.merged_from = list(config.get("merged_from", []) or [])
+        self.time_windows = [dict(w) for w in config.get("time_windows", []) or [] if w.get("start") and w.get("end")]
+        self.active_time_window = config.get("active_time_window") if any(
+            w["name"] == config.get("active_time_window") for w in self.time_windows) else None
+        self.extra_position_files = []
+        for entry in config.get("extra_position_files", []) or []:
+            pos = Path(entry.get("path") or "")
+            if not pos.is_absolute():
+                pos = (self.project_file.parent / pos).resolve()
+            self.extra_position_files.append(dict(entry, path=str(pos)))
+        if any(Path(p).exists() for p, _, _ in self._position_specs()):
+            self._apply_stage_positions()
         self._restoring = False
         self._view_locked = {"camera": False, "metric": False}
         self.apply_filters()
-        self._toast(f"Opened project {self.project_file.name}")
+        self._refresh_time_windows()
+        self._report_matching(report, f"Opened project {self.project_file.name}")
+        if self.merged_from:
+            self._toast(f"This is a merged viewing copy of {', '.join(self.merged_from)}. Changes here don't reach "
+                        "those projects — label there, and fit with Calibration ▸ from several projects.", 15000)
 
-    def save_project(self) -> None:
+    def save_project(self, exports: bool = True) -> None:
+        """Write the project and flags now.  ``exports`` also writes the particle/relative-position
+        tables (needed by fits and Combine), which is skipped for the batched background saves."""
+        if hasattr(self, "_save_timer"):
+            self._save_timer.stop()
+        self._pending_flags = self._pending_project = False
         if self.project_file is None:
             filename, _ = QFileDialog.getSaveFileName(self, "Save calibration project", "calibration_project.json",
                                                       "Project JSON (*.json)")
@@ -3527,8 +5162,29 @@ class CalibrationWindow(QMainWindow):
                 return
             self.project_file = Path(filename).resolve()
             self.selection_file = self.project_file.with_name(self.project_file.stem + "_flags.csv")
-        self.autosave()
+        self._write_flags()
+        config = self._project_config()
+        self.project_file.parent.mkdir(parents=True, exist_ok=True)
+        if exports:
+            self._export_committed_positions()
+            self._export_particle_positions()
+            self._exports_stale = False
+        else:
+            self._exports_stale = True
+        temp = self.project_file.with_suffix(".json.tmp")
+        temp.write_text(json.dumps(config, separators=(",", ":")), encoding="utf-8")
+        os.replace(temp, self.project_file)
+        self.statusBar().showMessage("Project saved", 3000)
+        if hasattr(self, "save_indicator"):
+            self.save_indicator.setText(f"✓ Saved {datetime.now():%H:%M:%S} · {self.project_file.name}")
+            self.save_indicator.setStyleSheet("color:#2b7a3d; padding: 0 8px;")
 
+    def _project_config(self, raw: bool = False):
+        """Everything the project file holds (compact form).
+
+        ``raw``: leave the particle lists uncompacted (as copies) so the
+        compaction can be done on the writer thread; see :func:`_compact_config`.
+        """
         def relative(value):
             if not value:
                 return None
@@ -3536,13 +5192,22 @@ class CalibrationWindow(QMainWindow):
                 return os.path.relpath(str(value), str(self.project_file.parent))
             except ValueError:
                 return str(value)
-        config = {"format_version": 3, "sources": [relative(s) for s in self.sources],
+        config = {"format_version": 4, "sources": [relative(s) for s in self.sources],
                   "flags_file": self.selection_file.name, "position_file": relative(self.position_file),
                   "filters": {key: [pair[0].text(), pair[1].text()] for key, pair in self.filter_fields.items()},
                   "time_low": self._date_text(self.time_low), "time_high": self._date_text(self.time_high),
                   "use_time_filter": self.time_filter_checkbox.isChecked(), "image_mode": self.image_mode.currentData(),
-                  "selected_ids": sorted(self.selected_ids),
-                  "named_sets": self.saved_sets, "active_reference_set": self.active_reference_set,
+                  "selected_ids": sorted(self.selected_ids) if raw else compact_ids(self.selected_ids),
+                  "named_sets": ({n: dict(e, particle_ids=list(e.get("particle_ids", ())))
+                                  for n, e in self.saved_sets.items()} if raw
+                                 else compact_project_sets(self.saved_sets)),
+                  "active_reference_set": self.active_reference_set,
+                  # What is in the Xbest/Zbest editor, saved or not, so reopening shows it again.
+                  "draft_reference": {"x_best": self.best_x_set.value(), "z_best": self.best_z_set.value()},
+                  # time-ms, StartX+EndX, StartY+EndY for every ID referenced by sets or the
+                  # selection, so they can be re-found after reprocessing renumbers ROIs.
+                  "particle_keys": (self._particle_keys_for_project() if raw
+                                    else compact_keys(self._particle_keys_for_project())),
                   "view_scope": self.view_selector.currentData(),
                   "plot_x": self.position_metric.currentData(), "plot_y": self.plot_metric.currentData(),
                   "plot_y2": self.plot_metric2.currentData(), "colour_by": self.colour_by.currentData(),
@@ -3550,17 +5215,18 @@ class CalibrationWindow(QMainWindow):
                   "show_status": {s: b.isChecked() for s, b in self.show_status.items()},
                   "selection_only": self.selection_only_cb.isChecked(), "show_median": self.median_cb.isChecked(),
                   "plane_normal_deg": self.plane_normal.value(),
+                  "normalised_focus_peaks": self.norm_peak_cb.isChecked(),
+                  "instrument": {"type": self.cpi_type.currentData() or "", "id": self.cpi_id.text().strip(),
+                                 "detected": self.instrument_info()[0]},
                   "regions": self.regions, "stage_segments": self.stage_segments,
                   # Snapshot of the labels used, so the project is self-describing on another computer.
                   "labels": [self.labels.get(n).as_json() for n in sorted(self._label_counts())
                              if self.labels.get(n) is not None],
-                  "position_series": self.position_series, "position_time_basis": self.position_time_basis}
-        self.project_file.parent.mkdir(parents=True, exist_ok=True)
-        self._export_committed_positions()
-        temp = self.project_file.with_suffix(".json.tmp")
-        temp.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        os.replace(temp, self.project_file)
-        self.statusBar().showMessage("Project saved", 3000)
+                  "position_series": self.position_series, "position_time_basis": self.position_time_basis,
+                  "extra_position_files": [dict(e, path=relative(e["path"])) for e in self.extra_position_files],
+                  "merged_from": list(getattr(self, "merged_from", []) or []),
+                  "time_windows": self.time_windows, "active_time_window": self.active_time_window}
+        return config
 
     def _export_committed_positions(self):
         """Atomically export signed X/Z offsets for every committed set member."""
@@ -3582,6 +5248,123 @@ class CalibrationWindow(QMainWindow):
             writer.writerows(rows)
         os.replace(tmp, path)
 
+    PARTICLE_POSITION_COLUMNS = (
+        "cpi_type", "cpi_id", "particle_id", "source_file", "roi_index", "time_iso", "time_matlab", "batch", "label",
+        "actual_length_um", "actual_width_um", "length_um", "width_um", "focus", "local_illum",
+        "focus_normalised", "roundness",
+        "image_x_px", "image_y_px", "x_stage", "z_stage", "reference_from", "reference_kind",
+        "x_best", "z_best", "x_minus_xbest", "z_minus_zbest", "plane_normal_deg",
+        "d_signed_plane", "d_in_plane", "processing", "focus_T", "edge_touch")
+
+    def _export_particle_positions(self):
+        """One row per ACCEPTED particle with the saved reference it actually uses.
+
+        Uses saved X/Z only (own set/batch, else the time step), never the
+        unsaved editor preview.  This is the table to fit calibrations from.
+        """
+        if self.project_file is None or self.catalog is None:
+            return
+        path = self.project_file.with_name(self.project_file.stem + "_particle_positions.csv")
+        rows = self._particle_position_rows()
+        tmp = path.with_suffix(".csv.tmp")
+        with tmp.open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=self.PARTICLE_POSITION_COLUMNS, restval="")
+            writer.writeheader()
+            writer.writerows(rows)
+        os.replace(tmp, path)
+
+    def _particle_position_rows(self):
+        if self.catalog is None:
+            return []
+        theta = self.plane_normal.value()
+        cpi_type, cpi_id = self.instrument_info()
+        rows = []
+        for r in self.catalog.records:
+            if r.status != "keep":
+                continue
+            ref, source, kind = self._reference_for(r, use_editor=False)
+            row = dict(cpi_type=CPI_DISPLAY.get(cpi_type, cpi_type), cpi_id=cpi_id,
+                       particle_id=r.particle_id, source_file=r.source_file, roi_index=r.roi_index,
+                       time_iso=r.time_iso, time_matlab=r.time_matlab, label=r.label,
+                       batch=(self._groups_of.get(r.particle_id) or [""])[-1],
+                       actual_length_um=r.actual_length_um, actual_width_um=r.actual_width_um,
+                       length_um=r.length_um, width_um=r.width_um, focus=r.focus, local_illum=r.local_illum,
+                       focus_normalised=self._normalised_focus(r), roundness=r.roundness,
+                       image_x_px=r.image_x_px, image_y_px=r.image_y_px, x_stage=r.stage_x, z_stage=r.stage_y,
+                       reference_from=source or "", reference_kind=kind or "", plane_normal_deg=theta,
+                       processing=r.processing, focus_T=r.focus_T, edge_touch=r.edge_touch)
+            if ref is not None and math.isfinite(r.stage_x) and math.isfinite(r.stage_y):
+                row.update(x_best=ref["x_best"], z_best=ref["z_best"],
+                           x_minus_xbest=r.stage_x - ref["x_best"], z_minus_zbest=r.stage_y - ref["z_best"],
+                           d_signed_plane=signed_plane_distance(r.stage_x, r.stage_y, ref, theta),
+                           d_in_plane=in_plane_offset(r.stage_x, r.stage_y, ref, theta))
+            rows.append({k: ("" if isinstance(v, float) and not math.isfinite(v) else v)
+                         for k, v in row.items()})
+        return rows
+
+    # ---------------------------------------------------- stable identities --
+    def _remap_ids(self, ids, id_map, stored_keys):
+        """Translate saved particle IDs to the IDs of the currently loaded particles.
+
+        Preference: (1) the flags-file match (time + position), (2) the key
+        stored in the project, (3) the same ID when nothing else is known.
+        IDs whose particle is not loaded are kept unchanged.
+        """
+        if not self.catalog:
+            return list(ids)
+        if not hasattr(self, "_key_index_cache") or self._key_index_cache[0] is not self.catalog.records:
+            self._key_index_cache = (self.catalog.records, self.catalog.key_index())
+        index = self._key_index_cache[1]
+        out = []
+        for pid in ids:
+            if pid in id_map:
+                out.append(id_map[pid])
+                continue
+            key = stored_keys.get(pid)
+            if key is not None:
+                record = ParticleCatalog.resolve_key(index.get(tuple(key), []))
+                if record is not None:
+                    out.append(record.particle_id)
+                    continue
+                if pid in self.catalog._by_id:
+                    continue  # that ID now belongs to a different ROI: drop it, never guess
+            out.append(pid)
+        return out
+
+    def _remap_saved_ids(self, id_map, stored_keys):
+        self._stored_keys = dict(stored_keys or {})
+        for entry in self.saved_sets.values():
+            entry["particle_ids"] = sorted(set(self._remap_ids(entry["particle_ids"], id_map, self._stored_keys)))
+        self._refresh_saved_sets()
+
+    def _particle_keys_for_project(self):
+        wanted = set(self.selected_ids)
+        for entry in self.saved_sets.values():
+            wanted.update(entry.get("particle_ids", ()))
+        keys = {}
+        by_id = self.catalog._by_id if self.catalog else {}
+        previous = getattr(self, "_stored_keys", {})
+        for pid in wanted:                       # compact_keys sorts; keys are cached per particle
+            record = by_id.get(pid)
+            key = record.match_key if record is not None else previous.get(pid)
+            if key is not None:
+                keys[pid] = key
+        return keys
+
+    def _report_matching(self, report, prefix=""):
+        if report is None or not report.rows:
+            if prefix:
+                self._toast(prefix)
+            return
+        text = (prefix + ". " if prefix else "") + "Saved flags: " + report.summary() + "."
+        self._toast(text, 15000)
+        if report.remapped or report.ambiguous:
+            QMessageBox.information(
+                self, "Flags matched after reprocessing",
+                text + "\n\nParticles are matched by ROI time and camera position (StartX+EndX, StartY+EndY), "
+                "so flags, labels and sets follow them even when reprocessing changes ROI numbers, lengths or "
+                "focus values.")
+
     def choose_files(self) -> None:
         names, _ = QFileDialog.getOpenFileNames(self, "Add processed MAT files", "", "MAT files (*.mat)")
         self._import_errors = []
@@ -3591,6 +5374,108 @@ class CalibrationWindow(QMainWindow):
         if names:
             self._view_locked = {"camera": False, "metric": False}
             self.apply_filters()
+
+    def _removed_flags_file(self):
+        if self.selection_file is None:
+            return None
+        return self.selection_file.with_name(self.selection_file.stem + "_removed.csv")
+
+    def remove_sources_dialog(self):
+        if not self.sources:
+            QMessageBox.information(self, "Remove MAT files", "No MAT files are loaded.")
+            return
+        counts = {}
+        for r in self.catalog.records:
+            c = counts.setdefault(r.source_file, [0, 0, 0])
+            c[0] += 1
+            c[1] += r.status == "keep"
+            c[2] += r.status == "reject"
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Remove MAT files from this project")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("Tick the files to remove. The MAT files themselves are not deleted."))
+        box = QListWidget()
+        for src in self.sources:
+            n, k, rj = counts.get(src, [0, 0, 0])
+            item = QListWidgetItem(f"{Path(src).name}   —   {n:,} particles ({k:,} accepted, {rj:,} rejected)")
+            item.setToolTip(src)
+            item.setData(Qt.UserRole, src)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            box.addItem(item)
+        layout.addWidget(box)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Remove ticked files")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.resize(640, 380)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        chosen = [box.item(i).data(Qt.UserRole) for i in range(box.count())
+                  if box.item(i).checkState() == Qt.Checked]
+        if chosen:
+            self.remove_sources(chosen)
+
+    def remove_sources(self, paths, confirm=True):
+        """Take MAT files out of the project, setting their particles' decisions aside (restored if re-added)."""
+        paths = {str(p) for p in paths}
+        gone = [r for r in self.catalog.records if r.source_file in paths]
+        ids = {r.particle_id for r in gone}
+        flagged = [r for r in gone if r.status != "undecided" or r.label]
+        touched = [n for n, e in self.saved_sets.items() if ids & set(e.get("particle_ids", ()))]
+        emptied = [n for n in touched if not (set(self.saved_sets[n].get("particle_ids", ())) - ids)]
+        if confirm:
+            text = (f"Remove {len(paths)} file(s) — {len(gone):,} particles — from this project?\n\n"
+                    f"{len(flagged):,} of them are flagged or labelled. Their decisions are set aside and come back "
+                    "automatically if you add the file again.")
+            if touched:
+                text += (f"\n\n{len(touched)} batch(es) lose these particles"
+                         + (f"; {len(emptied)} become empty and are removed" if emptied else "") +
+                         ". Batch membership is not restored if the file is added back.")
+            text += "\n\nThis can't be undone with Ctrl+Z."
+            if QMessageBox.question(self, "Remove MAT files", text) != QMessageBox.Yes:
+                return False
+        removed_file = self._removed_flags_file()
+        if flagged and removed_file is not None:
+            kept_rows = []
+            if removed_file.exists():
+                with removed_file.open(encoding="utf-8", newline="") as handle:
+                    kept_rows = [row for row in csv.DictReader(handle) if row.get("particle_id") not in ids]
+            ParticleCatalog(self.catalog.root, flagged).save_selection_file(removed_file)
+            if kept_rows:
+                with removed_file.open("a", encoding="utf-8", newline="") as handle:
+                    fields = list(kept_rows[0].keys())
+                    writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+                    writer.writerows(kept_rows)
+        self.catalog.records = [r for r in self.catalog.records if r.source_file not in paths]
+        self.catalog._by_id = {r.particle_id: r for r in self.catalog.records}
+        self.sources = [src for src in self.sources if src not in paths]
+        self.selected_ids -= ids
+        if self.current_id in ids:
+            self.current_id = None
+        for name in touched:
+            entry = self.saved_sets[name]
+            entry["particle_ids"] = sorted(set(entry.get("particle_ids", ())) - ids)
+            if not entry["particle_ids"]:
+                del self.saved_sets[name]
+                if self.active_reference_set == name:
+                    self.active_reference_set = None
+        self.undo_stack.clear()     # snapshots refer to particles that are no longer loaded
+        self.redo_stack.clear()
+        self._thumbs.clear()
+        if self.store is not None:
+            self.store.clear()
+        self._session_of = None
+        self._invalidate_reference_steps()
+        self._refresh_saved_sets()
+        self.autosave()
+        self.save_project_if_open()
+        self.apply_filters()
+        self._update_window_title()
+        self._toast(f"Removed {len(paths)} file(s) ({len(gone):,} particles) from the project. "
+                    "Add a file back to restore its decisions.")
+        return True
 
     def import_file(self, file: Path, refresh: bool = True) -> None:
         path = Path(file).resolve()
@@ -3619,10 +5504,14 @@ class CalibrationWindow(QMainWindow):
             # Without a project, flags are saved next to the first data file and
             # restored automatically the next time the same files are loaded.
             self.selection_file = path.parent / "calibration_selection.csv"
-        if not self._restoring and self.selection_file.exists():
-            self.catalog.apply_selection_file(self.selection_file)
+        if not self._restoring:
+            removed = self._removed_flags_file()
+            if removed is not None and removed.exists():
+                self.catalog.apply_selection_file(removed)      # decisions set aside when the file was removed
+            if self.selection_file.exists():
+                self._last_match_report = self.catalog.apply_selection_file(self.selection_file)
             apply_label_dimensions(self.catalog.records, self.labels)
-        if self.position_file:
+        if self.position_file or self.extra_position_files:
             try:
                 self._apply_stage_positions()
             except (OSError, ValueError) as exc:
@@ -3671,7 +5560,7 @@ class CalibrationWindow(QMainWindow):
             QMessageBox.critical(self, "Spreadsheet import", str(exc))
 
     def _suggest_initial_best_reference(self):
-        if self._calibration_set_names() or not self.catalog or not self.catalog.records:
+        if any(e.get("best_focus") for e in self.saved_sets.values()) or not self.catalog or not self.catalog.records:
             return
         if self.best_x_set.value() != 0 or self.best_z_set.value() != 0:
             return
@@ -3682,12 +5571,54 @@ class CalibrationWindow(QMainWindow):
         if zs:
             self.best_z_set.setValue(float(np.median(zs)))
 
+    def _position_specs(self):
+        specs = []
+        if self.position_file:
+            specs.append((self.position_file, self.position_series, self.position_time_basis))
+        specs += [(e["path"], e.get("series"), e.get("time_basis")) for e in self.extra_position_files]
+        return specs
+
+    def _position_log(self):
+        """One stage log from the project's stage CSV(s) — several after merging projects."""
+        logs = [PositionLog.from_text(path, series, basis) for path, series, basis in self._position_specs()
+                if path and Path(path).exists()]
+        if not logs:
+            return None
+        if len(logs) == 1:
+            return logs[0]
+        return PositionLog(np.concatenate([l.times for l in logs]), np.concatenate([l.x for l in logs]),
+                           np.concatenate([l.y for l in logs]))
+
     def _apply_stage_positions(self) -> int:
-        if not self.position_file or self.catalog is None or not self.catalog.records:
+        if not (self.position_file or self.extra_position_files) or self.catalog is None or not self.catalog.records:
             return 0
-        log = PositionLog.from_text(self.position_file, self.position_series, self.position_time_basis)
+        log = self._position_log()
+        if log is None:
+            return 0
         self.catalog.attach_position_log(log)
         return sum(math.isfinite(r.stage_x) and math.isfinite(r.stage_y) for r in self.catalog.records)
+
+    def reload_stage_positions(self):
+        """Re-read the project's stage CSV(s) after editing them; batches keep their saved X/Z."""
+        if not self.catalog or not self._position_specs():
+            self.statusBar().showMessage("No stage CSV in this project — use Import stage positions CSV…", 6000)
+            return 0
+        before = {r.particle_id: (r.stage_x, r.stage_y) for r in self.catalog.records}
+        try:
+            matched = self._apply_stage_positions()
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "Stage CSV", str(exc))
+            return 0
+        changed = sum(1 for r in self.catalog.records
+                      if not np.allclose(before.get(r.particle_id, (np.nan, np.nan)), (r.stage_x, r.stage_y),
+                                         equal_nan=True))
+        self._steps_cache = None
+        self._draft_reference_cache = None
+        self._refresh_saved_sets()
+        self._refresh_views()
+        self.save_project_if_open()
+        self._toast(f"Stage CSV reloaded: {matched:,} particles have X/Z; {changed:,} changed position.", 12000)
+        return changed
 
     def _use_stage_axis_after_import(self, valid_count: int) -> None:
         if valid_count and self.position_metric.currentData() == "time":
@@ -3699,14 +5630,34 @@ class CalibrationWindow(QMainWindow):
             "Stage position CSV (*.csv);;Legacy position logs (*.txt *.tsv);;All files (*)")
         if not filename:
             return
+        self.position_series, self.position_time_basis = None, None
         if Path(filename).suffix.lower() in (".csv", ".tsv"):
-            series, ok = QInputDialog.getItem(self, "Position series", "Calibration type", ["beads", "analogue"], 0, False)
-            if not ok:
+            try:
+                choices = PositionLog.csv_choices(filename)
+            except Exception as exc:
+                QMessageBox.critical(self, "Stage CSV", str(exc))
                 return
-            basis, ok = QInputDialog.getItem(self, "Time basis", "Timestamp column", ["roi", "full_frame", "stage"], 0, False)
-            if not ok:
-                return
-            self.position_series, self.position_time_basis = series, basis
+            # Particle type (beads / analogues) is decided by flagging + labels, so
+            # use every series unless the user wants to restrict it.
+            if len(choices["series"]) > 1:
+                options = ["All series (recommended)"] + choices["series"]
+                series, ok = QInputDialog.getItem(
+                    self, "Stage CSV series", "This CSV has several series. Use stage positions from:",
+                    options, 0, False)
+                if not ok:
+                    return
+                self.position_series = None if series == options[0] else series
+            if len(choices["time_basis"]) > 1:
+                basis_options = choices["time_basis"]
+                default = basis_options.index("roi") if "roi" in basis_options else 0
+                basis, ok = QInputDialog.getItem(
+                    self, "Stage CSV time basis",
+                    "Rows exist for several timestamp sources. Which times match the ROI images?\n"
+                    "(roi = times of the cropped particle images; usually right)",
+                    basis_options, default, False)
+                if not ok:
+                    return
+                self.position_time_basis = basis
         self.load_position_file(filename)
 
     def load_position_file(self, filename):
@@ -3715,9 +5666,16 @@ class CalibrationWindow(QMainWindow):
             return
         try:
             matched = self._apply_stage_positions()
+            conflicts = PositionLog.from_text(self.position_file, self.position_series,
+                                              self.position_time_basis).conflicting_times()
         except Exception as exc:
             QMessageBox.critical(self, "Position log", str(exc))
             return
+        if conflicts:
+            QMessageBox.warning(self, "Stage CSV",
+                                f"{conflicts} timestamps appear more than once with different stage positions "
+                                "(e.g. two series or time bases overlapping). Re-import and choose one series / "
+                                "time basis if the positions look wrong.")
         self._suggest_initial_best_reference()
         self._view_locked["metric"] = False
         self._use_stage_axis_after_import(matched)
@@ -3730,6 +5688,7 @@ class CalibrationWindow(QMainWindow):
                                 "series (beads/analogue), time basis and clock conventions.")
 
     def load_directory(self, directory: str, position_file: Optional[str] = None) -> None:
+        self._last_match_report = None
         self._reset_data(directory)
         self.additional_roots.clear()
         self.project_file = None
@@ -3741,6 +5700,7 @@ class CalibrationWindow(QMainWindow):
             self._suggest_initial_best_reference()
         self._view_locked = {"camera": False, "metric": False}
         self.apply_filters()
+        self._report_matching(getattr(self, "_last_match_report", None), f"Loaded {Path(directory).name}")
 
     # ----------------------------------------------------------- particle Z --
     def _slider_changed(self, index: int) -> None:
@@ -3774,6 +5734,88 @@ class CalibrationWindow(QMainWindow):
         self.refresh_particle()
 
     def autosave(self) -> None:
+        """Flags changed: write them shortly (batched), not in the middle of the action."""
+        if self.catalog and self.selection_file:
+            self._pending_flags = True
+            self._mark_unsaved()
+
+    def save_project_if_open(self):
+        if self.project_file:
+            self._pending_project = True
+            self._mark_unsaved()
+
+    def _mark_unsaved(self):
+        if hasattr(self, "save_indicator"):
+            self.save_indicator.setText("● saving…")
+            self.save_indicator.setStyleSheet("color:#a34a00; padding: 0 8px;")
+        if hasattr(self, "_save_timer"):
+            self._save_timer.start()
+
+    def flush_saves(self, background: bool = False) -> None:
+        """Write whatever is pending (project without the big CSV exports, or just flags).
+
+        ``background``: take a snapshot here and write the files on a worker
+        thread, so the window stays responsive while Dropbox-sized files are
+        written.  Explicit saves, closing and project switches write in the
+        foreground.
+        """
+        if hasattr(self, "_save_timer"):
+            self._save_timer.stop()
+        project = self._pending_project and self.project_file is not None
+        flags = self._pending_flags or project
+        self._pending_flags = self._pending_project = False
+        if not flags or not self.catalog or not self.selection_file:
+            return
+        if not background:
+            if project:
+                self.save_project(exports=False)
+            else:
+                self._write_flags()
+            return
+        self._wait_for_writer()
+        rows = self.catalog.selection_rows()
+        flags_file = self.selection_file
+        project_file = None
+        config = None
+        if project:
+            config = self._project_config(raw=True)
+            project_file = self.project_file
+            self._exports_stale = True
+
+        def work():
+            try:
+                ParticleCatalog.write_selection_rows(flags_file, rows)
+                if config is not None:
+                    config["selected_ids"] = compact_ids(config["selected_ids"])
+                    config["named_sets"] = compact_project_sets(config["named_sets"])
+                    config["particle_keys"] = compact_keys(config["particle_keys"])
+                    config_text = json.dumps(config, separators=(",", ":"))
+                    temp = project_file.with_suffix(".json.tmp")
+                    temp.write_text(config_text, encoding="utf-8")
+                    os.replace(temp, project_file)
+                self._save_notifier.done.emit("ok", flags_file.name)
+            except OSError as exc:
+                self._save_notifier.done.emit("error", str(exc))
+
+        self._writer_thread = threading.Thread(target=work, name="cpi-save", daemon=True)
+        self._writer_thread.start()
+
+    def _wait_for_writer(self):
+        thread = getattr(self, "_writer_thread", None)
+        if thread is not None and thread.is_alive():
+            thread.join()
+
+    def _save_finished(self, status, message):
+        if status == "ok":
+            self.save_indicator.setText(f"✓ Saved {datetime.now():%H:%M:%S} · {message}")
+            self.save_indicator.setStyleSheet("color:#2b7a3d; padding: 0 8px;")
+        else:
+            self.save_indicator.setText(f"⚠ NOT saved: {message}")
+            self.save_indicator.setStyleSheet("color:#c92a2a; font-weight:700; padding: 0 8px;")
+            self._pending_flags = self._pending_project = True
+
+    def _write_flags(self) -> None:
+        self._wait_for_writer()
         if self.catalog and self.selection_file:
             try:
                 self.catalog.save_selection_file(self.selection_file)
@@ -3828,7 +5870,7 @@ class CalibrationWindow(QMainWindow):
             values = []
             for r in self.catalog.records:
                 val = {"length": r.length_um, "width": r.width_um, "focus": r.focus,
-                       "x": r.image_x_px, "y": r.image_y_px}.get(key)
+                       "x": r.image_x_px, "y": r.image_y_px, "illum": r.local_illum}.get(key)
                 if key == "ratio":
                     val = self._metric_value(r, "ratio")
                 if val is not None and math.isfinite(val):
@@ -3854,7 +5896,8 @@ class CalibrationWindow(QMainWindow):
                 x_min=values["x_min"], x_max=values["x_max"], y_min=values["y_min"], y_max=values["y_max"],
                 time_min=self._read_time(self.time_low) if self.time_filter_checkbox.isChecked() else None,
                 time_max=self._read_time(self.time_high) if self.time_filter_checkbox.isChecked() else None,
-                ratio_min=values["ratio_min"], ratio_max=values["ratio_max"])
+                ratio_min=values["ratio_min"], ratio_max=values["ratio_max"],
+                illum_min=values["illum_min"], illum_max=values["illum_max"])
         except ValueError as exc:
             QMessageBox.warning(self, "Filters", str(exc))
             return
@@ -3863,8 +5906,15 @@ class CalibrationWindow(QMainWindow):
         records = self.catalog.records
         self._base_indices = [i for i in self.catalog.filtered_indices(spec)
                               if mode == "all" or records[i].is_full_frame == (mode == "full")]
+        self._session_of = None
+        self._illum_ref_cache = None
+        if hasattr(self, "cpi_detected"):
+            self._instrument_changed()
+        self._invalidate_reference_steps()
         self._rebuild_browse()
         self._refresh_views()
+        if hasattr(self, "window_list"):
+            self._refresh_time_windows()
         if self.selection_file is not None and self.save_indicator.text() == "No data loaded":
             self.save_indicator.setText(f"Flags file: {self.selection_file.name}")
             self.save_indicator.setToolTip(str(self.selection_file))
@@ -3874,28 +5924,19 @@ class CalibrationWindow(QMainWindow):
             low.clear()
             high.clear()
         self.time_filter_checkbox.setChecked(False)
+        self.active_time_window = None
         self.apply_filters()
+        self._refresh_time_windows()
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt callback name
         self._hide_hover()
-        if self.project_file is None and self.saved_sets:
-            choice = QMessageBox.question(
-                self, "Save project?",
-                "Review flags and labels are already saved in the flags CSV. Save a project too, so your "
-                "calibration sets, X/Z references and flag history are kept?",
-                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel, QMessageBox.Yes)
-            if choice == QMessageBox.Cancel:
-                event.ignore()
-                return
-            if choice == QMessageBox.Yes:
-                self.save_project()
-                if self.project_file is None:
-                    event.ignore()
-                    return
-        if self.project_file is not None:
-            self.save_project()
-        else:
-            self.autosave()
+        if self._mat_loader is not None:
+            self._mat_loader.wait(5000)
+        if not self._finish_current_project():
+            event.ignore()
+            return
+        if self in CalibrationWindow._windows:
+            CalibrationWindow._windows.remove(self)
         event.accept()
 
 
@@ -3921,6 +5962,7 @@ QPushButton[role="reject"]:hover { background: #bd3030; }
 QPushButton[role="neutral"] { color: #2f3e4d; background: #eceff3; border: 1px solid #a8b4c0; }
 QPushButton[role="accept"]:disabled, QPushButton[role="reject"]:disabled, QPushButton[role="primary"]:disabled
     { color: #eef2f6; background: #c3ccd5; border-color: #c3ccd5; }
+QPushButton[role="neutral"]:disabled { color: #9aa9b8; background: #eef2f6; border-color: #d3dce6; }
 QToolButton { color: #10283f; background: #ffffff; border: 1px solid #b4c4d6; border-radius: 5px;
     padding: 3px 8px; font-weight: 600; }
 QToolButton:hover { background: #e3eef9; }

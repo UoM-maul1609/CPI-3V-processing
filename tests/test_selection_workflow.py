@@ -119,3 +119,63 @@ def test_signed_plane_distance_keeps_the_side_of_the_plane():
     add_ids_to_saved_set(sets, "A", ["p"], ref)
     [row] = materialized_reference_rows(sets, [SimpleNamespace(particle_id="p", stage_x=9., stage_y=4.)], 45)
     assert row["d_signed_plane"] == pytest.approx(-math.sqrt(2)) and row["plane_normal_deg"] == 45
+
+
+def test_time_stepped_default_references():
+    from calibration.reference_sets import make_reference, reference_steps, reference_at_time, \
+        effective_reference, build_reference_index
+    from calibration.selection_state import normalise_sets
+    a, b = make_reference(10, 5), make_reference(11, 5)
+    sets = {
+        "Run 1": {"particle_ids": ["p1", "p2"], "best_focus": a},
+        "Accepted batch 2": {"particle_ids": ["p5"], "description": "Review batch: keep"},   # no X/Z
+        "Run 2": {"particle_ids": ["p8"], "best_focus": b},
+    }
+    times = {"p1": 1.0, "p2": 1.5, "p5": 2.0, "p8": 3.0, "p0": 0.5, "p9": 9.0}
+    steps = reference_steps(sets, times)
+    assert [(t, n) for t, _, n in steps] == [(1.0, "Run 1"), (3.0, "Run 2")]
+    assert reference_at_time(steps, 2.0)[1] == "Run 1"     # batch between: last defined before it
+    assert reference_at_time(steps, 3.0)[1] == "Run 2"     # step takes effect at its start
+    assert reference_at_time(steps, 9.0)[1] == "Run 2"
+    assert reference_at_time(steps, 0.5)[1] == "Run 1"     # before all: earliest
+    index = build_reference_index(sets)
+    assert effective_reference("p5", 2.0, index, steps)[2] == "step"
+    assert effective_reference("p8", 3.0, index, steps)[0] == b
+    # A stored start time survives a project round trip and wins over member times.
+    sets["Run 2"]["ref_time_matlab"] = 2.5
+    again = normalise_sets(sets)
+    assert again["Run 2"]["ref_time_matlab"] == 2.5
+    assert reference_at_time(reference_steps(again, times), 2.6)[1] == "Run 2"
+
+
+def test_cluster_focus_peak_sessions_and_nearest_group():
+    import numpy as np
+    from calibration.reference_sets import (focus_peak_reference, session_labels, nearest_group_reference,
+                                            make_reference)
+    x = np.repeat(np.linspace(10, 12, 9), 5)
+    z = np.full_like(x, 5.0)                                   # only X scanned
+    f = 30 * np.exp(-((x - 10.75) / 0.4) ** 2) + 5
+    ref, why = focus_peak_reference(x, z, f)
+    assert ref["x_best"] == pytest.approx(10.75) and ref["z_best"] == 5.0 and why == ""
+    ref, why = focus_peak_reference(np.full(10, 10.0), np.full(10, 5.0), np.ones(10))
+    assert ref is None and "not scanned" in why
+    t = np.array([0.0, 0.001, 0.002, 0.5, 0.501, np.nan])     # 0.5 day gap → new session
+    assert list(session_labels(t)) == [0, 0, 0, 1, 1, -1]
+    groups = [dict(name="A", reference=make_reference(10, 5), session=0, cx=100, cy=100),
+              dict(name="B", reference=make_reference(11, 5), session=0, cx=800, cy=800),
+              dict(name="C", reference=make_reference(12, 5), session=1, cx=110, cy=110)]
+    assert nearest_group_reference(700, 650, 0, groups)[1] == "B"
+    assert nearest_group_reference(120, 120, 0, groups)[1] == "A"   # C is closer but another session
+    assert nearest_group_reference(120, 120, 2, groups) == (None, None)
+
+
+def test_roi_edge_brightness_measures_background_around_particle():
+    import numpy as np
+    from calibration.data import roi_edge_brightness
+    im = np.full((20, 30), 180, dtype=np.uint8)
+    im[6:14, 8:22] = 40                            # dark particle in the middle
+    assert roi_edge_brightness(im) == 180
+    im[0, :] = 0                                   # a few odd border pixels don't move the median
+    assert roi_edge_brightness(im) == 180
+    assert np.isnan(roi_edge_brightness(np.zeros((3, 3))))
+    assert np.isnan(roi_edge_brightness(None))

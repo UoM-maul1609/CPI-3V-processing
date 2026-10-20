@@ -129,7 +129,8 @@ Edit these variables before a run. They are not command-line options.
 | `dt` | `10` | Time-series bin width (s). |
 | `ds` | `10` | Size-bin width (µm). Bins run 0–2300 µm. |
 | `vel` | `100` | Air speed through the sample volume (m s⁻¹), e.g. aircraft TAS. It sets the swept volume. |
-| `find_particle_edges` | `True` | Store each particle's 30-point boundary (needed for the calibration workbench overlay). |
+| `find_particle_edges` | `True` | Store each particle's boundary (30 points with `legacy`; as many as the shape needs with `transmittance`). Needed for the calibration workbench overlay. |
+| `edge_options` | `{"method": "legacy", ...}` | Edge detection, see section 3.6. `legacy` reproduces the original processing exactly; `transmittance` is the improved method. The options used are written into every output file as `dat.proc_options`. |
 | `process_sweep1_if_exist` | `True` | Re-extract `.roi → .mat` even if the `.mat` already exists. Set `False` to reuse existing extraction. |
 | `process_roi_driver`, `process_image_stats`, `export_images`, `output_timeseries` | all `True` | Switch individual stages on or off (section 3.3), e.g. to redo only the time series. |
 | `num_cores` | `4` | Default for `--cores`. |
@@ -260,6 +261,144 @@ you. Run it only when none of your processing jobs are running.
 
 ---
 
+### 3.6 Edge detection: legacy and transmittance methods
+
+The particle edge decides the measured length, so it matters for every size
+and concentration. `proc/edgeDetect.py` has two methods. The one used is set
+by `edge_options` in `batchProcess.py`, or by `--edge-method` and
+`--edge-level` on the command line. It is recorded in each file as
+`dat.proc_options` (JSON: method, levels, passes, pixel size, code version,
+date).
+
+**`legacy`** is the original method, kept unchanged so results can be
+compared:
+
+1. Background difference.
+2. 100 passes of a 3×3 median filter.
+3. Otsu threshold, then 11 more median passes on the mask.
+4. Contour, then the mask is grown by `contains_points(radius=2)`, which adds
+   about 2 px to the diameter.
+5. Length = ellipse major axis.
+6. 30 boundary points.
+
+Its edge sits outside the particle, so small particles are oversized most,
+and heavy filtering rounds off corners. Some acceptance tests use fixed grey
+levels, which depend on laser power.
+
+**`transmittance`** works as follows:
+
+1. Divide the image by its background, then by the median of the ROI border,
+   giving `T` = the fraction of local light transmitted. Laser power and
+   bright or dark parts of the background drop out.
+2. Apply one median pass (`denoise`).
+3. The particle is the dark region holding the darkest pixels. The bright
+   centres of transparent beads and drops are filled in.
+4. Its edge is traced sub-pixel at `T = edge_level`.
+5. Length = maximum Feret dimension (the "maximum dimension" of the
+   calibration papers). Width = minimum Feret dimension. Area, perimeter,
+   equivalent diameter and roundness come from the traced outline.
+6. Focus is recorded both as the legacy metric (`foc.focus`) and on the
+   transmittance (`foc.focus_T`), which does not scale with illumination.
+7. The boundary keeps as many points as the shape needs (simplified to
+   0.25 px), so corners and necks are not cut off. `n_boundary` gives the
+   count.
+8. `edge_touch = 1` flags particles cut off by the ROI border.
+9. `T_min` and `T_centre` record shadow depth and the bright centre, for
+   future use.
+
+**Edge mode: fixed or relative.** The edge can sit at a fixed
+transmittance (`edge_mode: "fixed"`, at `edge_level`), or at a fixed
+fraction of each particle's own shadow depth (`edge_mode: "relative"`, at
+`T = 1 − edge_fraction·(1 − T_min)`).
+
+* **Fixed:** small particles slightly out of focus have shallow shadows. They
+  first come out too small, then are lost once their darkest pixel is
+  brighter than the edge level. In synthetic tests a 10 µm particle measured
+  9.7 µm when sharp, 7.9 µm when blurred, then disappeared. This biases the
+  small-particle depth of field.
+* **Relative:** keeps them, and measures them within about 1 px of true for
+  10 µm and larger particles through the same blur. Very faint small
+  particles come out somewhat large, but consistently, so the calibration
+  can absorb it.
+* **On real 100 µm beads** both modes agree to about 1 µm. Use the 15 µm
+  beads to choose between them. The level actually used for each particle is
+  stored as `edge_level_used`.
+
+**Edge level.** For an ideal coherent imager, the edge of an opaque object
+in focus sits near `T = 0.25`. On 100 µm beads from 21 March 2002 (file
+`03211315.mat`), the in-focus median length was:
+
+| Method | Median length |
+|---|---|
+| legacy | 107.5 µm |
+| transmittance, `T = 0.25` | 92.0 µm |
+| transmittance, `T = 0.35` | 96.3 µm |
+| transmittance, `T = 0.5` | 101.3 µm (equivalent diameter 100.0 µm) |
+
+The certified size is 99.4 µm. The level should be chosen with beads of
+several sizes: the right level makes all sizes come out true at focus, with
+no fixed offset.
+
+**Tested on the 21/3/02 beads (project 210302_2).** The test used 13,747
+of the 59,005 flagged particles: all 5,747 at 15 µm, and 4,000 each at 40
+and 100 µm. Each method was scored by how well L_app/L for all three sizes
+collapses onto one curve of the Fresnel number Zd = λ|d|/(L/2)². That is
+what diffraction theory predicts, and what the correction relies on. Lower
+is better in the first two columns.
+
+| Method | Scatter about the common curve (log) | Spread between sizes | Detected 15 µm | Offset at focus 15/40/100 µm |
+|---|---|---|---|---|
+| legacy (subtract, Otsu, +2 px) | 0.048 | 0.117 | (all, by selection) | +10.1 / +9.9 / +4.0 |
+| plain ratio, edge at 50% of shadow | 0.040 | 0.044 | 100% | +0.1 / +2.3 / −3.0 |
+| ratio ÷ border median, fixed T = 0.5 | 0.031 | 0.041 | **72%** | +0.7 / +3.2 / −1.3 |
+| **ratio ÷ border median, edge at 65% of shadow** | **0.032** | **0.040** | **100%** | **+0.6 / +1.8 / −2.9** |
+| ratio ÷ border plane, edge at 65% of shadow | 0.031 | 0.039 | 100% | +0.6 / +1.8 / −3.1 |
+| gain + offset fit on the border, fixed T = 0.5 | 0.047 | 0.059 | 85% | +3.3 / +5.3 / +0.3 |
+
+* **Divide, don't subtract.** Then **correct for the laser intensity
+  difference** between the background frame and the particle frame, using
+  the ROI border (the median border ratio). This cut the scatter by about a
+  quarter compared with the plain ratio or the subtraction, so the
+  difference is real in this data.
+* A tilted-plane fit to the border gains nothing measurable. A gain-and-offset
+  fit is unstable, because the background is nearly flat across a small ROI.
+* **Put the edge at a fraction of each particle's own shadow depth.** The
+  optimum is broad, between 0.6 and 0.7; 0.65 is the default. A fixed
+  transmittance level loses about 30% of the 15 µm beads as they go out of
+  focus.
+* With this, the 15, 40 and 100 µm beads lie on one curve (spread 0.040
+  against 0.117 for legacy), and the curve is much flatter with defocus.
+
+Recommended command:
+
+```bash
+python batchProcess.py <copy of processed data> --only-stats --cpiv1 \
+       --edge-method transmittance --edge-mode relative --edge-fraction 0.65
+```
+
+**Comparing methods on the same particles:**
+
+```bash
+cp -r processed/Cal210302 processed/Cal210302_T050           # a copy; originals untouched
+python batchProcess.py processed/Cal210302_T050 --only-stats --cpiv1 \
+       --edge-method transmittance --edge-level 0.5
+# or, edge at half of each particle's own shadow depth:
+python batchProcess.py processed/Cal210302_R050 --only-stats --cpiv1 \
+       --edge-method transmittance --edge-mode relative --edge-fraction 0.5
+```
+
+Then, in the workbench:
+
+1. Open your project and use **File ▸ Copy project onto reprocessed data…**
+   with the new folder. Flags, labels, batches and Xbest/Zbest carry over,
+   because particles are matched by time and position.
+2. **Calibration ▸ Compare processing runs…** with both projects (or run
+   `cpi-compare a.json b.json`) tabulates, side by side:
+   * length at focus per bead size;
+   * the fitted edge offset, scale and L power;
+   * the depth of field;
+   * the leave-one-batch-out sizing errors.
+
 ## 4. Exporting to NetCDF — `python/output/`
 
 `exportNetCDF.py` converts a `timeseries.mat` / `timeseries_class.mat` into a
@@ -359,8 +498,15 @@ An interactive tool for choosing calibration particles from processed
   median traces;
 - accept or reject particles, labelling them with true sizes (bead types,
   ice analogues) from a library shared across datasets;
-- save calibration sets with a best-focus X/Z position;
-- export the signed distance of each particle from the object plane.
+- give each accepted cluster its own best-focus X/Z (handles tilted slides);
+- export the signed distance of each particle from the object plane;
+- record which CPI was calibrated; keep one project per calibration run and
+  fit several runs together, read live from their projects (`cpi-fit
+  run1.json run2.json …`), or export them to one CSV (`cpi-combine`);
+- fit the size and focus calibration on each side of the object plane, check
+  it out-of-sample, compute the depth of field, and retrieve true sizes for
+  cloud data with the side of the object plane marginalised
+  (Calibration menu, `cpi-fit`, `cpi-retrieve`).
 
 ```bash
 python -m pip install -e ".[gui]"
@@ -417,7 +563,7 @@ The tests cover:
 
 - ROI time and full-frame handling;
 - stage-position matching;
-- calibration sets and exports;
+- per-batch best focus and exports;
 - the label library;
 - the signed object-plane distance;
 - a headless run of the workbench's select → accept → unflag → undo workflow.
@@ -439,7 +585,7 @@ The tests cover:
   image-type codes are different.
 - **NetCDF export fails on an old file** with "v7.3/HDF5". Install
   `hdf5storage`.
-- **Workbench issues.** See section 15 of `python/calibration/README.md`.
+- **Workbench issues.** See section 16 of `python/calibration/README.md`.
 
 `python/README` and `matlab/README` are older plain-text notes. This file
 supersedes `python/README`.

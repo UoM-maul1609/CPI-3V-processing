@@ -35,3 +35,10 @@ def test_filter_reversible_and_flag_persistence(tmp_path):
     p.status='reject'
     cat.apply_selection_file(tmp_path/'flags.csv')
     assert p.status=='undecided'
+
+
+def test_filter_by_local_illumination(tmp_path):
+    p = particle(0, datetime(2002, 3, 21, 15, 20)); p.local_illum = 60.0
+    q = particle(1, datetime(2002, 3, 21, 15, 21)); q.local_illum = 180.0
+    cat = ParticleCatalog(tmp_path, [p, q])
+    assert cat.filtered_indices(FilterSpec(illum_min=90)) == [1]
