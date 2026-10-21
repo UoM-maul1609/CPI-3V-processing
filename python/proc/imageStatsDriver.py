@@ -146,8 +146,12 @@ def mult_job(path1, filename1, find_particle_edges, cpiv1, position, lock, edge_
     IMAGE1 = data["IMAGE1"]
     BG = data["BG"]
 
+    bank = None
+    if edge_options and '"transmittance"' in str(edge_options) and '"bg_check": false' not in str(edge_options):
+        from backgroundCheck import BackgroundBank
+        bank = BackgroundBank(path1)          # the folder's full-frame backgrounds, to replace contaminated crops
     dat = imageStats(
-        ROI_N, BG, cpiv1, find_particle_edges, position, filename1, lock, options=edge_options
+        ROI_N, BG, cpiv1, find_particle_edges, position, filename1, lock, options=edge_options, bank=bank
     )
 
     atomic_savemat(

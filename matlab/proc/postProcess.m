@@ -60,8 +60,13 @@ imageTypeROIs=zeros(length(R),1);
 % Each ROI belongs to the immediately preceding IMAGE marker in file order.
 % discretize replaces the historical O(Nimage*Nroi) scan.
 if ~isempty(orderImage)
-    parentImage=discretize(orderROIs,[orderImage(:); Inf]);
-    valid=~isnan(parentImage);
+    % IMAGE markers are found in two byte alignments, so orderImage is two
+    % sorted runs: sort it before binning (discretize needs increasing edges).
+    [sortedOrder,byOrder]=sort(double(orderImage(:)));
+    pos=discretize(double(orderROIs),[sortedOrder; Inf]);
+    valid=~isnan(pos);
+    parentImage=nan(size(pos));
+    parentImage(valid)=byOrder(pos(valid));
     timeROIs(valid)=Time(parentImage(valid));
     imageTypeROIs(valid)=imageType(parentImage(valid));
 end

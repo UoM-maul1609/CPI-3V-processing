@@ -48,17 +48,24 @@ def _run_worker(*args):
     subprocess.run(command, check=True)
 
 
-def ROIDataDriver(path1, filename, dt, process_sweep1_if_exist, cpiv1):
+def ROIDataDriver(path1, filename, dt, process_sweep1_if_exist, cpiv1, sweeps="12"):
     """Extract ROI data using one fresh process per file.
 
     The first sweep is sequential because each file contributes to the shared
     background set.  Importantly, that large background structure stays on disk
     between workers instead of being pickled through multiprocessing pipes.
+
+    ``sweeps``: "12" both (default); "1" only collect the backgrounds (so they can
+    be chosen, backgroundSelector.py, before they are assigned); "2" only assign
+    backgrounds to the ROIs (needs full_backgrounds.mat).
     """
     path1 = normalise_directory(path1)
     state_file = os.path.join(path1, "full_backgrounds.mat")
 
-    if process_sweep1_if_exist:
+    if "1" not in sweeps:
+        if not os.path.exists(state_file):
+            raise FileNotFoundError(f"{state_file} not found -- run the first sweep first")
+    elif process_sweep1_if_exist:
         atomic_savemat(state_file, {"FULL_BG": _empty_full_backgrounds()})
     elif not os.path.exists(state_file):
         raise FileNotFoundError(
@@ -66,18 +73,20 @@ def ROIDataDriver(path1, filename, dt, process_sweep1_if_exist, cpiv1):
             "re-run the first sweep to rebuild it."
         )
 
-    print("=========================1st sweep================================")
-    for name in filename:
-        _run_worker("sweep1", path1, name, dt, process_sweep1_if_exist, cpiv1)
+    if "1" in sweeps:
+        print("=========================1st sweep================================")
+        for name in filename:
+            _run_worker("sweep1", path1, name, dt, process_sweep1_if_exist, cpiv1)
 
     data = sio.loadmat(state_file, variable_names=["t_range"])
     if "t_range" not in data:
         raise RuntimeError("First sweep did not produce t_range in full_backgrounds.mat")
     t_range = data["t_range"]
 
-    print("=========================2nd sweep================================")
-    for name in filename:
-        _run_worker("sweep2", path1, name, cpiv1)
+    if "2" in sweeps:
+        print("=========================2nd sweep================================")
+        for name in filename:
+            _run_worker("sweep2", path1, name, cpiv1)
 
     return t_range
 
@@ -207,9 +216,9 @@ if __name__ == "__main__":
 
     mode = sys.argv[1]
     if mode == "driver":
-        if len(sys.argv) != 6:
+        if len(sys.argv) not in (6, 7):
             raise SystemExit(
-                "usage: ROIDataDriver.py driver PATH DT PROCESS_EXISTING CPIV1"
+                "usage: ROIDataDriver.py driver PATH DT PROCESS_EXISTING CPIV1 [SWEEPS]"
             )
         driver_path = normalise_directory(sys.argv[2])
         driver_files = sorted(
@@ -221,6 +230,7 @@ if __name__ == "__main__":
             float(sys.argv[3]),
             parse_bool(sys.argv[4]),
             parse_bool(sys.argv[5]),
+            sys.argv[6] if len(sys.argv) == 7 else "12",
         )
     elif mode == "sweep1":
         if len(sys.argv) != 7:

@@ -1,6 +1,20 @@
 import numpy as np
 from datetime import datetime
 from datetime import timedelta
+def parent_image_index(order_image, order_rois):
+    """Index of the IMAGE block immediately before each ROI in the file (-1 if none).
+
+    Blocks are found in two byte alignments (even, then odd offsets), so
+    ``order_image`` is two sorted runs; it is sorted here before searching.
+    """
+    order_image = np.asarray(order_image).astype(np.int64)
+    by_order = np.argsort(order_image, kind='stable')
+    pos = np.searchsorted(order_image[by_order], np.asarray(order_rois).astype(np.int64), side='left') - 1
+    parent = np.full(len(pos), -1, dtype=np.int64)
+    parent[pos >= 0] = by_order[pos[pos >= 0]]
+    return parent
+
+
 def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     # use dictionaries for storing info
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -65,7 +79,11 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     # The legacy implementation scanned every ROI once for every image block;
     # searchsorted gives the same mapping without the O(Nimage*Nroi) loop.
     if len(orderImage):
-        parent_image = np.searchsorted(orderImage, orderROIs, side='left') - 1
+        # IMAGE blocks are found in two byte alignments (even then odd), so
+        # orderImage is two sorted runs, not one: searchsorted needs it sorted.
+        # (Searching the unsorted array gave about half the ROIs the time of
+        # the wrong frame -- typically 0.1-0.2 s, sometimes tens of seconds.)
+        parent_image = parent_image_index(orderImage, orderROIs)
         valid = parent_image >= 0
         timeROIs[valid, 0] = Time[parent_image[valid], 0]
         imageTypeROIs[valid, 0] = IMAGE1['imageType'][parent_image[valid]]

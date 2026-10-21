@@ -80,3 +80,57 @@ def test_stage_csv_all_series_by_default(tmp_path):
     assert len(PositionLog.from_text(path).times) == 2           # all series, roi basis
     assert len(PositionLog.from_text(path, "beads").times) == 1
     assert PositionLog.from_text(path, None, None).conflicting_times() == 1
+
+
+def test_flags_remapped_by_roi_image_when_times_change(tmp_path):
+    """Reprocessing that renumbers ROIs and changes their times still carries every flag across."""
+    import csv
+    import numpy as np
+    import scipy.io as sio
+    from calibration.remap import remap_flags_file, roi_signatures
+    rng = np.random.default_rng(5)
+    n = 30
+    corners = rng.integers(0, 900, size=(n, 2))
+    corners[5] = corners[6]                     # two ROIs at the same place: told apart by their pixels
+    images = [rng.integers(0, 255, size=(12, 10), dtype=np.uint8) for _ in range(n)]
+    times = 731296.5 + np.arange(n) * 1e-6
+
+    def write(path, order, dt):
+        imgs = np.empty((n,), dtype=[("IM", object)])
+        for k, i in enumerate(order):
+            imgs[k]["IM"] = images[i]
+        roi = {"Time": times[order] + dt, "StartX": corners[order, 0], "EndX": corners[order, 0] + 11,
+               "StartY": corners[order, 1], "EndY": corners[order, 1] + 9, "IMAGE": imgs}
+        sio.savemat(path, {"ROI_N": roi})
+
+    old, new = tmp_path / "old" / "a.mat", tmp_path / "new" / "a.mat"
+    old.parent.mkdir(); new.parent.mkdir()
+    write(old, np.arange(n), 0.0)
+    perm = rng.permutation(n)
+    write(new, perm, 0.15 / 86400)              # ROIs renumbered and 0.15 s later
+    flags = tmp_path / "flags.csv"
+    with open(flags, "w", newline="") as h:
+        w = csv.writer(h)
+        w.writerow(["particle_id", "source_file", "roi_index", "time_matlab", "status", "start_x", "start_y"])
+        for i in range(n):
+            w.writerow([f"a.mat#{i}", "a.mat", i, times[i], "keep" if i % 3 else "reject", corners[i, 0], corners[i, 1]])
+    out = tmp_path / "flags_new.csv"
+    report = remap_flags_file(flags, out, {"a.mat": (old, new)})
+    assert report["remapped"] == n and report["missing"] == 0
+    new_sigs = roi_signatures(new)
+    old_sigs = roi_signatures(old)
+    rows = list(csv.DictReader(open(out)))
+    for i, row in enumerate(rows):
+        j = int(row["roi_index"])
+        assert new_sigs[j][0] == old_sigs[i][0]                   # same ROI image
+        assert abs(float(row["time_matlab"]) - (times[i] + 0.15 / 86400)) < 1e-9
+
+
+def test_roi_parent_frame_with_two_byte_alignments():
+    """IMAGE blocks found at even then odd byte offsets: each ROI gets the frame just before it in the file."""
+    import sys, numpy as np
+    sys.path.insert(0, "python/proc")
+    from postProcess import parent_image_index
+    image_order = np.array([10, 50, 90, 30, 70], np.uint32)      # two sorted runs (aligned, shifted)
+    roi_order = np.array([12, 35, 55, 75, 95, 5], np.uint32)
+    assert parent_image_index(image_order, roi_order).tolist() == [0, 3, 1, 4, 2, -1]

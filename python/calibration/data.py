@@ -145,8 +145,17 @@ class ParticleRecord:
     start_y: float = float("nan")
     end_y: float = float("nan")
     focus_T: float = float("nan")      # focus on transmittance (new edge method)
+    deq_um: float = float("nan")       # equivalent-area diameter (new edge method)
     edge_touch: int = -1               # 1 = particle reaches the ROI border (size is a lower limit); -1 unknown
     processing: str = ""               # short label of the edge method that produced len/focus
+    pixel_um: float = 2.3              # pixel size the file was processed with (dat.proc_options; 2.3 if unrecorded)
+    # CPIview's own measures (batchProcess --cpiview, proc/cpiviewMetrics.py); NaN if not computed
+    cpv_focus: float = float("nan")         # CPIview focus (mean of 16 boundary samples)
+    cpv_focus_sd: float = float("nan")      # spread of those samples
+    cpv_fwhm_px: float = float("nan")       # median edge width (FWHM of the gradient across the edge)
+    cpv_distinct: float = float("nan")      # fraction of boundary pixels with a strong gradient
+    cpv_cutoff_pct: float = float("nan")    # % of boundary pixels on the ROI edge
+    cutoff_pct: float = float("nan")        # % of this processing's particle outline on the ROI edge (NaN: unknown)
 
     def __setattr__(self, name, value):
         object.__setattr__(self, name, value)
@@ -193,6 +202,8 @@ class FilterSpec:
     ratio_max: Optional[float] = None
     illum_min: Optional[float] = None
     illum_max: Optional[float] = None
+    cutoff_min: Optional[float] = None      # % of the outline on the ROI edge; unknown (NaN) always passes
+    cutoff_max: Optional[float] = None
 
     def matches(self, record: ParticleRecord) -> bool:
         checks = (
@@ -209,6 +220,11 @@ class FilterSpec:
                 return False
             if upper is not None and (not math.isfinite(value) or value > upper):
                 return False
+        cut = getattr(record, "cutoff_pct", float("nan"))
+        if math.isfinite(cut):
+            if (self.cutoff_min is not None and cut < self.cutoff_min) or \
+                    (self.cutoff_max is not None and cut > self.cutoff_max):
+                return False
         if self.ratio_min is not None or self.ratio_max is not None:
             ratio = record.length_um / record.actual_length_um if record.actual_length_um > 0 else float("nan")
             if not math.isfinite(ratio) or (self.ratio_min is not None and ratio < self.ratio_min) or (self.ratio_max is not None and ratio > self.ratio_max):
@@ -221,11 +237,14 @@ class FilterSpec:
 class PositionLog:
     """Calibration stage positions sampled in time."""
 
-    def __init__(self, times: np.ndarray, x: np.ndarray, y: np.ndarray):
-        order = np.argsort(times)
+    def __init__(self, times: np.ndarray, x: np.ndarray, y: np.ndarray, ends: Optional[np.ndarray] = None):
+        """``ends``: exclusive end time of each position (NaN = until the next one starts)."""
+        order = np.argsort(times, kind="stable")
         self.times = np.asarray(times, dtype=float)[order]
         self.x = np.asarray(x, dtype=float)[order]
         self.y = np.asarray(y, dtype=float)[order]
+        self.ends = (np.full(len(self.times), np.nan) if ends is None
+                     else np.asarray(ends, dtype=float)[order])
 
     @classmethod
     def from_text(cls, filename: os.PathLike, series: Optional[str] = None,
@@ -240,6 +259,7 @@ class PositionLog:
         times: List[float] = []
         xs: List[float] = []
         ys: List[float] = []
+        ends: List[float] = []
         if path.suffix.lower() in (".csv", ".tsv"):
             with path.open("r", encoding="utf-8-sig", newline="") as handle:
                 sample = handle.read(2048); handle.seek(0)
@@ -257,9 +277,12 @@ class PositionLog:
                         continue
                     try:
                         stamp = datetime.fromisoformat(row["start_time"].strip())
-                        xs.append(float(row["stage_x_original"]))
-                        ys.append(float(row["stage_z_original"]))
+                        x_value, z_value = float(row["stage_x_original"]), float(row["stage_z_original"])
+                        end_text = (row.get("end_time_exclusive") or "").strip()
+                        end = datetime_to_matlab_datenum(datetime.fromisoformat(end_text)) if end_text else float("nan")
+                        xs.append(x_value); ys.append(z_value)
                         times.append(datetime_to_matlab_datenum(stamp))
+                        ends.append(end)
                     except (ValueError, TypeError):
                         continue
         else:
@@ -281,12 +304,13 @@ class PositionLog:
                         if parsed is not None:
                             xs.append(xx); ys.append(zz)
                             times.append(datetime_to_matlab_datenum(parsed))
+                            ends.append(float("nan"))
                     except (ValueError, IndexError):
                         continue
         if not times:
             raise ValueError(f"No valid position records in {filename} for "
                              f"{series or 'all series'}/{time_basis or 'all time bases'}")
-        return cls(np.asarray(times), np.asarray(xs), np.asarray(ys))
+        return cls(np.asarray(times), np.asarray(xs), np.asarray(ys), np.asarray(ends))
 
     @staticmethod
     def csv_choices(filename: os.PathLike) -> Dict[str, List[str]]:
@@ -313,11 +337,42 @@ class PositionLog:
         return int(np.count_nonzero(same & moved))
 
     def previous(self, times: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """Stage position at each time: the latest position started at or before it.
+
+        If that position has an end time (CSV ``end_time_exclusive``) and the time
+        is at or after it, the stage was between positions: NaN.
+        """
         query = np.asarray(times, dtype=float)
         index = np.searchsorted(self.times, query, side="right") - 1
         valid = index >= 0
         index = np.clip(index, 0, len(self.times) - 1)
+        end = self.ends[index]
+        valid &= ~(np.isfinite(end) & (query >= end))
         return np.where(valid, self.x[index], np.nan), np.where(valid, self.y[index], np.nan)
+
+
+def stage_burst_check(times, position_log: "PositionLog", gap_s: float = 2.0) -> Dict[str, int]:
+    """How well a stage log fits the acquisition: particles come in bursts, one per stage position.
+
+    Bursts are runs of particle times without a gap longer than ``gap_s``.  A burst
+    that gets two different stage positions usually means the log's times are
+    off (wrong time basis, or a time rounded into the burst).
+    """
+    t = np.sort(np.asarray([v for v in times if math.isfinite(v)], float))
+    out = {"bursts": 0, "split": 0, "particles_in_split": 0, "no_position": 0}
+    if not len(t):
+        return out
+    x, y = position_log.previous(t)
+    out["no_position"] = int(np.count_nonzero(~(np.isfinite(x) & np.isfinite(y))))
+    breaks = np.flatnonzero(np.diff(t) * 86400.0 > gap_s)
+    starts, ends = np.r_[0, breaks + 1], np.r_[breaks, len(t) - 1]
+    out["bursts"] = int(len(starts))
+    for a, b in zip(starts, ends):
+        pairs = {(p, q) for p, q in zip(x[a:b + 1], y[a:b + 1]) if math.isfinite(p) and math.isfinite(q)}
+        if len(pairs) > 1:
+            out["split"] += 1
+            out["particles_in_split"] += int(b - a + 1)
+    return out
 
 
 def list_processed_files(directory: os.PathLike) -> List[Path]:
@@ -372,10 +427,27 @@ def processing_label(proc_options) -> str:
     return str(opts.get("method", "unknown"))
 
 
+def processing_pixel_um(proc_options, default: float = 2.3) -> float:
+    """Pixel size (µm) recorded in dat.proc_options; ``default`` (the nominal 2.3) for older files."""
+    if proc_options is None or (hasattr(proc_options, "size") and np.size(proc_options) == 0):
+        return default
+    try:
+        opts = json.loads(str(proc_options if isinstance(proc_options, str) else np.asarray(proc_options).ravel()[0]))
+        value = float(opts.get("pixel_um", default))
+    except (ValueError, TypeError, IndexError, AttributeError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
+
+
 def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = None) -> List[ParticleRecord]:
     """Extract lightweight particle metadata from one processed MAT file."""
     path = Path(filename)
     loaded = sio.loadmat(str(path), variable_names=["ROI_N", "dat"], simplify_cells=True)
+    if "ROI_N" in loaded and "dat" not in loaded:
+        raise ValueError(
+            "no particle statistics (dat) in this file: its processing did not finish (backgrounds not assigned / "
+            "statistics not computed). Finish it with: python batchProcess.py <folder> --only-stats "
+            "--backgrounds all [--cpiv1] [edge options]")
     if "ROI_N" not in loaded or "dat" not in loaded:
         return []
     roi = loaded["ROI_N"]
@@ -415,7 +487,12 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
     focuses = np.asarray([_safe_float(item.get("focus")) for item in foc_structs])
     focus_T = np.asarray([_safe_float(item.get("focus_T")) for item in foc_structs])
     edge_touch = _vector(dat.get("edge_touch"), n, default=-1)
+    deqs = _vector(dat.get("deq"), n)
+    cutoffs = _vector(dat.get("cutoff_pct"), n)
+    cpv = {k: _vector(dat.get(k), n) for k in ("cpv_focus", "cpv_focus_sd", "cpv_fwhm_px", "cpv_distinct",
+                                               "cpv_cutoff_pct")}
     processing = processing_label(dat.get("proc_options"))
+    pixel_um = processing_pixel_um(dat.get("proc_options"))
 
     source = str(path.relative_to(root)) if root is not None else path.name
     records = []
@@ -439,8 +516,14 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
                 start_x=float(start_x[i]), end_x=float(end_x[i]),
                 start_y=float(start_y[i]), end_y=float(end_y[i]),
                 focus_T=float(focus_T[i]),
+                deq_um=float(deqs[i]),
+                cpv_focus=float(cpv["cpv_focus"][i]), cpv_focus_sd=float(cpv["cpv_focus_sd"][i]),
+                cpv_fwhm_px=float(cpv["cpv_fwhm_px"][i]), cpv_distinct=float(cpv["cpv_distinct"][i]),
+                cpv_cutoff_pct=float(cpv["cpv_cutoff_pct"][i]),
+                cutoff_pct=float(cutoffs[i]) if math.isfinite(cutoffs[i]) else float(cpv["cpv_cutoff_pct"][i]),
                 edge_touch=int(edge_touch[i]) if np.isfinite(edge_touch[i]) else -1,
                 processing=processing,
+                pixel_um=pixel_um,
             )
         )
     return records
@@ -456,7 +539,11 @@ def _scan_via_subprocess(path: Path, root: Path) -> List[ParticleRecord]:
             command = [sys.executable, "-m", "calibration.data", "scan-one", str(path), str(root), temporary]
         else:
             command = [sys.executable, os.path.abspath(__file__), "scan-one", str(path), str(root), temporary]
-        subprocess.run(command, check=True)
+        result = subprocess.run(command, stderr=subprocess.PIPE, text=True)
+        if result.returncode != 0:
+            lines = [line for line in (result.stderr or "").strip().splitlines() if line.strip()]
+            message = lines[-1] if lines else f"scanner exited with status {result.returncode}"
+            raise ValueError(message.split(": ", 1)[1] if message.startswith(("ValueError", "OSError")) else message)
         with open(temporary, "r", encoding="utf-8") as handle:
             rows = json.load(handle)
         return [ParticleRecord(**row) for row in rows]

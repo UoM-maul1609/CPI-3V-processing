@@ -363,7 +363,7 @@ is better in the first two columns.
 * A tilted-plane fit to the border gains nothing measurable. A gain-and-offset
   fit is unstable, because the background is nearly flat across a small ROI.
 * **Put the edge at a fraction of each particle's own shadow depth.** The
-  optimum is broad, between 0.6 and 0.7; 0.65 is the default. A fixed
+  optimum is broad, between 0.55 and 0.7 (0.55 is the default from v14.6, see below). A fixed
   transmittance level loses about 30% of the 15 µm beads as they go out of
   focus.
 * With this, the 15, 40 and 100 µm beads lie on one curve (spread 0.040
@@ -373,8 +373,210 @@ Recommended command:
 
 ```bash
 python batchProcess.py <copy of processed data> --only-stats --cpiv1 \
-       --edge-method transmittance --edge-mode relative --edge-fraction 0.65
+       --edge-method transmittance --edge-mode relative --edge-fraction 0.55
 ```
+
+**Edge fraction 0.55 (v14.6).** With the edge at 65% of the shadow depth,
+100 µm beads come out slightly smaller on the negative side of the object
+plane than at focus (about 0.94 of true at d ≈ −0.85 mm, against 0.96 at focus
+and 0.99 at +0.85 mm), because the blurred edge of a defocused bead is
+lop-sided on that side. Putting the edge a little further out, at 55%, makes
+the measured size grow away from the object plane on both sides for all
+three sizes, and is as consistent (equivalent-area diameter):
+
+| Edge fraction | Scatter | Spread between sizes | 100 µm at −0.85 / 0 / +0.85 mm | 40 µm | 15 µm (±0.25 mm) |
+|---|---|---|---|---|---|
+| 0.65 | 0.027 | 0.035 | 0.94 / 0.96 / 0.99 | 1.14 / 1.01 / 1.17 | 1.21 / 0.96 / 1.29 |
+| **0.55** | **0.026** | **0.038** | **1.01 / 0.98 / 1.03** | **1.22 / 1.06 / 1.28** | **1.34 / 1.07 / 1.42** |
+| 0.45 | 0.028 | 0.046 | 1.06 / 1.00 / 1.08 | 1.32 / 1.10 / 1.37 | 1.46 / 1.19 / 1.54 |
+| 0.35 | 0.031 | 0.059 | 1.10 / 1.01 / 1.12 | 1.40 / 1.16 / 1.44 | 1.59 / 1.32 / 1.66 |
+
+Lower fractions make the growth with defocus clearer, but the sizes become
+less consistent. 0.55 is the default from v14.6.
+
+**Which particle in the ROI.** The CPI cuts each ROI around the particle
+that triggered it, so a ROI can also contain parts of neighbours, usually cut
+off at its border. The transmittance method scores each shadow by its
+integrated darkness, reduced with distance from the ROI centre and strongly if
+it touches the ROI border, and measures the best one. (Before v14 it took the
+darkest shadow, which was sometimes a large neighbour in a corner.) A bright
+spot at the centre of a bead can open a notch to the outside; notches up to
+`close_px` (4 px) are bridged, but only over pixels that are still in the
+particle's shadow, so real concavities of crystals are kept. Length (maximum
+Feret diameter) is not affected by the notch; area and roundness are.
+
+**Outline and size measure (v14.2).** By default (`outline = "radial"`) the
+outline of a compact particle is found along rays from its centre: on each
+ray, walking out from the darkest point, the edge is where T first rises above
+the edge level, and the result is smoothed over about 5 px of arc. Dark rings
+and a bright centre spot no longer make it ragged. Particles that are not
+star-shaped from their centre, or not roughly round (raw roundness below 0.6: columns, needles, rosettes), keep the raw contour
+(`dat.outline_radial` says which was used). On the 21/3/02 beads, the
+equivalent-area diameter (`dat.deq`) is the most consistent size: scatter
+about the common curve 0.027 against 0.030 for the maximum Feret length, with
+the same spread between sizes. The workbench can calibrate on either (Fit size
+& focus model ▸ Size measure; `cpi-fit --size deq`). An outline drawn at the
+steepest rise of T, as you would draw by hand, looks better but sizes less
+consistently (scatter 0.031–0.036), because it moves with the fringes as the
+particle defocuses.
+
+**Outline as drawn by hand (`--outline edge`, v14.5).** Round particles are
+outlined where T rises most steeply between the shadow and the bright
+surround, searched around the outer edge of the shadow and kept continuous
+from ray to ray. This is the edge a person draws. On the 21/3/02 beads it sizes
+less consistently than the default threshold outline: scatter 0.035 against
+0.027 (equivalent-area diameter), and spread between sizes 0.057 against
+0.035. The visible disc of a defocused bead is the blurred image, which grows
+with defocus and with the fringes, so it is not a better estimate of the true
+size; for example, it gives about 60 µm for the defocused 40 µm beads where
+the default gives about 50 µm. Use it to compare runs (Compare processing
+runs) or for display.
+
+**Particle in its own background (v14.12).** Each ROI is divided by the
+crop of the full-frame background nearest in time. With particles fixed on a
+slide, a background taken during a run contains the particles, so a particle
+cancels out of image / background and only a sliver is outlined. On the
+21/3/02 beads this affects 0.1% of particles, but on the 7/11/03 ice analogues
+(file 11071612) it affects 83%. The transmittance method now checks whether
+the particle's dark core is also dark in its background crop. If it is, it
+uses the nearest-in-time full-frame background (from `full_backgrounds.mat`)
+in which that part of the frame is clear, or failing that a smooth background
+fitted to the ROI's own clear pixels. `dat.bg_source` records which was used
+(0 assigned, 1 another frame, 2 fitted) and `dat.bg_dt_s` the time to the
+frame used. Turn it off with `"bg_check": false` in `edge_options`.
+
+**Transparent columns (v14.19).** A transparent column focuses light into a
+bright streak along its axis. At the edge level this splits its shadow into
+two parallel dark bars, and only one bar used to be outlined, about half the
+true width. Now all edge-level parts inside one particle's shadow are kept.
+The gaps between them are bridged, and the footprint itself is closed by the
+same radius, so the space between bars that are joined by grey end caps counts
+as particle. Separate particles have background between them and are never
+joined. For such merged particles only, small concavities that the shadow
+nearly encloses are also filled: at least 65% enclosed and at most 8% of the
+area, e.g. a bright spot at a column's end. Gaps between the arms of a rosette
+are larger and stay out.
+
+On the 6/11/03 col166 file, 22% of particles change: width +11 µm and deq
++15 µm (medians), with columns now about 52 µm wide instead of about 35. On
+the 21/3/02 beads 0.1% change, all junk ROIs at the frame edge. Options:
+`merge_parts`, `merge_max_gap`, `fill_bays`, `fill_bays_max_area`.
+
+v14.20 handles columns far from focus. Some image as two thin parallel walls
+with a wide bright gap, and end caps too faint to count as shadow, so the two
+walls were separate particles. A second shadow piece is now joined to the
+particle when both conditions hold:
+
+- they connect at a fainter level (T < 1 − 0.5 × min_contrast, i.e. 0.925);
+- both pieces are elongated (≥ 3:1), parallel (≤ 10°), of similar length and
+  side by side.
+
+Separate needles have background between them and don't connect. Effect:
+ROI 1346 (11061538) 13 → 40 µm wide. 0.2% of that file changes, and none of
+the 21/3/02 beads. Options: `join_faint`, `join_min_aspect`, `join_max_angle`,
+`join_min_size`.
+
+v14.21 fills shadow-covered bays. Out of focus, parts of a column's shadow can
+be lighter than the edge level: an inner channel, or a big notch at a bright
+end. Those bays used to be cut out of the outline. Concavities of the outline
+that lie at least 70% inside the particle's own weak shadow (T < 0.85) are now
+filled. This applies to elongated particles (≥ 2:1) and split-and-merged ones.
+The gaps between a rosette's arms show background and are kept.
+
+On 11061340, 39% of outlines change, with deq a median of +2 µm. None of the
+1,845 accepted 21/3/02 beads change. Options: `fill_bays_shadow_cover`,
+`fill_bays_min_aspect`.
+
+**Cut-off by the ROI edge (v14.23).** Every particle now records
+`dat.cutoff_pct`: the percentage of its outline within 1 pixel of the ROI edge
+(0 = wholly inside), the same definition as CPIview's cut-off. A cut-off
+particle's size is a lower limit.
+
+- **Processing:** `--max-cutoff X` leaves particles more than X% cut off out of
+  the concentration time series (CPIview's spectra use 6). Their statistics
+  stay in the files, and the number left out is printed and stored as
+  `timeser.max_cutoff_pct`.
+- **Workbench:**
+  - Filters has a "Cut off by ROI edge [%]" min/max row;
+  - "Cut off by the ROI edge" is a plot metric;
+  - the fit dialog has "Max cut-off by ROI edge" (`cpi-fit --max-cutoff X`).
+
+  Particles processed before v14.23 have no value and are always kept.
+
+On the 7/11/03 ice-analogue file, 824 of 5,009 particles are more than 6% cut
+off (slide-mounted analogues often cross the ROI edge). With `--max-cutoff 6`,
+740 particles that passed the focus test were left out and the summed
+concentration fell by 17%.
+
+**CPIview focus and edge quality (`--cpiview`, v14.22).** This option adds,
+per particle, the focus measure and edge-quality variables of SPEC's CPIview 2,
+ported from its IDL code (`proc/cpiviewMetrics.py`). Sizes still come from this
+processing; CPIview's size correction and depth of field are not used. Stored
+as `dat.cpv_*`:
+
+- `cpv_focus`: the mean over 16 points round the boundary of
+  100 × peak / FWHM / 110 of the gradient across the edge. The gradient is
+  |Sobel| on the background-subtracted ROI after 12 median-filter passes. Also
+  stored: `cpv_focus_sd`, `cpv_focus_min`, `cpv_focus_max`,
+  `cpv_focus_median` and `cpv_samples`. A large spread means part of the edge
+  is sharp and part blurred (tilted or partly cut-off particles).
+- `cpv_fwhm_px`: the median edge width (FWHM of the gradient profile), and
+  `cpv_peak`, the median peak gradient.
+- `cpv_distinct`: the fraction of boundary pixels with a gradient above 40.
+  CPIview keeps an object only above 0.4. A quick automatic junk filter.
+- `cpv_cutoff_pct`: the percentage of boundary pixels on the ROI edge. CPIview
+  spectra use particles under 6%.
+
+This costs about 0.1 s per particle. In the workbench these appear as plot
+metrics. The size-and-focus fit can use the CPIview focus instead of the
+processed one ("Focus" in the fit dialog; `cpi-fit --focus cpv_focus`), and the
+saved model records which focus it used. On 3,547 beads from 21/3/02 (15/40/100
+µm, |d| ≤ 0.65 mm), the processed focus gave 6.7% sizing error (side of the
+object plane unknown) and the CPIview focus 7.3%. The CPIview focus identified
+the side better: 63% against 54%.
+
+**Pixel size (`--pixel-um`, v14.18).** Lengths and areas are converted from
+pixels at 2.3 µm unless `--pixel-um` is given. Edges, outlines and focus are
+computed in pixels, so changing it scales every size by exactly the ratio and
+changes nothing else. The value is recorded in each file (`dat.proc_options`).
+The workbench fit reads it, so its "Pixel size: set" option rescales relative
+to what was used in processing and never applies it twice. The concentration
+time series reads it too, together with the real frame size from
+`full_backgrounds.mat`: 1024 × 1022 px for CPI 1.0. The time series previously
+assumed 1280 × 1024 px at 2.3 µm for every instrument, which made CPI 1.0
+sample areas 25% too large before any pixel-size change.
+
+**Choosing the backgrounds (`--backgrounds`, v14.13).** By default every
+full-frame background is used (`--backgrounds all`). `--backgrounds choose`
+opens a window after the backgrounds have been collected, before they are
+assigned to the ROIs. It shows every background in time order with a tick box
+and a count of *spots* (dark patches compared with the median of all
+backgrounds, usually particles sitting in that background). Click one to see
+it large, optionally as its difference from the median. The choice is saved in
+the data folder as `background_selection.json`, keyed by background time, so it
+still applies after reprocessing. The next time, the window first offers to
+use the previous selection. `--backgrounds saved` reuses the saved choice
+without the window. Only ticked backgrounds are used: for the nearest-in-time
+assignment, and as the replacements in the own-background check above.
+`full_backgrounds.mat` is not changed.
+
+```bash
+python batchProcess.py <folder> --cpiv1 --backgrounds choose ...         # full processing
+python batchProcess.py <folder> --only-stats --cpiv1 --backgrounds choose ...   # already-converted MAT files
+```
+
+With `--only-stats`, giving `--backgrounds` (any value) re-assigns the
+backgrounds to the ROIs before the statistics. Without it, the backgrounds
+already stored in the MAT files are kept.
+
+**ROI times (fixed in v14).** ROIs take the time of the full-frame IMAGE
+block before them in the file. Blocks are found at both even and odd byte
+offsets, and the old code searched that list without sorting it, so about
+half the ROIs got the time of the wrong frame: typically 0.1–0.2 s out,
+sometimes tens of seconds, and also the wrong image type. MAT files made
+before v14 have these times. Reprocess the `.roi` files to correct them, then
+use **Copy project onto reprocessed data** in the workbench, which matches
+flagged ROIs by their images rather than their times.
 
 **Comparing methods on the same particles:**
 

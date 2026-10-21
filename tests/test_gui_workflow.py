@@ -885,3 +885,85 @@ def test_reload_stage_csv(tmp_path, monkeypatch):
     assert w.reload_stage_positions() > 0
     assert all(abs(r.stage_y - zs[r.particle_id] - 1) < 1e-9 for r in w.catalog.records if r.stage_y == r.stage_y)
     w.close()
+
+
+def test_copy_project_onto_retimed_reprocessed_data(tmp_path, monkeypatch):
+    """Flags survive reprocessing that renumbers ROIs and changes their times (matched by ROI image)."""
+    monkeypatch.setenv("CPI_CALIBRATION_LABELS", str(tmp_path / "labels.json"))
+    import shutil
+    from datetime import datetime
+    import numpy as np
+    import scipy.io as sio
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtCore import Qt
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No))
+    shown = []
+    monkeypatch.setattr(QMessageBox, "information", staticmethod(lambda *a, **k: shown.append(a[2])))
+    from calibration.gui import CalibrationWindow
+    from mat_synth import make_scan
+    d = make_scan(tmp_path / "run", t0=datetime(2026, 3, 2, 10), seed=1, per_step=9)
+    w = CalibrationWindow()
+    w.project_file = (tmp_path / "p.json").resolve(); w.selection_file = tmp_path / "p_flags.csv"
+    w.import_file(d / "scan.mat"); w.apply_filters()
+    w._on_box(w.spatial_canvas, 0, (0, 0), (500, 1000), Qt.NoModifier); w.accept_selection()
+    kept = {(r.start_x, r.start_y) for r in w.catalog.records if r.status == "keep"}
+    assert kept
+    batch = "Accepted batch 1"
+    by_id = w.catalog._by_id
+    assert {(by_id[p].start_x, by_id[p].start_y) for p in w.saved_sets[batch]["particle_ids"]} == kept
+    w.save_project(); w.flush_saves()
+    # "Reprocessed": same ROIs, reversed order, every time 0.15 s later.
+    new_dir = tmp_path / "re"; new_dir.mkdir()
+    m = sio.loadmat(d / "scan.mat", squeeze_me=False)
+    roi, dat = m["ROI_N"][0, 0], m["dat"][0, 0]
+    n = roi["IMAGE"].shape[1]
+    rev = np.arange(n)[::-1]
+    imgs = np.empty((n,), dtype=[("IM", object)])
+    focs = np.empty((n,), dtype=[("focus", object)])
+    for k, i in enumerate(rev):
+        imgs[k]["IM"] = roi["IMAGE"][0, i]["IM"]
+        focs[k]["focus"] = dat["foc"][0, i]["focus"]
+    f = lambda a: np.ravel(a)[rev]
+    sio.savemat(new_dir / "scan.mat", {
+        "ROI_N": {"Time": f(roi["Time"]) + 0.15 / 86400, "StartX": f(roi["StartX"]), "EndX": f(roi["EndX"]),
+                  "StartY": f(roi["StartY"]), "EndY": f(roi["EndY"]), "IMAGE": imgs},
+        "dat": {"len": f(dat["len"]), "wid": f(dat["wid"]), "round": f(dat["round"]),
+                "centroid": np.ravel(dat["centroid"]).reshape(-1, 2)[rev] if dat["centroid"].size == 2 * n
+                else dat["centroid"][rev], "foc": focs}})
+    out = w.copy_project_to_reprocessed(new_dir, tmp_path / "p_re.json")
+    assert out is not None
+    now = {(r.start_x, r.start_y) for r in w.catalog.records if r.status == "keep"}
+    assert now == kept
+    by_id = w.catalog._by_id
+    members = w.saved_sets[batch]["particle_ids"]
+    assert all(p in by_id for p in members)                   # every batch member found in the new files
+    assert {(by_id[p].start_x, by_id[p].start_y) for p in members} == kept
+    assert all(by_id[p].status == "keep" for p in members)
+    assert any("Matched" in s for s in shown)
+    w.close()
+
+
+def test_normalised_distance_axis(tmp_path, monkeypatch):
+    monkeypatch.setenv("CPI_CALIBRATION_LABELS", str(tmp_path / "labels.json"))
+    import math
+    from datetime import datetime
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtCore import Qt
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(QMessageBox, "question", staticmethod(lambda *a, **k: QMessageBox.No))
+    from calibration.gui import CalibrationWindow
+    from mat_synth import make_scan
+    d = make_scan(tmp_path / "run", t0=datetime(2026, 3, 2, 10), seed=1, per_step=9)
+    w = CalibrationWindow()
+    w.project_file = (tmp_path / "p.json").resolve(); w.selection_file = tmp_path / "p_flags.csv"
+    w.import_file(d / "scan.mat"); w.load_position_file(str(d / "stage.csv")); w.apply_filters()
+    w._on_box(w.spatial_canvas, 0, (0, 0), (1000, 1000), Qt.NoModifier); w.accept_selection()
+    rec = next(r for r in w.catalog.records if r.status == "keep")
+    w.position_metric.setCurrentIndex(w.position_metric.findData("plane_signed"))
+    dist = w._plot_x(rec)
+    w.position_metric.setCurrentIndex(w.position_metric.findData("plane_zd"))
+    assert math.isnan(w._plot_x(rec))                     # no actual size yet
+    rec.actual_length_um = 40.0
+    assert w._plot_x(rec) == pytest.approx(0.85 * dist * 1000 / 20.0 ** 2)
+    w.close()

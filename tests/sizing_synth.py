@@ -29,6 +29,8 @@ def synth_rows(seed=1, n_batches=4, beads=30, steps=np.linspace(-1.0, 1.0, 21), 
             for i in range(beads):
                 if rng.random() < 0.15:      # beads missed in some frames
                     continue
+                if m.zd(size, d) > 0.6:      # too defocused to be detected (small beads leave the DOF sooner)
+                    continue
                 irel = illum[i] / m.illum_ref
                 L_app = m.mean_length(size, d, irel) * math.exp(rng.normal(0, m.sigma_length(size, d)))
                 foc = m.mean_focus(d, irel) * math.exp(rng.normal(0, m.sigma_focus(d)))

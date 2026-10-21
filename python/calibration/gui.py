@@ -71,7 +71,7 @@ try:
     from .combine import combine_projects, project_instrument, load_projects_for_fit
     from . import sizing
     from .time_windows import window_bounds, make_window, suggest_windows, in_window, overlapping
-    from .data import (FilterSpec, CPI_DISPLAY, particle_key, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog,
+    from .data import (FilterSpec, CPI_DISPLAY, particle_key, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog, stage_burst_check,
                        datetime_to_matlab_datenum, matlab_datenum_to_datetime, _scan_via_subprocess)
 except ImportError:  # Support ``python gui.py`` from this directory.
     from plot_utils import data_limits, median_trace, trace_extremum
@@ -87,7 +87,7 @@ except ImportError:  # Support ``python gui.py`` from this directory.
     from combine import combine_projects, project_instrument, load_projects_for_fit
     import sizing
     from time_windows import window_bounds, make_window, suggest_windows, in_window, overlapping
-    from data import (FilterSpec, CPI_DISPLAY, particle_key, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog,
+    from data import (FilterSpec, CPI_DISPLAY, particle_key, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog, stage_burst_check,
                       datetime_to_matlab_datenum, matlab_datenum_to_datetime, _scan_via_subprocess)
 
 
@@ -103,9 +103,18 @@ MEDIAN_COLOUR = "#13294b"
 
 METRICS = (("focus", "Focus"), ("focus_norm", "Focus ÷ local illumination"), ("length", "Length [µm]"),
            ("width", "Width [µm]"), ("ratio", "Measured / actual length"), ("roundness", "Roundness"),
-           ("illum", "Local illumination (ROI edge)"), ("focus_T", "Focus on transmittance (new edge method)"))
+           ("illum", "Local illumination (ROI edge)"), ("focus_T", "Focus on transmittance (new edge method)"),
+           ("deq", "Equivalent-area diameter [µm] (new edge method)"),
+           ("ratio_deq", "Equivalent-area diameter / actual length"),
+           ("cutoff", "Cut off by the ROI edge [% of outline]"),
+           ("cpv_focus", "CPIview focus (processed with --cpiview)"),
+           ("cpv_focus_sd", "CPIview focus spread round the boundary (SD)"),
+           ("cpv_fwhm", "Edge width: FWHM of the gradient [px] (CPIview)"),
+           ("cpv_distinct", "Distinct edge: fraction of boundary with a strong gradient (CPIview)"),
+           ("cpv_cutoff", "Cut off by the ROI edge [% of boundary] (CPIview)"))
 POSITIONS = (("time", "Acquisition time"), ("stage_x", "Stage X"), ("stage_z", "Stage Z"),
              ("plane_signed", "Signed distance to object plane  d = n·(ΔX, ΔZ)"),
+             ("plane_zd", "Normalised distance  Zd = λd / (L/2)²  (labelled particles; L = actual size)"),
              ("stage_x_relative", "X − Xbest"), ("stage_z_relative", "Z − Zbest"),
              ("plane_offset", "Offset within object plane (θ check)"),
              ("stage_radius", "Stage radius √(X² + Z²)"),
@@ -126,7 +135,9 @@ PICK_SCOPES = (("undecided", "Unreviewed only"), ("unrejected", "Unreviewed + ac
 BROWSE_SCOPES = (("auto", "Selection, else current batch"), ("all", "All particles"),
                  ("selection", "Selection only"), ("undecided", "Unreviewed"),
                  ("keep", "Accepted"), ("reject", "Rejected"))
-RELATIVE_AXES = ("stage_x_relative", "stage_z_relative", "stage_offset_radius", "plane_signed", "plane_offset")
+RELATIVE_AXES = ("stage_x_relative", "stage_z_relative", "stage_offset_radius", "plane_signed", "plane_offset",
+                 "plane_zd")
+WAVELENGTH_UM = 0.85   # CPI laser, for the normalised (Fresnel) distance
 STAGE_AXES = ("stage_x", "stage_z", "stage_radius", "relative") + RELATIVE_AXES
 THUMB = 112
 GALLERY_PAGE = 48
@@ -156,19 +167,21 @@ class ParticleCanvas(FigureCanvasQTAgg):
     def show_particle(self, image, boundary, title, show_boundary=True, frame_colour=None):
         self.axes.clear()
         self.axes.set_axis_on()
-        self.axes.imshow(image, cmap="gray", origin="upper", interpolation="nearest", aspect="equal")
+        # ROI arrays are stored [x, y] (camera X down the rows).  Shown as the camera sees them --
+        # X across, Y down -- the same way round as the Camera X-Y plot.
+        self.axes.imshow(np.asarray(image).T, cmap="gray", origin="upper", interpolation="nearest", aspect="equal")
         if show_boundary and boundary is not None:
             finite = np.isfinite(boundary).all(axis=1)
             b = boundary[finite]
             if len(b):
-                # MATLAB boundary convention is row, column; retain exact stored vertices.
-                self.axes.plot(b[:, 1], b[:, 0], linewidth=1.15, color="#ff654d")
+                # Stored boundary vertices are (array row, array column) = (x, y).
+                self.axes.plot(b[:, 0], b[:, 1], linewidth=1.15, color="#ff654d")
         self.axes.set_title(title, color=frame_colour or "#192b40", fontweight="bold")
         for spine in self.axes.spines.values():
             spine.set_edgecolor(frame_colour or "#8a99a8")
             spine.set_linewidth(4 if frame_colour else 1)
-        self.axes.set_xlabel("ROI x [px]")
-        self.axes.set_ylabel("ROI y [px]")
+        self.axes.set_xlabel("ROI camera x [px]")
+        self.axes.set_ylabel("ROI camera y [px]")
         self.draw_idle()
 
 
@@ -519,15 +532,20 @@ class SizingDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Fit size & focus model")
         self.inputs = list(inputs or [])
-        self.resize(1250, 860)
+        screen = QApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen is not None else None
+        if avail is not None:
+            self.resize(int(avail.width() * 0.92), int(avail.height() * 0.9))
+        else:
+            self.resize(1500, 950)
         self.rows = rows
         self.model = self.validation = self.tracking = None
-        layout = QVBoxLayout(self)
-        controls = QHBoxLayout()
+        self._drawn = None
+        layout = QHBoxLayout(self)
+        controls = QVBoxLayout()
         labels = sorted({r.get("label") or "" for r in rows} - {""})
         self.label_box = QListWidget()
-        self.label_box.setMaximumHeight(70)
-        self.label_box.setMaximumWidth(260)
+        self.label_box.setMaximumHeight(150)
         for name in labels:
             n = sum(1 for r in rows if r.get("label") == name)
             item = QListWidgetItem(f"{name}  ({n:,})")
@@ -540,6 +558,11 @@ class SizingDialog(QDialog):
         self.flip.setToolTip("Use if the + side in the workbench is the side nearer the laser in your convention.")
         self.illum_min = QDoubleSpinBox(); self.illum_min.setRange(0, 255); self.illum_min.setValue(0)
         self.illum_min.setToolTip("Ignore particles whose local illumination (ROI border) is below this; 0 = use all")
+        self.max_cutoff = QDoubleSpinBox(); self.max_cutoff.setRange(0, 100); self.max_cutoff.setDecimals(1)
+        self.max_cutoff.setValue(100); self.max_cutoff.setSuffix(" %")
+        self.max_cutoff.setToolTip("Leave out particles with more than this % of their outline on the ROI edge "
+                                   "(their size is cut short); 100 = use all. Particles without a cut-off value "
+                                   "(processed before v14.23) are kept.")
         self.foc_crit = QDoubleSpinBox(); self.foc_crit.setRange(0, 500); self.foc_crit.setValue(sizing.DEFAULT_FOC_CRIT)
         self.foc_crit.setToolTip("Focus threshold used by proc/batchProcess.py (foc_crit); the depth of field is "
                                  "evaluated here")
@@ -550,10 +573,68 @@ class SizingDialog(QDialog):
                                "contains_points(radius=2) ≈ +2 px on the diameter.")
         self.fit_offset = QCheckBox("fit it (needs ≥2 true sizes)")
         off_row = QHBoxLayout(); off_row.addWidget(self.offset); off_row.addWidget(self.fit_offset)
+        self.size_measure = QComboBox()
+        for key, info in sizing.SIZE_MEASURES.items():
+            n = sum(1 for r in rows if r.get(info["columns"][0]) not in (None, "", "nan")
+                    and math.isfinite(float(r.get(info["columns"][0]))))
+            self.size_measure.addItem(f"{info['label']}  ({n:,} particles)", key)
+        self.size_measure.setToolTip(
+            "Which measured size to calibrate. Equivalent-area diameter averages out a ragged outline and was "
+            "the most consistent across 15/40/100 µm beads; it needs the transmittance edge method. Retrieval "
+            "with the saved model uses the same measure.")
+        self.focus_measure = QComboBox()
+        for key, info in sizing.FOCUS_MEASURES.items():
+            col = info["columns"][0]
+            n = 0
+            for r in rows:
+                try:
+                    n += math.isfinite(float(r.get(col)))
+                except (TypeError, ValueError):
+                    pass
+            self.focus_measure.addItem(f"{info['label']}  ({n:,} particles)", key)
+            if n == 0 and key != "focus":
+                self.focus_measure.model().item(self.focus_measure.count() - 1).setEnabled(False)
+        self.focus_measure.setToolTip(
+            "Which focus value to calibrate with. CPIview focus: peak / width of the gradient across the edge at "
+            "16 points round the boundary (as SPEC's CPIview), needs processing with --cpiview. Retrieval with "
+            "the saved model uses the same focus.")
+        self.pixel_mode = QComboBox()
+        try:
+            processed_px = sizing.processed_pixel_um(sizing.CalibrationTable.from_rows(self.rows))
+            processed_text = f"{processed_px:g} µm"
+        except ValueError:               # particles processed with different pixel sizes
+            processed_px, processed_text = sizing.NOMINAL_PIXEL_UM, "mixed — reprocess with one --pixel-um"
+        self.pixel_mode.addItem(f"As processed ({processed_text})", "processed")
+        self.pixel_mode.addItem("Fit from the bead sizes (≥2 sizes)", "fitted")
+        self.pixel_mode.addItem("Set to…", "set")
+        self.pixel_mode.setToolTip(
+            "As processed: sizes are used as processed; the fitted scale s absorbs any pixel-size error.\n"
+            "Fit: find the factor that makes the beads' sizes right (needs two or more true sizes, so the scale "
+            "and the edge offset can be told apart), rescale every measured size by it, then fit with s = 1.\n"
+            "Set: rescale to a pixel size you know (e.g. from a graticule), then fit with s = 1. The factor is\n"
+            "set ÷ the pixel size the files were processed with (read from the files), so it is never applied twice.\n"
+            "Retrieval with the saved model applies the same factor.")
+        self.pixel_um = QDoubleSpinBox(); self.pixel_um.setRange(0.5, 10.0); self.pixel_um.setDecimals(4)
+        self.pixel_um.setSingleStep(0.01); self.pixel_um.setValue(processed_px); self.pixel_um.setSuffix(" µm")
+        self.pixel_um.setEnabled(False)
+        self.pixel_mode.currentIndexChanged.connect(
+            lambda *_: self.pixel_um.setEnabled(self.pixel_mode.currentData() == "set"))
+        px_row = QHBoxLayout(); px_row.addWidget(self.pixel_mode); px_row.addWidget(self.pixel_um)
         form.addRow(self.flip)
+        form.addRow("Size measure", self.size_measure)
+        form.addRow("Focus", self.focus_measure)
+        form.addRow("Pixel size", px_row)
         form.addRow("Min local illumination", self.illum_min)
+        form.addRow("Max cut-off by ROI edge", self.max_cutoff)
         form.addRow("foc_crit", self.foc_crit)
         form.addRow("Edge offset b", off_row)
+        self.shape_terms = QCheckBox("Particle shape terms (Park et al. 2026)")
+        self.shape_terms.setToolTip(
+            "Fit the effect of particle shape: defocus variable Zd / Ar^α in the size model (α = 1 is Park et al.'s "
+            "Z/(L² Ar)) and Ar^c on the focus peak, with Ar = measured roundness (projected area ÷ circle of the "
+            "same length). Needs particles of different shapes, e.g. beads and ice analogues. Retrieval with the "
+            "saved model uses each particle's roundness.")
+        form.addRow(self.shape_terms)
         self.run_button = QPushButton("Fit && validate")
         self.run_button.setObjectName("primary")
         self.run_button.clicked.connect(self.run)
@@ -563,19 +644,26 @@ class SizingDialog(QDialog):
         self.figure_button = QPushButton("Save figure…")
         self.figure_button.clicked.connect(self.save_figure)
         self.figure_button.setEnabled(False)
-        buttons = QVBoxLayout()
-        for b in (self.run_button, self.save_button, self.figure_button):
-            buttons.addWidget(b)
-        buttons.addStretch(1)
-        left = QVBoxLayout(); left.addWidget(QLabel("Labels to fit")); left.addWidget(self.label_box)
-        controls.addLayout(left)
+        controls.addWidget(QLabel("Labels to fit"))
+        controls.addWidget(self.label_box)
         controls.addLayout(form)
-        controls.addLayout(buttons)
+        for b in (self.run_button, self.save_button, self.figure_button):
+            controls.addWidget(b)
         controls.addStretch(1)
-        layout.addLayout(controls)
-        split = QSplitter(Qt.Horizontal)
-        self.figure = Figure(figsize=(9, 6), layout="constrained")
+        panel = QWidget()
+        panel.setLayout(controls)
+        scroll = QScrollArea()
+        scroll.setWidget(panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFixedWidth(450)
+        layout.addWidget(scroll)
+        self.figure = Figure(figsize=(14, 9), layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
+        self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._redraw_timer = QTimer(self)
+        self._redraw_timer.setSingleShot(True)
+        self._redraw_timer.timeout.connect(self._redraw)
+        self.canvas.installEventFilter(self)
         self.report = QPlainTextEdit(); self.report.setReadOnly(True)
         self.report.setLineWrapMode(QPlainTextEdit.NoWrap)
         self.report.setFont(QFont("Menlo, Consolas, DejaVu Sans Mono", 9))
@@ -586,15 +674,44 @@ class SizingDialog(QDialog):
             "Fit && validate fits the length and focus models on each side of the object plane, then refits "
             "leaving out one batch at a time and retrieves that batch's sizes (side known, and side unknown "
             "as for cloud data) to show how well the retrieval really works.")
-        split.addWidget(self.canvas); split.addWidget(self.report)
-        split.setSizes([820, 430])
-        layout.addWidget(split, 1)
+        self.tabs = QTabWidget()
+        fig_tab = QWidget()
+        fig_layout = QVBoxLayout(fig_tab)
+        fig_layout.setContentsMargins(0, 0, 0, 0)
+        fig_layout.addWidget(NavigationToolbar2QT(self.canvas, fig_tab))
+        fig_layout.addWidget(self.canvas, 1)
+        self.tabs.addTab(fig_tab, "Figure")
+        self.tabs.addTab(self.report, "Report")
+        self.tabs.setCurrentIndex(1)
+        layout.addWidget(self.tabs, 1)
+
+    def eventFilter(self, obj, event):
+        from PySide6.QtCore import QEvent
+        if obj is self.canvas and event.type() == QEvent.Resize and self._drawn is not None:
+            self._redraw_timer.start(250)             # redraw to fit once resizing pauses
+        return super().eventFilter(obj, event)
+
+    def _redraw(self):
+        if self._drawn is None:
+            return
+        model, table, validation, tracking = self._drawn
+        sizing.make_figure(model, table, validation, tracking, figure=self.figure)
+        self.canvas.draw_idle()
 
     def _table(self):
         chosen = {self.label_box.item(i).data(Qt.UserRole) for i in range(self.label_box.count())
                   if self.label_box.item(i).checkState() == Qt.Checked}
         rows = [r for r in self.rows if (r.get("label") or "") in chosen]
-        table = sizing.CalibrationTable.from_rows(rows)
+        limit = self.max_cutoff.value()
+        if limit < 100:
+            def cut(r):
+                try:
+                    return float(r.get("cutoff_pct"))
+                except (TypeError, ValueError):
+                    return float("nan")
+            rows = [r for r in rows if not cut(r) > limit]            # unknown (NaN) is kept
+        table = sizing.CalibrationTable.from_rows(rows, self.size_measure.currentData() or "length",
+                                                  self.focus_measure.currentData() or "focus")
         if self.flip.isChecked():
             table.d = -table.d
         return table
@@ -603,9 +720,12 @@ class SizingDialog(QDialog):
         table = self._table()
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
+            mode = self.pixel_mode.currentData() or "processed"
             self.model, self.validation, self.tracking = sizing.run_calibration(
                 table, illum_min=(self.illum_min.value() or None), foc_crit=self.foc_crit.value(),
-                offset_um=self.offset.value(), fit_offset=True if self.fit_offset.isChecked() else None)
+                offset_um=self.offset.value(), fit_offset=True if self.fit_offset.isChecked() else None,
+                pixel_mode=mode, pixel_set_um=self.pixel_um.value() if mode == "set" else None,
+                shape=self.shape_terms.isChecked())
         except Exception as exc:   # report fitting problems instead of crashing the workbench
             QApplication.restoreOverrideCursor()
             QMessageBox.warning(self, "Fit size & focus model", str(exc))
@@ -615,8 +735,9 @@ class SizingDialog(QDialog):
             self.model.sign_convention += " (flipped: d → −d)"
         self.model.inputs = self.inputs
         self.table = table
-        sizing.make_figure(self.model, table, self.validation, self.tracking, figure=self.figure)
-        self.canvas.draw_idle()
+        self._drawn = (self.model, table, self.validation, self.tracking)
+        self.tabs.setCurrentIndex(0)
+        self._redraw()
         self.report.setPlainText(sizing.format_report(self.model, self.validation, self.tracking))
         self.save_button.setEnabled(True)
         self.figure_button.setEnabled(True)
@@ -1158,6 +1279,11 @@ class CalibrationWindow(QMainWindow):
         self.background_checkbox = QCheckBox("Background-subtracted ROI")
         self.background_checkbox.stateChanged.connect(lambda _: self.refresh_particle())
         col.addWidget(self.background_checkbox)
+        measure_button = QPushButton("📏 Measure on this ROI / full frames…")
+        measure_button.setToolTip("Open the measuring window on this particle's ROI: measure distances at any angle "
+                                  "in px (and µm), view full frames, export PNG/CSV")
+        measure_button.clicked.connect(lambda: self.open_measure_window(self.current_record()))
+        col.addWidget(measure_button)
         metrics_box = QGroupBox("Particle")
         metrics = QFormLayout(metrics_box)
         self.metric_labels: Dict[str, QLabel] = {}
@@ -1515,7 +1641,7 @@ class CalibrationWindow(QMainWindow):
         row = 1
         for key, label in (("length", "Length [µm]"), ("width", "Width [µm]"), ("focus", "Focus"),
                            ("x", "Image x [px]"), ("y", "Image y [px]"), ("ratio", "Meas./true length"),
-                           ("illum", "Local illumination")):
+                           ("illum", "Local illumination"), ("cutoff", "Cut off by ROI edge [%]")):
             low, high = QLineEdit(), QLineEdit()
             low.setPlaceholderText("any")
             high.setPlaceholderText("any")
@@ -1841,6 +1967,14 @@ class CalibrationWindow(QMainWindow):
         compare_action = QAction("Compare processing runs (same particles, different edge methods)…", self)
         compare_action.triggered.connect(self.compare_processing_dialog)
         calib_menu.addAction(compare_action)
+        tools_menu = self.menuBar().addMenu("Tools")
+        measure_action = QAction("Measure images (full frames, ROIs, image files)…", self)
+        measure_action.setShortcut(QKeySequence("Ctrl+M"))
+        measure_action.triggered.connect(lambda: self.open_measure_window(None))
+        tools_menu.addAction(measure_action)
+        measure_roi_action = QAction("Measure on the current particle's ROI…", self)
+        measure_roi_action.triggered.connect(lambda: self.open_measure_window(self.current_record()))
+        tools_menu.addAction(measure_roi_action)
         view_menu = self.menuBar().addMenu("View")
         self.hover_action = QAction("Hover preview on plots", self)
         self.hover_action.setCheckable(True)
@@ -1854,6 +1988,37 @@ class CalibrationWindow(QMainWindow):
         show_advanced.setCheckable(True)
         show_advanced.toggled.connect(self._show_advanced)
         view_menu.addAction(show_advanced)
+
+    def _project_mat_files(self):
+        if self.catalog is None or self.store is None:
+            return []
+        files = {}
+        for record in self.catalog.records:
+            if record.source_file not in files:
+                files[record.source_file] = str((self.store.root / record.source_file).resolve())
+        return sorted(files.values())
+
+    def open_measure_window(self, record=None):
+        """Measuring window (measure_window.py): distances on full frames, ROIs and image files."""
+        try:
+            from .measure_window import MeasureWindow
+        except ImportError:  # pragma: no cover
+            from measure_window import MeasureWindow
+        files = self._project_mat_files()
+        window = getattr(self, "_measure_window", None)
+        if window is None or not window.isVisible():
+            window = MeasureWindow(files)
+            self._measure_window = window
+        else:
+            for f in files:
+                if window.file_combo.findData(f) < 0:
+                    window.file_combo.addItem(Path(f).name, f)
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        if record is not None and self.store is not None:
+            window.show_roi(str((self.store.root / record.source_file).resolve()), record.roi_index)
+        return window
 
     def _show_advanced(self, visible):
         self.control_tabs.setTabVisible(4, visible)
@@ -2033,6 +2198,25 @@ class CalibrationWindow(QMainWindow):
             return (record.length_um / record.actual_length_um
                     if math.isfinite(record.actual_length_um) and record.actual_length_um > 0
                     else float("nan"))
+        if metric == "deq":
+            return record.deq_um
+        if metric == "cutoff":
+            return record.cutoff_pct
+        if metric.startswith("cpv_"):
+            if metric == "cpv_focus":
+                return record.cpv_focus
+            if metric == "cpv_focus_sd":
+                return record.cpv_focus_sd
+            if metric == "cpv_fwhm":
+                return record.cpv_fwhm_px
+            if metric == "cpv_distinct":
+                return record.cpv_distinct
+            if metric == "cpv_cutoff":
+                return record.cpv_cutoff_pct
+        if metric == "ratio_deq":
+            return (record.deq_um / record.actual_length_um
+                    if math.isfinite(record.actual_length_um) and record.actual_length_um > 0
+                    else float("nan"))
         return float("nan")
 
     def _plot_y(self, record, metric=None):
@@ -2070,6 +2254,12 @@ class CalibrationWindow(QMainWindow):
                 return float("nan")
             if mode == "plane_signed":
                 return signed_plane_distance(record.stage_x, record.stage_y, reference, self.plane_normal.value())
+            if mode == "plane_zd":
+                L = record.actual_length_um
+                if not (math.isfinite(L) and L > 0):
+                    return float("nan")
+                d = signed_plane_distance(record.stage_x, record.stage_y, reference, self.plane_normal.value())
+                return WAVELENGTH_UM * d * 1000.0 / (L / 2.0) ** 2     # d in mm, L in µm; keeps the sign of d
             if mode == "plane_offset":
                 return in_plane_offset(record.stage_x, record.stage_y, reference, self.plane_normal.value())
             if mode == "stage_offset_radius":
@@ -2442,7 +2632,7 @@ class CalibrationWindow(QMainWindow):
                         transform=ax.transAxes, ha="left", va="top", fontsize=8.5, color="#a13d0f")
         elif xmode in RELATIVE_AXES:
             ax.axvline(0, color="#d85519", lw=1.4, linestyle="--", zorder=8)
-            if xmode == "plane_signed" and label:
+            if xmode in ("plane_signed", "plane_zd") and label:
                 ax.text(.01, .98, f"◀ − side   object plane (θ = {self.plane_normal.value():.3g}°)   + side ▶",
                         transform=ax.transAxes, ha="left", va="top", fontsize=8.5, color="#a13d0f")
 
@@ -3424,7 +3614,7 @@ class CalibrationWindow(QMainWindow):
             arr, _ = self.store.particle(record)
         except Exception:
             return None
-        image = _to_gray8(arr)
+        image = _to_gray8(np.asarray(arr).T)        # camera orientation (X across), as the Camera X-Y plot
         if image is None:
             return None
         if max(image.width(), image.height()) > 2 * THUMB:
@@ -4083,7 +4273,7 @@ class CalibrationWindow(QMainWindow):
         source = self.project_file
         config = json.loads(source.read_text(encoding="utf-8"))
         folder, output = Path(folder).resolve(), Path(output).resolve()
-        missing, sources = [], []
+        missing, sources, pairs = [], [], {}
         for location in config.get("sources", []):
             old = Path(location)
             if not old.is_absolute():
@@ -4093,6 +4283,7 @@ class CalibrationWindow(QMainWindow):
                 missing.append(old.name)
                 continue
             sources.append(os.path.relpath(str(new), str(output.parent)))
+            pairs[old.name] = (old, new)
         if missing:
             QMessageBox.warning(self, "Copy project", f"{len(missing)} file(s) not found in {folder}:\n"
                                 + "\n".join(missing[:10]))
@@ -4101,9 +4292,33 @@ class CalibrationWindow(QMainWindow):
         config["sources"] = sources
         flags = source.with_name(config.get("flags_file", source.stem + "_flags.csv"))
         new_flags = output.with_name(output.stem + "_flags.csv")
+        remap_report = None
         if flags.exists():
-            shutil.copyfile(flags, new_flags)
+            # Re-find every flagged ROI in the new files by its pixels and corners, so the flags
+            # survive changes to ROI times or numbering made by the reprocessing.
+            from .remap import remap_flags_file
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                remap_report = remap_flags_file(
+                    flags, new_flags, pairs,
+                    progress=lambda n, total, name: (self.statusBar().showMessage(
+                        f"Matching flagged ROIs by image: {name} ({n}/{total})"), QApplication.processEvents()))
+            except Exception as exc:          # fall back to time + position matching
+                shutil.copyfile(flags, new_flags)
+                remap_report = {"error": str(exc)}
+            finally:
+                QApplication.restoreOverrideCursor()
         config["flags_file"] = new_flags.name
+        maps = (remap_report or {}).get("maps") or {}
+        if maps:
+            # Batches and the selection refer to particles by ID and by (time, position) key; both are
+            # stale after reprocessing.  Drop the stored keys of remapped files (they could point at a
+            # different ROI now) and translate the IDs after opening, with the same image-based map.
+            from .remap import split_id
+            from .selection_state import expand_project_config
+            expand_project_config(config)
+            config["particle_keys"] = {pid: key for pid, key in config["particle_keys"].items()
+                                       if split_id(pid)[0] not in maps}
         for key in ("position_file",):
             if config.get(key):
                 pos = Path(config[key])
@@ -4118,11 +4333,55 @@ class CalibrationWindow(QMainWindow):
         config["copied_from"] = {"project": str(source), "data_folder": str(folder),
                                  "copied_utc": datetime.now().astimezone().isoformat(timespec="seconds")}
         output.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        self._last_remap_report = remap_report
         if open_it:
             self.open_project(str(output))
+            if maps:
+                self._apply_roi_maps(maps)
             self.save_project()      # writes the particle table with the reprocessed measurements
             self._update_window_title()
+            if remap_report and "error" not in remap_report:
+                kept = sum(1 for r in self.catalog.records if r.status == "keep") if self.catalog else 0
+                QMessageBox.information(
+                    self, "Copy project",
+                    f"Matched {remap_report['remapped']:,} of {remap_report['rows']:,} flag rows to the reprocessed "
+                    f"ROIs by their images ({remap_report['missing']:,} not found"
+                    + (f", {remap_report['unchanged']:,} in files that could not be compared" if remap_report['unchanged'] else "")
+                    + f").\n\nThe new project has {kept:,} accepted particles.")
+            elif remap_report and "error" in remap_report:
+                QMessageBox.warning(self, "Copy project", "Could not compare ROI images (" + remap_report["error"]
+                                    + "); flags were matched by time and position only.")
         return output
+
+    def _apply_roi_maps(self, maps):
+        """Translate batch/selection IDs of the source project with per-file {old ROI index: new}."""
+        from .remap import split_id
+        if not self.catalog:
+            return
+        lookup = {(Path(r.source_file).name, r.roi_index): r.particle_id for r in self.catalog.records}
+
+        def translate(ids):
+            out = []
+            for pid in ids:
+                if pid in self.catalog._by_id:
+                    out.append(pid)
+                    continue
+                name, index = split_id(pid)
+                if name in maps:
+                    new = maps[name].get(index)
+                    if new is not None and (name, new) in lookup:
+                        out.append(lookup[(name, new)])
+                    continue                      # ROI not found in the new file: drop it
+                out.append(pid)
+            return out
+
+        for entry in self.saved_sets.values():
+            entry["particle_ids"] = sorted(set(translate(entry.get("particle_ids", ()))))
+        self.selected_ids = set(translate(self.selected_ids))
+        self._steps_cache = None
+        self._draft_reference_cache = None
+        self._refresh_saved_sets()
+        self._after_change()
 
     def compare_processing_dialog(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -4948,6 +5207,7 @@ class CalibrationWindow(QMainWindow):
         self.catalog = ParticleCatalog(root, [])
         self.store = ParticleStore(root)
         self.sources = []
+        self.unloaded_sources = []      # project files that were missing or unreadable: kept in the project
         self.saved_sets = {}
         self._shown_batches = []
         self.extra_position_files = []
@@ -5062,12 +5322,36 @@ class CalibrationWindow(QMainWindow):
         self.active_reference_set = requested if requested in self.saved_sets else None
         self._refresh_saved_sets()
         self.selection_file = self.project_file.with_name(config.get("flags_file", self.project_file.stem + "_flags.csv"))
+        missing, previous_errors = [], self._import_errors
+        self._import_errors = []
         for location in config.get("sources", []):
             source = Path(location)
             if not source.is_absolute():
                 source = (self.project_file.parent / source).resolve()
             if source.is_file():
                 self.import_file(source, refresh=False)
+            else:
+                missing.append(str(source))
+        problems, self._import_errors = self._import_errors, previous_errors
+        loaded_now = set(self.sources)
+        for location in config.get("sources", []):
+            source = Path(location)
+            if not source.is_absolute():
+                source = (self.project_file.parent / source).resolve()
+            if str(source.resolve() if source.exists() else source) not in loaded_now and \
+                    source.name not in ("timeseries.mat", "full_backgrounds.mat"):
+                self.unloaded_sources.append(str(source))
+        if missing or problems:
+            lines = []
+            if missing:
+                lines.append(f"{len(missing)} of the project's MAT files were not found, e.g.\n  " +
+                             "\n  ".join(missing[:3]))
+            if problems:
+                lines.append(f"{len(problems)} MAT files could not be read, e.g.\n  " + "\n  ".join(problems[:3]))
+            loaded = len(self.catalog.records) if self.catalog else 0
+            lines.append(f"{loaded:,} particles loaded." + (" Your saved flags file is left untouched until "
+                                                             "particles load." if not loaded else ""))
+            QMessageBox.warning(self, "Project files", "\n\n".join(lines))
         report = self.catalog.apply_selection_file(self.selection_file)
         self._remap_saved_ids(report.id_map, config.get("particle_keys", {}))
         added = self.labels.merge(config.get("labels", []))
@@ -5165,6 +5449,8 @@ class CalibrationWindow(QMainWindow):
         self._write_flags()
         config = self._project_config()
         self.project_file.parent.mkdir(parents=True, exist_ok=True)
+        if exports and self.catalog is not None and not self.catalog.records:
+            exports = False                      # keep the previous exports rather than writing empty tables
         if exports:
             self._export_committed_positions()
             self._export_particle_positions()
@@ -5192,7 +5478,8 @@ class CalibrationWindow(QMainWindow):
                 return os.path.relpath(str(value), str(self.project_file.parent))
             except ValueError:
                 return str(value)
-        config = {"format_version": 4, "sources": [relative(s) for s in self.sources],
+        unloaded = [u for u in getattr(self, "unloaded_sources", []) if u not in self.sources]
+        config = {"format_version": 4, "sources": [relative(s) for s in self.sources + unloaded],
                   "flags_file": self.selection_file.name, "position_file": relative(self.position_file),
                   "filters": {key: [pair[0].text(), pair[1].text()] for key, pair in self.filter_fields.items()},
                   "time_low": self._date_text(self.time_low), "time_high": self._date_text(self.time_high),
@@ -5254,7 +5541,8 @@ class CalibrationWindow(QMainWindow):
         "focus_normalised", "roundness",
         "image_x_px", "image_y_px", "x_stage", "z_stage", "reference_from", "reference_kind",
         "x_best", "z_best", "x_minus_xbest", "z_minus_zbest", "plane_normal_deg",
-        "d_signed_plane", "d_in_plane", "processing", "focus_T", "edge_touch")
+        "d_signed_plane", "d_in_plane", "processing", "focus_T", "edge_touch", "deq_um", "pixel_um",
+        "cpv_focus", "cpv_focus_sd", "cpv_fwhm_px", "cpv_distinct", "cpv_cutoff_pct", "cutoff_pct")
 
     def _export_particle_positions(self):
         """One row per ACCEPTED particle with the saved reference it actually uses.
@@ -5292,7 +5580,10 @@ class CalibrationWindow(QMainWindow):
                        focus_normalised=self._normalised_focus(r), roundness=r.roundness,
                        image_x_px=r.image_x_px, image_y_px=r.image_y_px, x_stage=r.stage_x, z_stage=r.stage_y,
                        reference_from=source or "", reference_kind=kind or "", plane_normal_deg=theta,
-                       processing=r.processing, focus_T=r.focus_T, edge_touch=r.edge_touch)
+                       processing=r.processing, focus_T=r.focus_T, edge_touch=r.edge_touch, deq_um=r.deq_um,
+                       pixel_um=r.pixel_um, cpv_focus=r.cpv_focus, cpv_focus_sd=r.cpv_focus_sd,
+                       cpv_fwhm_px=r.cpv_fwhm_px, cpv_distinct=r.cpv_distinct, cpv_cutoff_pct=r.cpv_cutoff_pct,
+                       cutoff_pct=r.cutoff_pct)
             if ref is not None and math.isfinite(r.stage_x) and math.isfinite(r.stage_y):
                 row.update(x_best=ref["x_best"], z_best=ref["z_best"],
                            x_minus_xbest=r.stage_x - ref["x_best"], z_minus_zbest=r.stage_y - ref["z_best"],
@@ -5587,7 +5878,7 @@ class CalibrationWindow(QMainWindow):
         if len(logs) == 1:
             return logs[0]
         return PositionLog(np.concatenate([l.times for l in logs]), np.concatenate([l.x for l in logs]),
-                           np.concatenate([l.y for l in logs]))
+                           np.concatenate([l.y for l in logs]), np.concatenate([l.ends for l in logs]))
 
     def _apply_stage_positions(self) -> int:
         if not (self.position_file or self.extra_position_files) or self.catalog is None or not self.catalog.records:
@@ -5597,6 +5888,28 @@ class CalibrationWindow(QMainWindow):
             return 0
         self.catalog.attach_position_log(log)
         return sum(math.isfinite(r.stage_x) and math.isfinite(r.stage_y) for r in self.catalog.records)
+
+    def stage_check(self):
+        """Burst check of the stage positions (data.stage_burst_check) for the loaded particles."""
+        log = self._position_log() if self.catalog else None
+        if log is None:
+            return None
+        return stage_burst_check([r.time_matlab for r in self.catalog.records], log)
+
+    def _warn_split_bursts(self):
+        try:
+            report = self.stage_check()
+        except Exception:
+            return None
+        if report and report["split"]:
+            QMessageBox.warning(
+                self, "Stage CSV check",
+                f"{report['split']} of {report['bursts']} bursts of particles ({report['particles_in_split']:,} "
+                "particles) fall across two stage positions.\n\nParticles are recorded in bursts after each stage "
+                "move, so each burst should have one position. Usually the CSV's times are on a different basis "
+                "from the particle times (e.g. 'roi' instead of 'full_frame'), or a time is rounded into a burst. "
+                "Re-import and choose another time basis, or check the CSV around those times.")
+        return report
 
     def reload_stage_positions(self):
         """Re-read the project's stage CSV(s) after editing them; batches keep their saved X/Z."""
@@ -5618,6 +5931,7 @@ class CalibrationWindow(QMainWindow):
         self._refresh_views()
         self.save_project_if_open()
         self._toast(f"Stage CSV reloaded: {matched:,} particles have X/Z; {changed:,} changed position.", 12000)
+        self._warn_split_bursts()
         return changed
 
     def _use_stage_axis_after_import(self, valid_count: int) -> None:
@@ -5649,11 +5963,14 @@ class CalibrationWindow(QMainWindow):
                 self.position_series = None if series == options[0] else series
             if len(choices["time_basis"]) > 1:
                 basis_options = choices["time_basis"]
-                default = basis_options.index("roi") if "roi" in basis_options else 0
+                default = (basis_options.index("full_frame") if "full_frame" in basis_options else
+                           basis_options.index("roi") if "roi" in basis_options else 0)
                 basis, ok = QInputDialog.getItem(
                     self, "Stage CSV time basis",
-                    "Rows exist for several timestamp sources. Which times match the ROI images?\n"
-                    "(roi = times of the cropped particle images; usually right)",
+                    "Rows exist for several timestamp sources. Which times match the particles?\n"
+                    "Since v14 each ROI has the time of its camera frame, so frame times (full_frame) match.\n"
+                    "After import, each burst of particles should get a single stage position: you are warned\n"
+                    "if bursts are split between positions (a sign of the wrong time basis).",
                     basis_options, default, False)
                 if not ok:
                     return
@@ -5682,6 +5999,7 @@ class CalibrationWindow(QMainWindow):
         self._refresh_views()
         self._toast(f"Stage CSV loaded: {matched:,} / {len(self.catalog.records):,} particles have X/Z positions.",
                     12000)
+        self._warn_split_bursts()
         if matched == 0:
             QMessageBox.warning(self, "No stage matches",
                                 "The CSV was read, but no particles matched its times. Check the calibration "
@@ -5814,8 +6132,21 @@ class CalibrationWindow(QMainWindow):
             self.save_indicator.setStyleSheet("color:#c92a2a; font-weight:700; padding: 0 8px;")
             self._pending_flags = self._pending_project = True
 
+    def _flags_file_has_rows(self) -> bool:
+        try:
+            with open(self.selection_file, encoding="utf-8") as handle:
+                return sum(1 for _ in zip(range(2), handle)) > 1
+        except OSError:
+            return False
+
     def _write_flags(self) -> None:
         self._wait_for_writer()
+        if self.catalog is not None and not self.catalog.records and self.selection_file \
+                and self._flags_file_has_rows():
+            # Nothing loaded (files missing or not processed): never replace saved flags with an empty file.
+            self.save_indicator.setText("⚠ Flags not saved: no particles loaded — the saved flags file was kept")
+            self.save_indicator.setStyleSheet("color:#c92a2a; font-weight:700; padding: 0 8px;")
+            return
         if self.catalog and self.selection_file:
             try:
                 self.catalog.save_selection_file(self.selection_file)
@@ -5870,7 +6201,8 @@ class CalibrationWindow(QMainWindow):
             values = []
             for r in self.catalog.records:
                 val = {"length": r.length_um, "width": r.width_um, "focus": r.focus,
-                       "x": r.image_x_px, "y": r.image_y_px, "illum": r.local_illum}.get(key)
+                       "x": r.image_x_px, "y": r.image_y_px, "illum": r.local_illum,
+                       "cutoff": r.cutoff_pct}.get(key)
                 if key == "ratio":
                     val = self._metric_value(r, "ratio")
                 if val is not None and math.isfinite(val):
@@ -5897,7 +6229,8 @@ class CalibrationWindow(QMainWindow):
                 time_min=self._read_time(self.time_low) if self.time_filter_checkbox.isChecked() else None,
                 time_max=self._read_time(self.time_high) if self.time_filter_checkbox.isChecked() else None,
                 ratio_min=values["ratio_min"], ratio_max=values["ratio_max"],
-                illum_min=values["illum_min"], illum_max=values["illum_max"])
+                illum_min=values["illum_min"], illum_max=values["illum_max"],
+                cutoff_min=values["cutoff_min"], cutoff_max=values["cutoff_max"])
         except ValueError as exc:
             QMessageBox.warning(self, "Filters", str(exc))
             return

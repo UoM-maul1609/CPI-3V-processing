@@ -150,3 +150,54 @@ def test_multi_size_fit_tests_the_L_scaling():
 def test_single_size_keeps_fresnel_scaling(table):
     m = fit_model(table)
     assert not m.size_L_power_fitted and m.size_L_power == 2.0 and m.focus_L_amp == 0.0
+
+
+def test_size_measure_choice_is_used_and_remembered(tmp_path):
+    from calibration.sizing import CalibrationTable, SizingModel
+    rows = [{"actual_length_um": "40", "length_um": "45", "deq_um": "41", "focus": "20", "d_signed_plane": "0.1"}]
+    assert CalibrationTable.from_rows(rows).length[0] == 45
+    t = CalibrationTable.from_rows(rows, "deq")
+    assert t.length[0] == 41 and t.size_measure == "deq"
+    m = SizingModel(size_measure="deq")
+    m.save(tmp_path / "m.json")
+    assert SizingModel.load(tmp_path / "m.json").size_measure == "deq"
+
+
+def test_scatter_fitted_per_side():
+    import numpy as np
+    from sizing_synth import synth_table
+    from calibration.sizing import fit_model, SizingModel
+    t = synth_table()
+    rng = np.random.default_rng(3)
+    neg = t.d < 0
+    t.length = t.length * np.where(neg, np.exp(rng.normal(0, 0.06, len(t.length))), 1.0)   # extra scatter, − side
+    m = fit_model(t)
+    assert m.size_sigma_minus is not None
+    assert m.sigma_length(100.0, -0.3) > 1.5 * m.sigma_length(100.0, 0.3)
+    old = SizingModel()                                    # models saved before v14.7: one scatter for both sides
+    assert old.sigma_length(100.0, -0.3) == old.sigma_length(100.0, 0.3)
+
+
+def test_pixel_size_set_and_fitted():
+    """Data processed with a wrong pixel size: setting the right one, or fitting it, recovers the sizes."""
+    import numpy as np
+    from sizing_synth import synth_rows
+    from calibration.sizing import CalibrationTable, fit_model, retrieve
+    rows = []
+    for k, s in enumerate((40.0, 100.0)):
+        for r in synth_rows(seed=k + 7, size=s):
+            r["batch"] = f"{s}-{r.get('batch', '')}"
+            r["length_um"] = str(float(r["length_um"]) * 1.06)          # pixel size 6% too large in processing
+            rows.append(r)
+    t = CalibrationTable.from_rows(rows)
+    fitted = fit_model(t, pixel_mode="fitted")
+    assert fitted.pixel_mode == "fitted" and fitted.scale == pytest.approx(1.0, abs=1e-6)
+    assert fitted.length_factor == pytest.approx(1 / 1.06, rel=0.03)
+    set_ = fit_model(t, pixel_mode="set", pixel_set_um=2.3 / 1.06)
+    assert set_.length_factor == pytest.approx(1 / 1.06) and set_.scale == pytest.approx(1.0, abs=1e-6)
+    near = np.abs(t.d) < 0.1
+    r = retrieve(fitted, t.length[near], t.focus[near], t.illum[near], side="both")
+    err = np.nanmedian(np.abs(r["L_median"] - t.true_length[near]) / t.true_length[near])
+    assert err < 0.05
+    with pytest.raises(ValueError):
+        fit_model(CalibrationTable.from_rows([r for r in rows if r["batch"].startswith("40")]), pixel_mode="fitted")

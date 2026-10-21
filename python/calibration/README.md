@@ -74,9 +74,22 @@ import.
 columns let one CSV hold several runs. If the same timestamp appears with
 different positions (overlapping series), you get a warning so you can
 restrict the import. Each particle takes the most recent stage position at
-or before its `ROI_N.Time` (zero-order hold, no look-ahead). Legacy
-whitespace-separated position logs (`X Z dd/mm/yy HH:MM:SS`) are also
-accepted.
+or before its `ROI_N.Time` (zero-order hold, no look-ahead). If that row has
+an `end_time_exclusive` and the particle is at or after it, the stage was
+between positions, so the particle gets no position (v14.16). A blank end
+means "until the next row starts". Legacy whitespace-separated position logs
+(`X Z dd/mm/yy HH:MM:SS`) are also accepted.
+
+**Which time basis.** Since v14, an ROI's time is the time of the camera frame
+it came from. So use stage times taken from the frames (`full_frame`), not the
+older `roi` times. The import checks this for you. Particles are recorded in
+bursts after each stage move, so each burst should get one position. If
+bursts are split between two positions, you are warned. That is the usual
+sign of the wrong time basis, or of a time rounded into a burst.
+
+On 21/3/02 the `roi` basis split 93 of 157 bursts and gave 19 whole bursts
+(11,456 flagged particles) the neighbouring step's position. The `full_frame`
+basis split 1 (a stage move logged during a long burst).
 
 When stage positions load, the X axis of the focus/size plots switches to
 **Stage X** automatically.
@@ -420,6 +433,70 @@ with **B**) and a coloured status badge. You can:
 
 **←/→** step through the browse list from any tab except the Gallery.
 
+### Measuring on images (Tools ▸ Measure images…, Ctrl+M)
+
+This opens a separate window for measuring distances by hand. Use it for a
+graticule, to check a particle's size, or for particles whose size isn't known.
+The **📏 Measure on this ROI / full frames…** button on the Particle tab opens
+it on the current particle.
+
+- **What to view.** Choose one of the project's MAT files, or open another
+  one. The list on the left can show:
+  - the *full frames* in that file (full-size images and ROIs at least
+    512 × 512 px);
+  - *all ROIs* in that file (or type a number under **Go to ROI**);
+  - the *backgrounds* from the same folder's `full_backgrounds.mat`;
+  - *camera frames rebuilt*. The CPI saves only the ROIs from each camera frame
+    (plus occasional full backgrounds). This option puts each frame's ROIs (all
+    ROIs with the same time) back at their positions on the background nearest
+    in time, with the ROI boxes and stored outlines drawn on. **Whole camera
+    frame of this ROI** jumps from an ROI to its frame. Without a
+    `full_backgrounds.mat`, the ROIs are drawn on grey.
+
+  **Open image file…** opens a PNG, TIFF, BMP or JPEG instead.
+- **Orientation.** All images in the workbench (Particle tab, gallery, hover
+  previews and this window) are drawn the way the camera sees them: camera X
+  across and Y down, the same way round as the Camera X–Y plot. (Since v14.16.
+  Before that they were drawn transposed, i.e. mirrored about the diagonal.)
+  Inside an ROI, x and y count from its corner. The cursor readout and the CSV
+  also give absolute camera coordinates (the ROI corner plus the position in
+  the ROI).
+- **Measuring.**
+  - Left-drag to draw a line at any angle. Hold **Shift** to keep it at 0°,
+    45° or 90°.
+  - Drag either end of a line to adjust it. Click a line to select it, and
+    press **Delete** to remove it.
+  - The wheel zooms about the pointer, and right- or middle-drag pans. Pixels
+    stay sharp squares, so ends can be placed to a fraction of a pixel when
+    you zoom in.
+  - Coordinates are in pixels of the image as shown: a pixel's centre is at
+    (column + 0.5, row + 0.5).
+- **What's shown.**
+  - Each line's length in px, its angle, and its length in µm when *Also show
+    µm* is ticked with a pixel size.
+  - The mean ± sd of the lines on that image.
+  - The brightness profile along the selected line, with a little either side.
+    It helps you put the ends on edges consistently.
+  - *Show stored outline* draws the outline from the processing over the ROI.
+  - *Stretch contrast* helps with faint graticules.
+- **Pixel size from a graticule.** Draw a line across a known distance (e.g. N
+  divisions), select it, and use **Pixel size from selected line…**. Enter the
+  true length in µm and the pixel size is set from it.
+- **Export.**
+  - **Export image as PNG** writes the image enlarged with sharp pixels (auto:
+    about 1000 px across), with the lines and their lengths, the outline if
+    shown, a scale bar if a pixel size is set, and a caption naming the file,
+    image and time.
+  - **Export all measurements as CSV** writes every line measured in the
+    session, on every image: file, image, coordinates, length in px and µm,
+    and angle.
+
+Measurements are kept per image while the window is open, so you can move
+between images and come back to them. They are not saved in the project:
+export the CSV to keep them.
+
+It can also run on its own: `python -m calibration.measure_window file.mat image.png …`.
+
 ---
 
 ## 9. Median traces
@@ -752,11 +829,70 @@ To show what a new edge method changes, reprocess a copy of the data (see the
 main README, section 3.6). Then:
 
 1. **File ▸ Copy project onto reprocessed data…** gives the same particles,
-   flags, labels, batches and X/Z on the new measurements.
+   flags, labels, batches and X/Z on the new measurements. Each flagged ROI is
+   found in the new MAT file by its raw pixels and corners, not by its time, so
+   the flags carry across even if reprocessing renumbers the ROIs or changes
+   their times. It reports how many it matched. This needs the original MAT
+   files to still be where the project points; otherwise it falls back to
+   matching by time and camera position.
 2. **Calibration ▸ Compare processing runs…** puts the two calibrations side
    by side.
 
-**Focus on transmittance (new edge method)** is available as a plot metric.
+**Focus on transmittance (new edge method)** is available as a plot metric,
+as are the **equivalent-area diameter** and its ratio to the actual size.
+
+**Normalised distance** Zd = λd/(L/2)² (λ = 0.85 µm, L = the label's actual
+size) is available as an X axis. It is signed like d and defined only for
+labelled particles. Diffraction theory predicts that apparent size / actual
+size is a function of Zd alone, so the three bead sizes should lie on one
+curve against it.
+
+**Pixel size.** Fit size & focus model ▸ Pixel size: *As processed* (default)
+uses the sizes as they are, and the fitted scale s absorbs any pixel-size error.
+*Set to…* rescales every measured size to a pixel size you know (for example
+from a graticule). *Fit from the bead sizes* finds the factor that makes the
+beads' sizes right; it needs two or more true sizes, so that the scale and the
+edge offset can be told apart. With either, s is fixed at 1, so the pixel size
+alone carries the scale. The model records it (`length_factor`, `pixel_mode`),
+retrieval applies the same factor, and the report gives the pixel size used.
+On the command line: `cpi-fit --pixel-um 2.25` or `cpi-fit --fit-pixel`. A
+fitted pixel size is an effective one: it also absorbs any proportional bias
+of the edge rule, so check it against a graticule.
+
+**Size measure.** Fit size & focus model ▸ Size measure chooses what is
+calibrated: the length (maximum Feret) or the equivalent-area diameter (needs
+the transmittance edge method). The saved model remembers it, and
+`cpi-retrieve` reads the same measure.
+
+### Particle shape (Park et al. 2026) and errors by particle type
+
+**Particle shape terms** in the fit dialog (`cpi-fit --shape`) add the
+effect of shape, with Ar = measured roundness (projected area ÷ circle of the
+same length):
+
+- **Size:** the defocus variable becomes Zd / Ar^α. With α = 1 this is Park et
+  al.'s Z/(L²·Ar); here α is fitted.
+- **Focus:** the focus peak is multiplied by Ar^c.
+
+This needs particles of different shapes (beads and ice analogues) and is
+skipped if roundness hardly varies. Retrieval with a saved model uses each
+particle's roundness.
+
+On 21/3/02 beads plus col166 (Ar ≈ 0.36), α came out at 0 and the
+cross-validated error did not improve (7.0% → 7.3%). col166 is large, so its Zd
+is small. Small non-round analogues (Park's cross 20, rosette 41, bullet 45 and
+column 50 µm) are the real test: label them before deciding.
+
+For ice, calibrate on **Length (maximum Feret)**, Park's L. Equivalent-area
+diameter ÷ length depends on habit (0.56 for col166).
+
+The validation report also lists the error **by particle type** (label), with
+each type's median roundness, so a habit-dependent bias is not hidden in the
+average.
+
+The fit window now gives the figure most of the space. Settings are in a
+column on the left, figure and report are in tabs, the figure has a zoom/pan
+toolbar, and it redraws to fit when the window is resized.
 
 ### Validation is out-of-sample
 
@@ -1006,6 +1142,15 @@ safe either way.
 ---
 
 ## 16. Tips and troubleshooting
+
+**A project opens with no particles.** Its MAT files are missing, or their
+processing hasn't finished: files from the first processing step contain
+`ROI_N` but no `dat`. Since v14.17 the workbench says which files are affected
+and why. While nothing is loaded it leaves the saved flags file and the
+project's file list untouched. Finish the processing (for example
+`batchProcess.py <folder> --only-stats --backgrounds all ...`), wait until
+every file is done, then open the project again.
+
 
 - **A box skipped some particles.** In a box that mixes unreviewed and
   flagged particles, only unreviewed ones are taken (status bar: *skipped N

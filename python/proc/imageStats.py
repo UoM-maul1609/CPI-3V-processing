@@ -12,8 +12,10 @@ from skimage import measure
 from tqdm import tqdm
 
 try:
+    from backgroundCheck import choose_background
     from edgeDetect import EdgeOptions, measure_transmittance, options_json
 except ImportError:  # imported as proc.imageStats
+    from .backgroundCheck import choose_background
     from .edgeDetect import EdgeOptions, measure_transmittance, options_json
 
 NB = 30
@@ -62,7 +64,7 @@ def _remove_centre_strip(arr, start_x):
     return arr
 
 
-def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=None):
+def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=None, bank=None):
     """Particle statistics for every particle ROI.
 
     ``options`` (an EdgeOptions, a dict or a JSON string) selects the edge
@@ -80,7 +82,7 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=Non
     elif isinstance(options, dict):
         options = EdgeOptions(**options)
     if options.method == "transmittance":
-        return _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options)
+        return _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options, bank)
 
     image_type = 33857 if cpiv1 else 89
     ind = np.flatnonzero(ROI_N["imageType"][0, 0][:, 0] == image_type)
@@ -213,14 +215,15 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=Non
                 pbar.update(1)
                 continue
 
-            length = major_axis * PIXEL_SIZE_UM
-            area = filled_area * PIXEL_SIZE_UM**2
-            if area <= PIXEL_SIZE_UM**2:
+            px_um = float(options.pixel_um)
+            length = major_axis * px_um
+            area = filled_area * px_um**2
+            if area <= px_um**2:
                 pbar.update(1)
                 continue
 
             dat["len"][roi_index] = length
-            dat["wid"][roi_index] = minor_axis * PIXEL_SIZE_UM
+            dat["wid"][roi_index] = minor_axis * px_um
             dat["area"][roi_index] = area
             dat["round"][roi_index] = filled_area / (
                 np.pi / 4.0 * major_axis**2
@@ -316,7 +319,7 @@ def _unwrap(value):
     return v
 
 
-def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options):
+def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options, bank=None):
     """Transmittance edge method (see edgeDetect.py); variable-length boundaries."""
     image_type = 33857 if cpiv1 else 89
     ind = np.flatnonzero(ROI_N["imageType"][0, 0][:, 0] == image_type)
@@ -327,8 +330,18 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
         "orientation": nan(nroi, 1), "centroid": nan(nroi, 2),
         "len_ellipse": nan(nroi, 1), "perimeter": nan(nroi, 1), "deq": nan(nroi, 1),
         "T_min": nan(nroi, 1), "T_centre": nan(nroi, 1), "T_border": nan(nroi, 1), "edge_level_used": nan(nroi, 1),
-        "n_boundary": np.zeros((nroi, 1)), "edge_touch": np.zeros((nroi, 1)),
+        "n_boundary": np.zeros((nroi, 1)), "edge_touch": np.zeros((nroi, 1)), "outline_radial": np.zeros((nroi, 1)),
+        "cutoff_pct": nan(nroi, 1),
+        "bg_source": np.zeros((nroi, 1)), "bg_dt_s": nan(nroi, 1),
     }
+    use_cpiview = bool(getattr(options, "cpiview", False))
+    if use_cpiview:
+        try:
+            from cpiviewMetrics import FIELDS as CPV_FIELDS, cpiview_metrics
+        except ImportError:  # pragma: no cover
+            from .cpiviewMetrics import FIELDS as CPV_FIELDS, cpiview_metrics
+        for key in CPV_FIELDS:
+            dat[key] = nan(nroi, 1)
     if b_flag:
         foc = np.zeros(nroi, dtype=[("focus", "float"), ("focus_T", "float"), ("boundaries", "O")])
         for i in range(nroi):
@@ -352,18 +365,46 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
                 continue
             image = image.astype(np.float64)
             background = background.astype(np.float64)
+            start = int(ROI_N["StartX"][0, 0][0, roi_index])
+            prepare = (lambda a, s=start: _remove_centre_strip(a, s)) if cpiv1 else None
             if cpiv1:
-                start = int(ROI_N["StartX"][0, 0][0, roi_index])
                 image = _remove_centre_strip(image, start)
                 background = _remove_centre_strip(background, start)
+            if getattr(options, "bg_check", True):
+                # a slide-mounted particle can be in its own background: use a clean one instead
+                try:
+                    corners = (start, int(ROI_N["EndX"][0, 0][0, roi_index]) + 1,
+                               int(ROI_N["StartY"][0, 0][0, roi_index]), int(ROI_N["EndY"][0, 0][0, roi_index]) + 1)
+                    when = float(ROI_N["Time"][0, 0][roi_index, 0])
+                except (ValueError, KeyError, IndexError):      # no ROI corners: only the fitted fallback is possible
+                    corners, when = (0, image.shape[0], 0, image.shape[1]), float("nan")
+                background, source, dt_s = choose_background(
+                    image, background, bank if np.isfinite(when) else None, when, corners, prepare)
+                dat["bg_source"][roi_index] = source
+                dat["bg_dt_s"][roi_index] = dt_s
             try:
                 res = measure_transmittance(image, background, options)
             except (ValueError, IndexError, FloatingPointError):
                 res = None
+            if use_cpiview:
+                particle = None
+                if res is not None and len(res.get("boundary", ())) >= 3:
+                    from skimage.draw import polygon as _polygon
+                    b = np.asarray(res["boundary"], float)
+                    rr, cc = _polygon(b[:, 0], b[:, 1], image.shape)
+                    particle = np.zeros(image.shape, bool)
+                    particle[rr, cc] = True
+                try:
+                    cpv = cpiview_metrics(image, background, particle)
+                except (ValueError, IndexError, FloatingPointError, np.linalg.LinAlgError):
+                    cpv = {}
+                for key, value in cpv.items():
+                    dat[key][roi_index] = value
             if res is None:
                 continue
             for key in ("len", "wid", "area", "round", "orientation", "len_ellipse", "perimeter", "deq",
-                        "T_min", "T_centre", "T_border", "n_boundary", "edge_touch", "edge_level_used"):
+                        "T_min", "T_centre", "T_border", "n_boundary", "edge_touch", "edge_level_used",
+                        "outline_radial", "cutoff_pct"):
                 dat[key][roi_index] = res[key]
             dat["centroid"][roi_index, :] = res["centroid"]
             foc[roi_index]["focus"] = res["focus"]

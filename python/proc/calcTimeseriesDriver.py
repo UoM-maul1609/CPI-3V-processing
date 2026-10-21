@@ -17,10 +17,40 @@ def _field_names(mat_struct):
     return set(names or ())
 
 
-def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cpiv1):
+DEFAULT_PIXEL_UM = 2.3
+
+
+def _frame_size_px(path1, cpiv1):
+    """(width, height) of a full camera frame in pixels, from the folder's backgrounds if possible."""
+    try:
+        full = sio.loadmat(os.path.join(path1, "full_backgrounds.mat"), variable_names=["FULL_BG"])["FULL_BG"]
+        frame = np.asarray(full[0, 0]["IMAGE"][0, 0][0, 0]["BG"])
+        if frame.ndim == 2 and min(frame.shape) >= 512:
+            return int(frame.shape[0]), int(frame.shape[1])
+    except Exception:
+        pass
+    return (1024, 1022) if cpiv1 else (1280, 1024)
+
+
+def _processing_pixel_um(dat):
+    """Pixel size the file was processed with (dat.proc_options), else the nominal 2.3 µm."""
+    import json
+    try:
+        raw = dat["proc_options"][0, 0]
+        text = str(np.asarray(raw).ravel()[0])
+        value = float(json.loads(text).get("pixel_um", DEFAULT_PIXEL_UM))
+        return value if np.isfinite(value) and value > 0 else DEFAULT_PIXEL_UM
+    except Exception:
+        return DEFAULT_PIXEL_UM
+
+
+def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cpiv1, max_cutoff=None):
+    """``max_cutoff``: leave out particles with more than this % of their outline on the ROI edge
+    (dat.cutoff_pct; files without it are not filtered)."""
     path1 = normalise_directory(path1)
-    sa = 1280.0 * 1024.0 / np.sqrt(2.0) * 2.3e-6**2
-    sv = sa * np.sqrt(2.0) * 3e-3
+    frame_w, frame_h = _frame_size_px(path1, cpiv1)
+    pixel_sizes = []
+    cut_removed = 0
 
     background_data = sio.loadmat(
         os.path.join(path1, "full_backgrounds.mat"), variable_names=["t_range"]
@@ -74,8 +104,15 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
             legacy = sio.loadmat(mat_file, variable_names=["ROI_N"])
             image_types = legacy["ROI_N"]["imageType"][0, 0][:, 0]
 
+        pixel_sizes.append(_processing_pixel_um(dat))
         focus = dat["foc"][0, 0]["focus"][0, :]
         selected = (image_types == image_type_value) & (focus > foc_crit)
+        if max_cutoff is not None and "cutoff_pct" in _field_names(dat):
+            cutoff = np.ravel(np.asarray(dat["cutoff_pct"][0, 0], float))
+            if cutoff.size == selected.size:
+                selected &= ~(cutoff > max_cutoff)          # NaN (unknown) is kept
+                cut_removed += int(np.count_nonzero((image_types == image_type_value) & (focus > foc_crit)
+                                                    & (cutoff > max_cutoff)))
         ind = np.flatnonzero(selected)
 
         # Number of image frames in each time window.
@@ -126,6 +163,20 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
             )
             timeser["conc2ar"] += histogram
 
+    # Sample area: the image projected onto the plane across the flow (object plane at 45°), using the
+    # actual frame size and the pixel size the files were processed with (dat.proc_options).
+    pixel_um = float(np.median(pixel_sizes)) if pixel_sizes else DEFAULT_PIXEL_UM
+    if pixel_sizes and np.ptp(pixel_sizes) > 1e-9:
+        print(f"WARNING: files were processed with different pixel sizes {sorted(set(pixel_sizes))}; using {pixel_um}")
+    sa = frame_w * frame_h / np.sqrt(2.0) * (pixel_um * 1e-6) ** 2
+    sv = sa * np.sqrt(2.0) * 3e-3
+    print(f"Sample area: {frame_w} x {frame_h} px at {pixel_um:g} µm/px -> {sa * 1e6:.4f} mm^2")
+    if max_cutoff is not None:
+        print(f"Left out {cut_removed} particles cut off by the ROI edge by more than {max_cutoff:g}%")
+        timeser["max_cutoff_pct"] = float(max_cutoff)
+    timeser["pixel_um"] = pixel_um
+    timeser["frame_px"] = np.array([frame_w, frame_h])
+
     # Scale counts by the effective sampled volume.  Broadcasting avoids the
     # two large tiled arrays created by the old implementation.
     effective_volume = (
@@ -151,9 +202,9 @@ if __name__ == "__main__":
     import sys
     from io_utils import parse_bool
 
-    if len(sys.argv) != 9 or sys.argv[1] != "worker":
+    if len(sys.argv) not in (9, 10) or sys.argv[1] != "worker":
         raise SystemExit(
-            "usage: calcTimeseriesDriver.py worker PATH FOC DT DS VEL OUTPUT CPIV1"
+            "usage: calcTimeseriesDriver.py worker PATH FOC DT DS VEL OUTPUT CPIV1 [MAX_CUTOFF_PCT]"
         )
     worker_path = normalise_directory(sys.argv[2])
     worker_files = sorted(
@@ -168,4 +219,5 @@ if __name__ == "__main__":
         float(sys.argv[6]),
         sys.argv[7],
         parse_bool(sys.argv[8]),
+        float(sys.argv[9]) if len(sys.argv) == 10 else None,
     )
