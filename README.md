@@ -791,3 +791,252 @@ The tests cover:
 
 `python/README` and `matlab/README` are older plain-text notes. This file
 supersedes `python/README`.
+
+### Calibration edge-method laboratory (read-only)
+
+From **Review → Flag history**, Ctrl/Shift-click one or more saved batches and
+**Test edges →** to open **④ Edge lab (temporary)**. Add multiple independently
+coloured algorithm trials (relative/fixed transmittance, radial, steepest gradient
+or raw contour) to the same size/focus plots. Select, hide and remove individual
+trial curves; hover or right-click a point to inspect that trial's image and
+boundary. Copy production processing flags from the settings or a selected trial.
+CPIview 2 focus can be computed separately and compared with ordinary edge and
+normalised transmittance gradients. The Gallery tab can overlay both saved and
+experimental boundaries and show size, stage position and distance to the object
+plane. Trial measurements are only held in memory and **never committed**; see
+`python/calibration/README.md` for details and production CLI caveats.
+
+Edge Lab update: adjustable fixed-transmittance contour, faint-particle detection independent of sizing threshold, and per-particle transmittance-profile diagnostics. See `python/calibration/README.md`.
+
+
+### Calibration batch → NetCDF (raw ROIs and label data)
+
+The calibration workbench now has **Review → Flag history → Export selected
+batch(es) to NetCDF…**. It writes the original ROI and matching per-ROI
+background for every selected particle, together with stage X/Z, signed
+distance from the saved object plane, true label length/width, processed length,
+and batch memberships. ROIs are losslessly packed at their original variable
+sizes, with no boundary processing. The exporter accepts both structured MATLAB
+arrays and the cell-array-of-structs format produced by CPI processing; original
+MAT files are read-only and need no conversion. See `python/calibration/README.md` for the
+NetCDF variables and a reconstruction example. Install `.[gui,output]` for
+compressed NetCDF4 export; small exports work with the core SciPy install.
+
+**Calibration workbench Edge Lab (October 2026):** Stored batches can now be
+added as selectable, instant reference curves with their saved outlines (no
+edge recalculation). New experimental **Signed shadow integral · fitted circle**
+trials measure the net light deficit through an enlarged fitted circle and plot
+the resulting *uncalibrated shadow-equivalent diameter* against signed position
+or as a ratio to known bead diameter. Curve colours match the saved boundaries,
+trial edges or integration apertures displayed on particle inspection. The Edge Lab trial remains temporary; **production processing** now offers
+`--shadow-circle-padding 8` to store the circle measurement as an additional
+size without changing ordinary morphology/focus. See
+`python/calibration/README.md` for instructions and limitations.
+
+
+### Fitting Bench: shadow size + normalised, size-dependent focus (2026-10-22)
+
+The **Fit size & focus model** dialog has a fitting-recipe picker; **Original size and focus** is the initial selection:
+
+- **Circle shadow size + normalised focus (experimental)**: signed-shadow circle diameter
+  `dat.shadow_deq` (µm) fitted to labelled bead diameter by an affine
+  calibration, independently of position. Original Feret length, width,
+  roundness and contour are preserved as separate measurements.
+- **Contour size + normalised focus**: conventional edge size calibration,
+  but fit the **raw CPI focus divided by local illumination**.
+- **Original size and focus**: unchanged existing model.
+
+The focus model for the first two presets is
+`Fraw/Ilocal = B + A0*(L/Lref)^a * exp[-(|d-d0|/(w_±0*(L/Lref)^k))^p]`.
+Fit `p` (or set `p=2`), fit separate positive/negative widths, and enable or
+fix diameter dependence of peak and width. The two size exponents are
+constrained nonnegative when fitted. Change the focus/illumination threshold
+(default 0.12) to see the predicted **depth of field versus true size**, the
+acceptance-weighted depth of field, and size-error histograms from held-out
+batches. Threshold 0.12 is a UI starting value, **not a physical instrument
+cutoff**. The validation checkbox controls whether the slower held-out testing
+is run. Signed-side ambiguity is retained in retrieval and evaluation.
+
+**Use without reprocessing:** With a single currently open project, choose
+"Compute circle sizes for this project (temporary)" in the fitting dialog,
+choose the circle expansion in pixels, and run the fit. The image/background
+processing happens in a worker and is never committed. For a durable extra
+column in processed MAT files, run on a **copy** of the MAT data:
+
+```
+python python/proc/batchProcess.py /path/to/COPY --only-stats --shadow-circle-padding 8
+```
+
+Then reload and save the calibration project to export `shadow_deq_um` and
+`shadow_radius_px` in its particle table. Fixed-radius circles that extend
+outside the ROI are now integrated using the visible pixels only (the unseen
+part is assigned transmittance T=1, hence zero signed deficit). The fraction of
+the aperture seen is recorded in `shadow_coverage`; invalid/nonpositive integrals
+remain NaN. A cropped circle may underestimate size if missing pixels would
+have contained shadow or diffraction, so inspect low-coverage measurements. New processing also stores
+`dat.local_illum_bg`, a local background-beam estimate corrected for
+multiplicative laser brightness differences where the ROI border provides
+an adequate reference; older processing uses the historical image-border
+illumination. This correction cannot resolve a strongly contaminated border,
+changing beam profile or uncorrected camera pedestal.
+
+The same fitting options are exposed via `cpi-fit ... --fit-recipe circle`
+(or `contour` / `original`), `--foc-crit 0.12`, `--fixed-gaussian`,
+`--symmetric-focus`, `--no-peak-size` and `--no-width-size`.
+
+**This is a calibrated shadow-equivalent size proxy, not a guarantee of the
+geometric diameter for all ice crystal types.** The model's held-out diagnostics
+should be checked separately for each material and particle habit.
+
+
+## Production defaults: contour, shadow size and focus (23 October 2026)
+
+`python/proc/batchProcess.py` now defaults to all of:
+
+- **Contour / morphology:** transmittance edge, relative shadow fraction `0.55`,
+  radial outline and one median-filter pass. This preserves conventional length,
+  area, roundness, boundary and original gradient focus (`dat.foc.focus`).
+- **Independent shadow size:** `dat.shadow_deq` from the signed transmittance
+  deficit in a fitted circular aperture at **+8 px**. It does not replace the
+  contour or focus. This uses a fixed margin, *not* automatic radius-to-plateau.
+- **Illumination:** `dat.local_illum_bg` retains the stored background's spatial
+  beam profile, multiplied by a median image/background ratio from ROI-border
+  pixels. The fitting recipe uses original focus **divided by** local illumination
+  (equivalent to multiplying by its reciprocal).
+
+All three are calculated when processing new data or recomputing statistics.
+Use `--shadow-circle-padding N` to override the circle margin,
+`--no-shadow-circle` to disable the extra size measurement, or
+`--edge-method legacy` to reproduce the older edge method. With `--only-stats`,
+processing **writes to the MAT files**; use a copy. The fitting dialog **starts with the original size and focus fit** for all projects.
+The new circle-size / normalised-focus recipe is an **explicit experimental option**;
+for old projects without `shadow_deq`, select it and use the temporary
+"Compute circle sizes" button. Processing may still calculate `shadow_deq`
+without selecting it for fitting.
+
+**Proposed, not yet default:** obtain the illumination scale from background
+pixels outside masks for *all* detectable particles and diffraction rings,
+instead of assuming the ROI border is clear. Estimating ring extent from a
+plateau in the signed integral is still research work; masks can consume the
+whole small ROI and leave no reliable illumination reference. Keep the current
+method until the masked estimator has been tested against the calibration data.
+
+### Circle-shadow sizing: Edge Lab / Fit workbench consistency (23 Oct 2026)
+
+When **Circle shadow size + normalised focus (experimental)** is selected, the
+upper-left fit diagnostic plots the **uncorrected signed-shadow equivalent
+diameter divided by the labelled true diameter**, precisely the observable
+shown as *Diameter / labelled true size (shadow = integral)* in Edge Lab.
+The size estimator is a signed integral of `1 - I / B_corrected` within a fitted
+circular aperture. The true label is used only for plotting and fitting the
+calibration, never as an input to the particle measurement.
+
+The lower-right panel displays **paired histograms** for the original contour
+equivalent-area diameter and the signed-shadow diameter, each divided by the
+same particle's labelled size. Only images with both measurements contribute.
+If contour equivalent-area diameter is unavailable, maximum Feret length is
+used and the legend states so. This panel does not depend on enabling the
+expensive held-out validation. In quick-fit mode the lower-left histogram is
+explicitly labelled as a raw fit-sample diagnostic, not held-out validation.
+
+The workbench fits **saved** `dat.shadow_deq` when present; selecting an 8 px
+spinbox value does not retroactively change saved results. To reproduce an
+Edge Lab trial exactly, select the same image set and press **Recompute circle
+sizes as in Edge Lab (temporary)**, matching aperture margin and processing
+settings. This uses the **saved boundary** in each MAT ROI (as Edge Lab does),
+which can differ from the freshly recalculated boundary used during batch
+processing if contour algorithms/settings changed. No MAT files are changed.
+
+### 2026-10-23 — experimental adaptive shadow-circle sizing and consistent backgrounds
+
+- **No change to production sizing defaults**: relative-transmittance radial contour at
+  fraction 0.55, existing gradient focus, and *fixed* signed-shadow integration
+  with an 8-pixel margin still run as before.
+- Edge Lab now offers **Circle radius → Automatic plateau (experimental)**. The
+  extra-radius control becomes a **maximum search**. Compare with the fixed +8 px
+  trial before accepting results. The same experimental method can be enabled in
+  processing with `--shadow-circle-auto --shadow-circle-max-padding 30`.
+- Automatic radius selection requires a sustained plateau across two consecutive
+  four-pixel intervals (rather than a single zero crossing), using a relative
+  1.5% stability criterion. If no trustworthy plateau exists, it reports no
+  measurement. The result is **not** a true particle boundary.
+- Both integration modes now assign **T=1 to unseen pixels outside the ROI**.
+  Such pixels contribute zero signed deficit; no annular-mean extrapolation is
+  applied. Fixed-radius circles are not rejected just because they cross the ROI.
+  `shadow_coverage` reports the fraction of the integration circle observed, and
+  `shadow_extrapolated` remains false. If there was shadow in the unseen area,
+  the reported diameter may be underestimated.
+- **Automatic plateau selection remains conservative**: to avoid a false plateau
+  caused by reaching the image boundary, it requires at least 85% coverage of
+  each annulus used to establish convergence; otherwise it returns no reliable
+  plateau. The fixed-radius result can still be used with its coverage warning.
+- **Important: current historical bead ROIs may be too closely cropped to show
+  a signed-shadow plateau.** A trial on the uploaded 15, 40 and 100 µm bead
+  datasets found that the ROI limits were encountered before a robust plateau
+  could be demonstrated. Keep fixed +8 px for current production analysis;
+  the automatic method is for controlled comparison and larger ROIs.
+- When the processor substitutes a clean full-frame background or a fitted
+  background, it now saves that actual replacement as a *sparse* `BG_USED`
+  MATLAB cell array (only changed ROI entries). The original `BG` remains
+  intact. Edge Lab uses `BG_USED` where available, and applies the CPI 1.0
+  centre-strip correction consistently. This takes effect **after reprocessing
+  with this version**; older MAT files cannot recover replacements that were
+  not stored. Existing records without `BG_USED` use `BG`.
+- In Edge Lab right-click a shadow-trial particle and select **Cumulative shadow
+  integral vs circle radius…** for a per-particle convergence and ROI-coverage
+  diagnostic. No preview changes source MAT files.
+
+Example to trial adaptive radius on a **copy** of processed CPI 1.0 MAT data:
+
+```bash
+python python/proc/batchProcess.py "/path/to/calibration_COPY" --only-stats --cpiv1 \
+  --shadow-circle-auto --shadow-circle-max-padding 30 --pixel-um 2.46
+```
+
+The automatic method may legitimately return NaN for many historical ROIs.
+For established processing, omit the two `--shadow-circle-*auto/max*` flags.
+
+#### Microscope and SEM reference images (new)
+
+The **Labels** tab now provides **Microscope / SEM reference images…** for any
+bead or ice-analogue label. Attach multiple images per label, automatically
+suggest boundaries, choose the intended object or trace it with an editable
+circle or straight-line polygon, draw a reference scale and enter its length,
+then fit a minimum enclosing circle. Measurements include maximum dimension,
+object area, enclosing-circle area and their area ratio. The full-resolution
+**Save annotated image as PNG…** export includes the label and the overlays.
+
+Microscopy images and editable annotations are stored beside the shared labels
+library in `microscopy/images/` and `microscopy/index.json` and do not modify
+MAT files, CPI contours or the labels' nominal bead sizes.
+
+
+### Shared CPI reference library and stable Edge Lab focus
+
+The calibration GUI now recognises `CPI_cals/ReferenceLibrary/` from either
+`CPI_cals/CPICalibration/...` or `CPI_cals/ICEAnalogues/CPI/...`. Labels live
+in `ReferenceLibrary/labels.json`; microscopy images and editable annotations
+live in its `microscopy/` folder. The Labels page allows automatic discovery or
+a persistent manually selected folder, with consent before copying a legacy
+library. Bright, black-outlined annotation contours remain legible on light
+and dark particle images. Edge Lab shadow sizing changes the size measurement
+only: both conventional focus and transmittance-gradient focus always reflect
+the saved processed ROI values rather than the selected Edge Lab size trial.
+
+### Area ratio and reference-corrected Edge Lab shadow sizing (experimental)
+
+Processing now stores `dat.area_ratio_circle` = projected CPI contour area / area of its minimum enclosing circle. This is a per-ROI **CPI morphology ratio**, not the independent optical/SEM area ratio.
+
+In Edge Lab, Size → **Shadow diameter / true size · area-ratio corrected** uses two explicit reference inputs: **Microscopy area ratio** `R_A` (default 0.30, change for your label) and **Reference Dshadow/Ltrue** `R_ref` (default 0.40, change for your particle type). The displayed curve is each particle's signed-shadow diameter / labelled true maximum size, multiplied by `sqrt(R_A)/R_ref`. For the example 0.30 and 0.40 the factor is 1.3693. These are user-configured example references, not automatically assigned microscopy measurements. They are applied across the selected curves, so mixed types should be compared separately. The original raw trial and focus values remain available; no MAT labels or ROI images are modified in Edge Lab. The reported correction is empirical and should not be called extinction efficiency.
+
+### Shadow / shape validation (experimental)
+
+The fitting dialog has a **Shadow / shape check** tab for the circle-shadow
+recipe. It plots `(D_shadow / labelled_length)^2` against the CPI contour
+area divided by the Feret-circle area, and shows their ratio as a histogram.
+These are matched-particle *diagnostics*, not corrections. No SEM/microscopy
+information is required for actual CPI images; microscopy reference
+measurements must never be treated as if available on unknown particles.
+The existing circle sizing fit, default established fit, and production
+processing are unchanged by this diagnostic. The older Edge Lab manually
+specified microscopy correction remains experimental and is not used in fits.

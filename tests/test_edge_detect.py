@@ -98,7 +98,7 @@ def test_relative_mode_keeps_faint_small_particles():
     fixed = EdgeOptions(method="transmittance", edge_level=0.5, pixel_um=1.0)
     rel = EdgeOptions(method="transmittance", edge_mode="relative", edge_fraction=0.5, pixel_um=1.0)
     im, bg = shape_image(disc(10.0), blur=3.5)          # shallow shadow: darkest T ~ 0.4
-    assert measure_transmittance(im, bg, fixed) is None  # a fixed level loses it
+    assert measure_transmittance(im, bg, fixed) is not None  # fixed mode no longer imposes T < 0.45 core
     r = measure_transmittance(im, bg, rel)
     assert r is not None and r["len"] == pytest.approx(10.0, abs=1.5) and r["edge_level_used"] > 0.6
     sizes = [measure_transmittance(*shape_image(disc(17.4), blur=b), rel)["len"] for b in (0.7, 1.5, 2.5, 3.5)]

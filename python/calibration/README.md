@@ -570,11 +570,13 @@ Other actions on the **Labels** tab:
 
 ### Shared across datasets, edited once
 
-- **There is one label library per computer**: `~/.cpi_calibration/labels.json`.
-  Every dataset uses it.
-- **To share it with your group**, put it on a shared drive and either set
-  the environment variable `CPI_CALIBRATION_LABELS=/path/to/labels.json` or
-  use **Labels → Use another library file…**.
+- **One label library per `CPI_cals` tree:** `CPI_cals/ReferenceLibrary/labels.json`.
+  Both `CPICalibration/` and `ICEAnalogues/CPI/` use this shared location.
+- **To choose a different location**, use **Labels → Choose reference library folder…**.
+  The choice is remembered. **Use CPI_cals/ReferenceLibrary automatically**
+  restores portable root discovery. An advanced `CPI_CALIBRATION_LABELS`
+  environment override remains supported. The legacy home library is only a
+  migration source (copying it requires confirmation).
 - **Particles store only the label name.** Their true size comes from the
   library, so **Edit / resize…** updates every particle carrying that label
   in every dataset.
@@ -1090,7 +1092,7 @@ each particle's time and ROI centre.
 | `calibration_selection.csv` | Same as above, used when **no project** is open. It sits next to the first data file and is reloaded automatically next time. | Immediately |
 | `<project>_particle_positions.csv` | One row per **accepted** particle: CPI type and name, label and true size, measured size and focus, stage X/Z, the X/Z it uses and where from (own / step), X−Xbest, Z−Zbest, `d_signed_plane`, `d_in_plane`, processing | On **Save project**, close, and before any fit or export (not after every click: it is large) |
 | `<project>_relative_positions.csv` | One row per (batch with its own X/Z, particle): stage X/Z, Xbest/Zbest, `x_minus_xbest`, `z_minus_zbest`, `z_p_radial`, `z_p_from_offsets`, `plane_normal_deg`, `d_signed_plane`, `d_in_plane` | Same as above |
-| `~/.cpi_calibration/labels.json` | The shared label library | When labels are created or edited |
+| `CPI_cals/ReferenceLibrary/labels.json` | Shared calibration + ice-analogue labels | When labels are created or edited |
 
 The status bar shows **● saving…** while a save is pending, then **✓ Saved
 hh:mm:ss**, or a red warning if saving failed (the save is then retried).
@@ -1199,3 +1201,343 @@ QT_QPA_PLATFORM=offscreen PYTHONPATH=python python -m pytest tests
 
 `test_gui_workflow.py` drives the window headless through select → refine →
 accept → skip → unflag → undo.
+
+---
+
+## Edge Lab: compare algorithms across multiple batches without saving any results
+
+1. In **Review → Flag history**, click a batch, or **Ctrl/Shift-click several**,
+   then **Test edges →**. The batch selection is the source for the **next** trial;
+   it does not remove any trials already on the graph.
+2. Choose a relative or fixed transmittance threshold, radial/steepest-gradient/
+   raw-contour outline, threshold fraction, median passes and Gaussian smoothing.
+   **Add trial to plot** snapshots all selected batch IDs and these settings and runs
+   the real detector on a worker thread. You can change settings and **Add trial**
+   again: every successful trial remains an independent, colour-coded curve. ROIs
+   shared between batches are analysed once per trial.
+3. The **Trials** list lets you select a dataset to inspect, untick it to hide its
+   curve, or **Remove selected**. Show/hide all is also available. The graph
+   overlays original measurements in grey and experimental points and binned
+   median traces in separate trial colours. Change X axis, size and focus metrics
+   without rerunning the detector.
+4. **Hover directly over a point** in either graph to preview that exact trial's
+   ROI with its cyan boundary. Click the curve to make that trial active.
+   **Right-click** to see the ROI and test boundary in the context menu, inspect
+   the larger Particle viewer (stored boundary red, selected trial cyan), or hide
+   or remove that trial.
+5. **Production CLI flags** updates as you change the controls. Press **Copy flags**
+   for the currently displayed input settings or **Copy selected flags** for the
+   original options of a stored trial. Example for a relative-radial 0.25 trial:
+
+   ```bash
+   --edge-method transmittance --edge-mode relative --outline radial --edge-fraction 0.25 --denoise 1 --smooth-sigma 0
+   ```
+
+   These are arguments to `python python/proc/batchProcess.py /path/to/data`;
+   they are not executed by the workbench. Add `--only-stats` **only for a COPY**
+   of a processed MAT directory: production processing overwrites MAT statistics.
+6. **CPIview focus** is selectable per trial. Turn on **CPIview focus** to compute
+   the independent CPIview 2 implementation (12 difference-image median passes,
+   16 boundary-normal gradient profiles; focus is peak/FWHM-based). Select
+   **CPIview 2 focus** or **CPIview edge FWHM** as the lower graph's metric.
+   The **ⓘ** button explains the contrast with the ordinary raw-difference
+   edge gradient and normalised transmittance-gradient metrics. CPIview is slower;
+   it is only available for trials calculated with that checkbox ticked, which
+   adds `--cpiview` to the copied command-line arguments.
+7. On the **Gallery** tab, tick **Stored boundary · red** and/or
+   **Active trial boundary · cyan**. The caption menu shows focus/length,
+   signed object-plane distance, stage X/Z, stored/tested diameter, or a
+   combination; full details are available in each thumbnail's tooltip. The
+   gallery keeps thumbnail/status selection controls separate from the read-only
+   experimental overlays.
+
+**Safety and reproducibility:** Edge Lab reads stored ROIs and backgrounds from
+processed MAT files, never writes them, and never alters the project's flags,
+labels, batches or calibration. Trial results are held only in memory and are
+cleared on project switch or close. The worker reads each MAT file once per trial
+and processes experiments sequentially to limit resource use. Gallery boundaries
+are fetched in MAT-file order to avoid excessive file reloads.
+
+**Important parity caveat:** the temporary preview uses the backgrounds already
+in the MAT files and disables automatic replacement with the external background
+bank. Full production `batchProcess.py` may substitute a different background.
+Processing CLI flags reproduce the displayed edge-processing settings but do not
+force identical background selection or a per-ROI pixel scale in a mixed dataset.
+Consequently some production outcomes may differ. Use an independent COPY for
+any production reprocessing comparison.
+
+
+### Edge Lab: absolute transmittance (October 2026 update)
+
+Select **Absolute transmittance · radial outline** and set **Absolute T** (for example,
+`0.80` to measure the 20% attenuation contour). This is **not** a fractional
+shadow-depth threshold. The existing background-normalisation uses the median
+image/background ratio at the ROI border to correct multiplicative laser-power
+changes, so unobstructed pixels have median transmittance near one. This
+assumes the border is clear, the frames are unsaturated, and the laser spatial
+profile has not changed appreciably.
+
+Detection is independent of the fixed sizing threshold: the algorithm first
+selects a central connected shadow with at least `min_dark_pixels` pixels below
+`1 - min_contrast` (defaults: 10 pixels and 15% attenuation), then traces the
+requested absolute isophote. The old requirement of ten pixels below T=0.45
+for fixed mode has been removed. A missing measured isophote or insufficient
+contrast is reported as a failure; no arbitrary replacement threshold is applied.
+The detector uses the same logic in production and Edge Lab; all Edge Lab
+results remain temporary and do not alter stored MAT files.
+
+In Edge Lab, **right-click a trial particle → Transmittance profiles / threshold…**
+to inspect horizontal and vertical centre profiles, the chosen isophote, and
+the observed ROI border median. These are diagnostic slices, not the complete
+set of rays used by the radial algorithm.
+
+
+## Batch NetCDF export (raw ROIs and backgrounds)
+
+In **Review → Flag history**, click a saved batch (Ctrl/Shift-click to combine
+several), then choose **Export selected batch(es) to NetCDF…**. Choose a `.nc`
+filename. A progress dialog lets you cancel without overwriting your previous
+output. Export is read-only: it **never** runs edge detection, changes pixel
+intensities, reassigns backgrounds, edits particle labels, or commits anything
+to the project.
+
+The exporter accepts both MATLAB structured-array and cell-array-of-structs
+layouts of `ROI_N.IMAGE` and `BG`, including the format generated by
+`proc/postProcess.py`. You do **not** need to convert or reprocess MAT files
+for export.
+
+Each exported particle has its **original 2D ROI** and its **corresponding
+stored 2D background**. Because each ROI can be a different size, the file
+uses *contiguous ragged arrays*:
+
+- `roi_pixels` and `background_pixels` contain raw intensities in pixel order.
+- `pixel_start[i]`, `pixel_count[i]`, `roi_nx[i]`, `roi_ny[i]` describe how to
+  reconstruct image `i` using the original MATLAB array orientation [camera X,
+  camera Y], without rotation, cropping, resizing or division.
+- `background_present[i]` is 0 when the stored MAT background is missing or
+  has the wrong shape; the corresponding background intensities are `-1`.
+- `source_file`, `roi_index`, `particle_id`, `time_matlab`, `label`, and
+  `batch_memberships_json` preserve provenance, including shared particles
+  when several batches are exported together (no duplicates).
+- `label_length_um` and `label_width_um` come from the **current label
+  library** (NaN if unlabelled). `measured_length_um` and `measured_width_um`
+  are the processed measurements and remain separate from the true sizes.
+- `stage_x_mm`, `stage_z_mm`, `x_best_mm`, `z_best_mm`,
+  `distance_from_object_plane_mm` (signed), `in_plane_offset_mm` and `zd`
+  use saved best-focus references, **never the unsaved editor preview**.
+  Missing or conflicting references are recorded as NaN with `reference_source`
+  explaining why. The applied plane-normal angle is saved in the file.
+
+Example of reading a selected particle in Python (with `netCDF4` installed):
+
+```python
+import numpy as np
+from netCDF4 import Dataset
+
+with Dataset("batch_rois.nc") as nc:
+    i = 0
+    start = int(nc["pixel_start"][i])
+    n = int(nc["pixel_count"][i])
+    shape = (int(nc["roi_nx"][i]), int(nc["roi_ny"][i]))
+    roi = np.asarray(nc["roi_pixels"][start:start+n]).reshape(shape)
+    bg = np.asarray(nc["background_pixels"][start:start+n]).reshape(shape)
+    length_true_um = float(nc["label_length_um"][i])
+    stage_x_mm = float(nc["stage_x_mm"][i])
+    d_mm = float(nc["distance_from_object_plane_mm"][i])
+```
+
+Exports use compressed NetCDF4 when `netCDF4` is installed
+(`python -m pip install netCDF4`, or install the repository's `.[output]`
+extra). Otherwise, small exports use uncompressed NetCDF3 with the same
+variable layout; for large batches you will be asked to install `netCDF4`.
+Both preserve original pixel values as 16-bit signed integers, adequate for
+normal 8-bit CPI camera intensities.
+
+### Edge Lab: stored reference and signed-shadow fitted circle (October 2026)
+
+Select one or more batches under **Review → Flag history**, then choose **Test edges →**.
+The workbench automatically adds a **Stored** reference with the measurements
+already in the particle catalogue. Stored reference plots do **not** recompute
+any particle boundaries. Its on-hover and right-click overlays use the
+previously saved `dat.foc[*].boundaries` directly and use the curve's colour.
+Select **＋ Stored (instant)** to add another snapshot of the currently selected
+batch(es). All curves (including Stored) can be hidden, selected or removed.
+
+To evaluate the experimental size proxy, choose **Signed shadow integral · fitted
+circle (experimental)** in the Boundary menu, choose **Extra radius [px]**
+(initially **8**), and click **＋ Add trial to plot**. It evaluates each original
+ROI and matching stored background without writing either. At each ROI:
+
+1. Retrieve the saved particle outline from `dat.foc`; fit a robust circle to
+   its points. This is only a seed for the integration region, not a new edge
+   measurement or an estimate of physical diameter.
+2. Increase the fitted radius by the selected extra pixels. If the circle extends
+   outside the ROI, treat missing pixels as clear **normalised transmittance T=1**
+   (zero signed deficit), retaining the fraction of the circle observed for quality
+   control instead of rejecting the entire particle.
+3. Calculate `T = ROI / BG` with the existing border-median multiplicative
+   illumination normalisation and selected median/Gaussian filters.
+4. Sum the **signed** deficit `A = pixel_um² × sum_circle(1 − T)` using 4×4
+   subpixel aperture coverage. Light above the corrected baseline contributes
+   negatively; no clipping of the bright diffraction rings is performed.
+5. Report **uncalibrated shadow-equivalent diameter**
+   `D_shadow = 2 × sqrt(A / pi)` and plot `D_shadow / labelled_true_length`
+   when Size is set to **Diameter / labelled true size**. The bottom Focus panel
+   shows the pre-existing saved focus metric for a shadow trial because the
+   integral itself does not calculate focus.
+
+The default X axis is signed distance from the object plane. Each trial has its
+own colour. Its displayed circle, hover preview, right-click context-menu
+preview, particle inspection and gallery overlay use that **same colour**.
+Unlike edge-trial outlines, the shadow circle is the **integration aperture**,
+**not a detected particle edge**. The stored boundary is shown in grey/slate
+when another experimental trial is active. You can compare several padding
+values and traditional edge methods simultaneously.
+
+The new method is **research-only**: it has *no* production CLI flags, and it
+is not yet a calibrated physical true-diameter retrieval. In particular, its
+accuracy is affected by background residuals, camera pedestal, neighbouring
+particles and the stored contour used to initialise the aperture. Different
+bead materials may need different calibrations. Invalid nonpositive integrals
+are excluded from the plot. Truncated fixed-radius circles are retained but
+may underestimate size if the missing region contains actual shadow. All lab results remain
+in memory only and are discarded on closing or clearing the lab.
+
+
+## Fitting recipes: signed-shadow circle + normalised focus (October 2026)
+
+From Calibration → **Fit size & focus model**, choose the recipe at the top:
+"Original size and focus" (**default**), "Contour size + normalised focus", or
+"Circle shadow size + normalised focus" (**experimental; opt in**). Select the bead labels and focus threshold, then
+**Fit & validate**. The figure displays per-size ratio against signed position,
+measured and fitted focus, DOF versus size, the size-error histograms and depth
+retrieval. Report tab includes parameters, size-specific DOF and held-out errors.
+
+Circle size is saved separately as `dat.shadow_deq` only when processing with
+`--shadow-circle-padding N` (0–30 px). MAT files also store `shadow_area_px`,
+`shadow_radius_px` and local background-corrected illumination
+`local_illum_bg`. Feret length, conventional equivalent-area contour size,
+roundness, boundaries and original focus are unchanged. Processing does not
+know bead true size; the affine shadow size calibration is fitted later.
+
+For **temporary on-demand** calculation without overwriting MAT files, open a
+single project in the fitting dialog, choose your aperture extension and click
+**Compute circle sizes for this project (temporary)**. The calculation is done
+asynchronously from saved MAT images/backgrounds and contours and only updates
+the dialog's in-memory rows. Multi-project fits require durable processing of
+source projects beforehand.
+
+Normalised focus is the *original gradient focus* divided by the local
+illumination; it is not `focus_T` and must not be divided again. Fit
+`B+A(L)*exp[-(|d-d0|/w±(L))^p]`, with `A(L)=A0(L/Lref)^a` and
+`w±(L)=w±0(L/Lref)^k`; a,k≥0 when fitted. Different widths on each side,
+fitted or Gaussian `p`, and the two size dependencies are optional.
+The DOF threshold is in **focus/local illumination** units, not the original
+raw CPI focus units. Default 0.12 is a suggested initial plotting value only.
+
+`cpi-fit --fit-recipe circle` implements the same model for saved particle
+tables, with `--fixed-gaussian`, `--symmetric-focus`, `--no-peak-size`,
+`--no-width-size`, and `--foc-crit`. Old models and original fitting remain
+readable and usable. The retrieval code picks the same saved shadow/contour
+column and focus definition that were used to fit the model.
+
+
+### Production processing defaults from 23 October 2026
+
+The new default in `python/proc/batchProcess.py` is relative radial transmittance
+edge detection at fraction **0.55**, plus independently stored signed-shadow
+equivalent diameter from a fitted circle enlarged by **8 pixels**, and
+`dat.local_illum_bg`. Existing contour morphology and raw gradient focus
+are retained. The fitting dialog now starts on circle size + original gradient
+focus / local illumination, including for older projects without circle data
+(use its read-only temporary calculation button). `--edge-method legacy`,
+`--shadow-circle-padding N` and `--no-shadow-circle` override the defaults.
+
+A +8-pixel margin does **not** imply the signed-integral curve has reached a
+plateau. Masking all objects and diffraction rings to estimate the correction
+from unobstructed pixels is a separate prospective illumination algorithm,
+not implemented or activated by these defaults.
+
+#### Experimental adaptive circle (2026-10-23)
+
+Edge Lab > Method: Signed shadow integral; Circle radius: **Automatic plateau**.
+The adjustable value is then **maximum additional radius**, not a fixed +px.
+The trial searches for a stable cumulative signed deficit and displays the
+selected circle in the trial colour. Right-click a particle > **Cumulative
+shadow integral vs circle radius…** to inspect the radial integral and the
+observed ROI coverage. Trials are read-only. Fitting still uses the existing
+saved circle values unless you recompute them using the existing (fixed-radius)
+fitting control; automatic-radius fitting should only use measurements actually
+saved with the experimental processing flag.
+
+The fixed +8 px option remains the production default. It now permits circles
+extending outside the ROI, with the unseen portion defined to have T=1 and
+therefore zero signed deficit; coverage is recorded. Current 2002 bead ROIs
+can be too small for trustworthy automatic convergence. The adaptive method
+will not assert a plateau if any required annulus has less than 85% coverage.
+No extrapolation of unseen shadow or fringes is performed.
+On reprocessing the processor now saves any substituted background in sparse
+`BG_USED`. Edge Lab loads these corrected backgrounds automatically; original
+`BG` is preserved for audit. Files processed with earlier releases do not
+contain this history and require reprocessing to gain it.
+
+### Microscopy / SEM references on particle labels
+
+Open **Labels**, click a label, and choose **Microscope / SEM reference images…**
+(or right-click its label). The reference-image editor is independent of a
+calibration batch and supports multiple imported optical / SEM images for each
+shared bead or ice-analogue label.
+
+* **Import images…** supports PNG, JPEG, TIFF (including 16-bit images), BMP and
+  WebP. The original file is copied unchanged to a `microscopy/images/` folder
+  beside the shared label library (`CPI_cals/ReferenceLibrary/labels.json`, or
+  the explicitly selected location). Annotations are saved separately in
+  `microscopy/index.json`. Keep this directory with your label library when
+  backing up or moving to another computer. Deleting an image from the list
+  unlinks its annotation but does not delete the copied source.
+* **Find object boundaries** proposes automatic contours, drawn in light blue.
+  Click the wanted outline; if it misses the target, choose **Draw circular
+  boundary** and drag, or **Draw straight-line polygon** and click successive
+  points, then **Finish / join polygon** (or double-click). The **Edit** tool
+  drags polygon vertices and moves or resizes the circular boundary.
+* **Fit enclosing circle around boundary** creates the *minimum enclosing
+  circle*, which contains the complete selected/drawn outline. The object
+  silhouette (green) and enclosing circle (orange dashed) remain separate.
+* **Draw scale reference**: drag over a scale bar in the microscope image and
+  enter its real length in micrometres. The calibration is stored per-image;
+  until it is set, measurements are in **pixels**, not invented µm values.
+* The panel reports **maximum dimension** (maximum Feret dimension),
+  **silhouette area**, **enclosing-circle area** and **silhouette area / circle
+  area** (all derived from the chosen image and scale). The annotation index
+  retains the measurements, vertices, fitted circle and scale; edits are
+  saved as you go.
+* **Save annotated image as PNG…** exports a fresh full-resolution PNG with
+  the label at the top and the boundary, enclosing circle, scale and measured
+  quantities drawn onto it. The original microscopy image is never overwritten.
+  The editable annotation remains in `microscopy/index.json`.
+
+This is *reference-microscopy annotation*, not the processing of raw CPI ROIs.
+Measurements do not overwrite the CPI bead label's nominal true length, the
+calibration MAT data or the existing calibration fit. The enclosing-circle diameter is always at least as large as the measured
+maximum Feret dimension of the chosen boundary.
+
+
+### Shared reference library and visible outlines (October 2026)
+
+Projects anywhere within the same `CPI_cals/` tree automatically share
+`CPI_cals/ReferenceLibrary/labels.json` and
+`CPI_cals/ReferenceLibrary/microscopy/` (including both `CPICalibration/`
+and `ICEAnalogues/CPI/`). The **Labels** page shows the active location and
+has controls to select another reference folder or restore automatic discovery.
+The chosen location is remembered using Qt settings; the label content and
+microscopy images are never stored in Qt settings. When moving a legacy library
+to an empty new location the GUI requests permission and copies the labels,
+original microscopy images and annotations without deleting the old copy.
+The environment variable `CPI_CALIBRATION_LABELS` still pins an explicit path.
+
+Particle contours use vivid, curve-matched colours and a contrasting dark halo
+in the particle viewer, gallery, Edge Lab hover and microscope editor (including
+annotated PNG exports). Edge Lab shadow integration is a **size-only** trial:
+raw `focus` and `focus_T` remain those of the original processed particles for
+**all** trials, including particles without a valid shadow integral. CPIview
+focus is an optional separate experimental metric. MAT files are unchanged.

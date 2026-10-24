@@ -51,12 +51,14 @@ output_timeseries = True
 # (0.55: sizes grow away from the object plane on both sides; 0.65 is as consistent but
 #  100 um beads shrink slightly on the negative side -- README 3.6)
 edge_options = {
-    "method": "legacy",
+    "method": "transmittance",
     "edge_mode": "relative",    # "relative": edge at a fraction of each particle's own shadow depth;
                                 # "fixed": edge at a fixed transmittance (loses faint small particles)
     "edge_level": 0.5,          # fixed mode: transmittance at the edge
     "edge_fraction": 0.55,      # relative mode: fraction of the shadow depth
+    "outline": "radial",      # smooth radial boundary; shape / morphology remains separate
     "denoise": 1,
+    "shadow_circle_padding": 8.0,  # additional shadow-equivalent diameter by default
     "boundary_tol_px": 0.25,
 }
 
@@ -78,7 +80,7 @@ def _parse_args() -> argparse.Namespace:
         "--cores", type=int, default=num_cores, help="Concurrent image-stat workers"
     )
     parser.add_argument("--edge-method", choices=("legacy", "transmittance"),
-                        help="edge detection method (default: edge_options in this file)")
+                        help="edge method (default: transmittance; use legacy to reproduce older processing)")
     parser.add_argument("--edge-level", type=float, help="transmittance at the edge (fixed mode)")
     parser.add_argument("--edge-mode", choices=("fixed", "relative"),
                         help="fixed transmittance, or a fraction of each particle's own shadow depth")
@@ -92,6 +94,21 @@ def _parse_args() -> argparse.Namespace:
                              "Recorded in every file (dat.proc_options) and read by the workbench fit and the "
                              "concentration time series, so it is never applied twice. Measure it with a graticule "
                              "at the object plane.")
+    parser.add_argument("--denoise", type=int, choices=range(4), metavar="{0,1,2,3}",
+                        help="3x3 median-filter passes for transmittance processing (default: 1)")
+    parser.add_argument("--smooth-sigma", type=float,
+                        help="Gaussian smoothing sigma in pixels (default: 0)")
+    parser.add_argument("--shadow-circle-padding", type=float, default=None,
+                        help="also store signed-shadow equivalent diameter in dat.shadow_deq (µm), "
+                             "from a circle fitted to the ordinary contour, extended by this many pixels "
+                             "(0–30, default 8 px); leaves normal shape and focus intact")
+    parser.add_argument("--shadow-circle-auto", action="store_true",
+                        help="experimental: select integration radius from a sustained signed-integral plateau; "
+                             "fail/flag if no trustworthy plateau or ROI is too cropped")
+    parser.add_argument("--shadow-circle-max-padding", type=float, default=None,
+                        help="maximum additional radius searched for plateau (6–60 px; default 30)")
+    parser.add_argument("--no-shadow-circle", action="store_true",
+                        help="disable additional signed-shadow circle sizing (on by default, +8 px)")
     parser.add_argument("--cpiview", action="store_true",
                         help="also compute CPIview's own particle measures and focus (port of SPEC CPIview 2: "
                              "segmentation, length/width, cut-off %%, water flag, 16-sample focus with its spread "
@@ -261,8 +278,30 @@ if __name__ == "__main__":
         edge["edge_fraction"] = args.edge_fraction
     if args.outline:
         edge["outline"] = args.outline
+    if args.no_shadow_circle and args.shadow_circle_padding is not None:
+        raise SystemExit("Use either --no-shadow-circle or --shadow-circle-padding, not both")
+    if args.no_shadow_circle:
+        edge["shadow_circle_padding"] = None
+    if args.shadow_circle_padding is not None:
+        if not 0 <= args.shadow_circle_padding <= 30:
+            raise SystemExit("--shadow-circle-padding must be between 0 and 30 pixels")
+        edge["shadow_circle_padding"] = args.shadow_circle_padding
+    if args.shadow_circle_auto:
+        if args.no_shadow_circle:
+            raise SystemExit("Cannot combine --shadow-circle-auto with --no-shadow-circle")
+        edge["shadow_circle_auto"] = True
+    if args.shadow_circle_max_padding is not None:
+        if not 6 <= args.shadow_circle_max_padding <= 60:
+            raise SystemExit("--shadow-circle-max-padding must be 6–60 px")
+        edge["shadow_circle_max_padding"] = args.shadow_circle_max_padding
     if args.cpiview:
         edge["cpiview"] = True
+    if args.denoise is not None:
+        edge["denoise"] = args.denoise
+    if args.smooth_sigma is not None:
+        if not 0 <= args.smooth_sigma <= 3:
+            raise SystemExit("--smooth-sigma must be between 0 and 3 pixels")
+        edge["smooth_sigma"] = args.smooth_sigma
     if args.pixel_um is not None:
         if not 0.5 <= args.pixel_um <= 20:
             raise SystemExit(f"--pixel-um {args.pixel_um}: expected a pixel size in µm (about 2-3 for the CPI)")

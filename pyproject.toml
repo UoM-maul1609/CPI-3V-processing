@@ -51,4 +51,4 @@ package-dir = {"" = "python"}
 
 [tool.setuptools.packages.find]
 where = ["python"]
-include = ["calibration*"]
+include = ["calibration*", "proc*"]

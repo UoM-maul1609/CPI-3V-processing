@@ -150,14 +150,20 @@ def mult_job(path1, filename1, find_particle_edges, cpiv1, position, lock, edge_
     if edge_options and '"transmittance"' in str(edge_options) and '"bg_check": false' not in str(edge_options):
         from backgroundCheck import BackgroundBank
         bank = BackgroundBank(path1)          # the folder's full-frame backgrounds, to replace contaminated crops
+    effective = {}
     dat = imageStats(
-        ROI_N, BG, cpiv1, find_particle_edges, position, filename1, lock, options=edge_options, bank=bank
+        ROI_N, BG, cpiv1, find_particle_edges, position, filename1, lock,
+        options=edge_options, bank=bank, effective_backgrounds=effective
     )
 
-    atomic_savemat(
-        mat_file,
-        {"ROI_N": ROI_N, "HOUSE": HOUSE, "IMAGE1": IMAGE1, "BG": BG, "dat": dat},
-    )
+    data_to_save = {"ROI_N": ROI_N, "HOUSE": HOUSE, "IMAGE1": IMAGE1, "BG": BG, "dat": dat}
+    if effective:
+        n = len(BG[0])
+        used = __import__("numpy").empty((1, n), dtype=object)
+        for j in range(n):
+            used[0, j] = effective.get(j, __import__("numpy").empty((0, 0)))
+        data_to_save["BG_USED"] = used  # sparse: only replacement/fitted backgrounds, indexed by ROI
+    atomic_savemat(mat_file, data_to_save)
     return position
 
 

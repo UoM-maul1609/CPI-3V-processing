@@ -57,7 +57,7 @@ import numpy as np
 from scipy import ndimage
 from skimage import draw, measure
 
-EDGE_CODE_VERSION = "2026.10.20"
+EDGE_CODE_VERSION = "2026.10.21.fixed-contrast"
 
 
 @dataclass
@@ -72,7 +72,7 @@ class EdgeOptions:
     edge_level: float = 0.5            # T at the edge, fixed mode (0.25 = coherent in-focus edge; calibrate)
     edge_fraction: float = 0.55        # fraction of the shadow depth at the edge, relative mode (210302 beads: sizes
                                        # grow away from focus on both sides; as consistent as 0.65)
-    core_level: float = 0.45           # fixed mode: a particle must have pixels darker than this (T)
+    core_level: float = 0.45           # legacy compatibility; fixed mode now uses min_contrast instead
     min_contrast: float = 0.15         # relative mode: ... at least this much darker than the background
     min_dark_pixels: int = 10          # ... at least this many pixels
     denoise: int = 1                   # 3x3 median passes on T (legacy uses 100)
@@ -101,6 +101,9 @@ class EdgeOptions:
     radial_min_roundness: float = 0.6  # radial outline only if area / (pi/4 Lmax^2) of the raw contour is at least this
                                        # (beads ~0.9, hexagonal plates ~0.85; columns, needles, rosettes keep the contour)
     bg_check: bool = True              # if the particle is in its own background, use a clean one (backgroundCheck.py)
+    shadow_circle_padding: Optional[float] = None  # optional signed-shadow size, px beyond fitted contour
+    shadow_circle_auto: bool = False       # opt-in experimental plateau radius; fixed +8 remains default
+    shadow_circle_max_padding: float = 30.  # maximum exploration beyond contour (px)
     cpiview: bool = False              # also store CPIview's own measures and focus (cpiviewMetrics.py, dat.cpv_*)
     boundary_tol_px: float = 0.25      # boundary simplification tolerance (px); 0 = keep every point
     max_boundary_points: int = 2000
@@ -463,7 +466,8 @@ def _elongation(mask: np.ndarray) -> float:
     from skimage.measure import regionprops
     p = regionprops(mask.astype(np.uint8))[0]
     major = getattr(p, "axis_major_length", None) or p.major_axis_length
-    minor = getattr(p, "axis_minor_length", None) or p.minor_axis_length
+    #minor = getattr(p, "axis_minor_length", None) or p.minor_axis_length
+    minor = p.minor_axis_length
     return float(major / max(minor, 1e-6))
 
 
@@ -597,21 +601,37 @@ def _merge_shadow_parts(labels, overlap, best, main, options):
 def measure_transmittance(image: np.ndarray, background: np.ndarray, options: EdgeOptions) -> Optional[dict]:
     """Geometry, focus and boundary of the main particle in one ROI, or None if there is none."""
     T = transmittance(image, background, options)
-    main = None
+    # Detect the particle independently of the chosen sizing isophote. In
+    # particular, a faint bead (T_min = 0.65) must not be rejected because
+    # the old fixed-mode core test required ten pixels below T = 0.45.
+    candidate = T < 1.0 - options.min_contrast
+    labels, n = ndimage.label(candidate)
+    if n == 0:
+        return None
+    counts = np.bincount(labels.ravel(), minlength=n + 1)
+    eligible = np.flatnonzero(counts[1:] >= options.min_dark_pixels) + 1
+    if not len(eligible):
+        return None
+    valid = np.isin(labels, eligible)
+    component_labels, nvalid = ndimage.label(valid)  # preserve disconnected candidates
+    chosen = _pick_component(component_labels, nvalid, np.clip(1.0 - T, 0.0, None))
+    main = component_labels == chosen
+    if options.merge_parts and nvalid > 1:
+        main = _join_column_walls(T, component_labels, main, options)
     if options.edge_mode == "relative":
-        candidate = T < 1.0 - options.min_contrast
-        if np.count_nonzero(candidate) < options.min_dark_pixels:
-            return None
-        labels, n = ndimage.label(candidate)
-        main = labels == _pick_component(labels, n, 1.0 - T)
-        if options.merge_parts and n > 1:
-            main = _join_column_walls(T, labels, main, options)
-        t_min = float(np.sort(T[main])[:3].mean())           # robust shadow depth of this particle
+        t_min = float(np.sort(T[main])[:3].mean())
         edge_level = 1.0 - options.edge_fraction * (1.0 - t_min)
+    elif options.edge_mode == "fixed":
+        edge_level = float(options.edge_level)
     else:
-        if np.count_nonzero(T < options.core_level) < options.min_dark_pixels:
-            return None
-        edge_level = options.edge_level
+        raise ValueError(f"Unknown transmittance edge mode: {options.edge_mode}")
+    # A threshold above the normalised ambient baseline is not a valid shadow
+    # isophote. Do not silently fall back to another threshold.
+    if not 0.0 < edge_level < 1.0:
+        return None
+    # A particle detected at T < 1-min_contrast may have no contour at the
+    # requested level (e.g. an extremely faint particle at T=0.7). The
+    # subsequent overlap test deliberately refuses unrelated dark neighbours.
     dark = T < edge_level
     labels, n = ndimage.label(dark)
     if n == 0:
@@ -621,6 +641,8 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
         # the part(s) of the chosen particle's shadow that are darker than its edge level
         overlap = np.bincount(labels[main].ravel(), minlength=n + 1)[1:]
         best = int(np.argmax(overlap)) + 1 if overlap.any() else _pick_component(labels, n, np.clip(edge_level - T, 0, None))
+        if not overlap.any():
+            return None
         region = labels == best
         if options.merge_parts and overlap.any():
             region, bridge_px = _merge_shadow_parts(labels, overlap, best, main, options)
@@ -688,10 +710,9 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
         # only for compact particles: on thin arms or needle tips the smoothing would trim a pixel or two
         footprint = ndimage.binary_fill_holes(main) if main is not None else None
         if footprint is not None and _mask_roundness(footprint) >= options.radial_min_roundness:
-            # relative mode: whole shadow as the footprint, edge level set ray by ray
             radial = radial_outline(T, footprint, edge_level, options.outline_smooth_px,
-                                    edge_fraction=options.edge_fraction, max_level=1.0 - options.min_contrast / 2,
-                                    check=region)
+                                    edge_fraction=(options.edge_fraction if options.edge_mode == "relative" else None),
+                                    max_level=1.0 - options.min_contrast / 2, check=region)
         if radial is None and _roundness(poly) >= options.radial_min_roundness:
             radial = radial_outline(T, region, edge_level, options.outline_smooth_px)
         if radial is not None:
@@ -706,6 +727,7 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
     # ellipse major axis of the same region (for comparison with legacy)
     props = measure.regionprops(region.astype(np.uint8))[0]
     major = getattr(props, "axis_major_length", None) or props.major_axis_length
+    minor = getattr(props, "axis_minor_length", None) or props.minor_axis_length
     centroid = poly.mean(axis=0)
     centre_T = float(ndimage.map_coordinates(T, [[centroid[0]], [centroid[1]]], order=1, mode="nearest")[0])
     diff = image.astype(np.int16) - background.astype(np.int16)
@@ -719,6 +741,9 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
         "deq": 2.0 * math.sqrt(area_px / math.pi) * px,
         "round": area_px / (math.pi / 4.0 * length_px ** 2) if length_px > 0 else float("nan"),
         "len_ellipse": float(major) * px,
+        "wid_ellipse": float(minor) * px,
+        "len_feret": length_px * px,
+        "wid_feret": width_px * px,
         "orientation": angle,
         "centroid": centroid,
         "focus": edge_gradient_focus(diff, poly, options.focus_points),

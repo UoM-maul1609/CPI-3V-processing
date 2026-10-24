@@ -1,9 +1,10 @@
 """Shared particle labels (bead types, ice-crystal analogues …) with true sizes.
 
-One label library is shared by every calibration dataset on a computer, so the
-same names and dimensions are reused everywhere.  It lives in
-``~/.cpi_calibration/labels.json`` unless the environment variable
-``CPI_CALIBRATION_LABELS`` points elsewhere (e.g. a shared network drive).
+One library is shared by calibration beads and ice analogues: when a project
+lives below ``CPI_cals``, the GUI uses ``CPI_cals/ReferenceLibrary/labels.json``
+and stores microscopy images and annotations in the adjacent ``microscopy/``
+folder. Explicitly selected libraries persist through GUI settings. A legacy
+home-directory library is read for migration only; it is never silently moved.
 
 Particles store only the label *name* (in the flags CSV).  Their true
 dimensions (``actual_length_um`` / ``actual_width_um``) are taken from the
@@ -47,22 +48,25 @@ class ParticleLabel:
     name: str
     kind: str = "bead"
     length_um: float = float("nan")   # true maximum dimension
-    width_um: float = float("nan")    # true width; equal to length for spheres
+    width_um: float = float("nan")    # unset unless explicitly supplied
     notes: str = ""
     colour: str = ""
     aliases: list = field(default_factory=list)  # former names, so renamed labels still resolve
     modified_utc: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
+    area_um2: float = float("nan")  # independent SEM / microscope projected area
 
     def size_text(self) -> str:
         if not math.isfinite(self.length_um):
             return "size not set"
-        if not math.isfinite(self.width_um) or abs(self.width_um - self.length_um) < 1e-9:
+        if not math.isfinite(self.width_um):
+            return f"{self.length_um:g} µm (width unset)"
+        if abs(self.width_um - self.length_um) < 1e-9:
             return f"{self.length_um:g} µm"
         return f"{self.length_um:g} × {self.width_um:g} µm"
 
     def as_json(self) -> dict:
         data = asdict(self)
-        for key in ("length_um", "width_um"):
+        for key in ("length_um", "width_um", "area_um2"):
             if not math.isfinite(data[key]):
                 data[key] = None
         return data
@@ -74,9 +78,10 @@ class ParticleLabel:
             raise ValueError("A label needs a name")
         length = _positive_or_nan(data.get("length_um"))
         width = _positive_or_nan(data.get("width_um"))
+        area = _positive_or_nan(data.get("area_um2"))
         kind = str(data.get("kind") or "other")
         return cls(name=name, kind=kind if kind in LABEL_KINDS else "other", length_um=length,
-                   width_um=width, notes=str(data.get("notes", "")), colour=str(data.get("colour", "")),
+                   width_um=width, area_um2=area, notes=str(data.get("notes", "")), colour=str(data.get("colour", "")),
                    aliases=[str(a) for a in data.get("aliases", []) if str(a).strip()],
                    modified_utc=str(data.get("modified_utc", "")))
 
@@ -196,6 +201,6 @@ def apply_label_dimensions(records, library: LabelLibrary, names=None) -> int:
             continue
         record.label = label.name  # follow renames
         record.actual_length_um = label.length_um
-        record.actual_width_um = label.width_um if math.isfinite(label.width_um) else label.length_um
+        record.actual_width_um = label.width_um
         changed += 1
     return changed

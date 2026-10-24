@@ -18,6 +18,38 @@ except ImportError:  # imported as proc.imageStats
     from .backgroundCheck import choose_background
     from .edgeDetect import EdgeOptions, measure_transmittance, options_json
 
+try:
+    from shadowCircle import measure as measure_shadow_circle, local_illumination
+except ImportError:
+    from .shadowCircle import measure as measure_shadow_circle, local_illumination
+
+try:
+    from areaRatio import contour_area_ratio
+except ImportError:
+    from .areaRatio import contour_area_ratio
+
+def _feret_dimensions(boundary, pixel_um):
+    """Explicit max/min Feret geometry, separately from inertia ellipse axes."""
+    from scipy.spatial import ConvexHull, distance, QhullError
+    vertices = np.asarray(boundary, dtype=float).reshape(-1, 2)
+    vertices = vertices[np.all(np.isfinite(vertices), axis=1)]
+    if len(vertices) < 3:
+        return np.nan, np.nan
+    try:
+        hull = vertices[ConvexHull(vertices).vertices]
+    except (ValueError, QhullError):
+        return np.nan, np.nan
+    maximum = float(distance.pdist(hull).max())
+    sides = np.roll(hull, -1, axis=0) - hull
+    lengths = np.linalg.norm(sides, axis=1)
+    good = lengths > 1e-12
+    normals = np.column_stack((-sides[good, 1], sides[good, 0])) / lengths[good, None]
+    if not len(normals):
+        return maximum * pixel_um, np.nan
+    spans = np.ptp(hull @ normals.T, axis=0)
+    return maximum * pixel_um, float(np.min(spans)) * pixel_um
+
+
 NB = 30
 LD = 3
 PIXEL_SIZE_UM = 2.3
@@ -64,7 +96,7 @@ def _remove_centre_strip(arr, start_x):
     return arr
 
 
-def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=None, bank=None):
+def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=None, bank=None, effective_backgrounds=None):
     """Particle statistics for every particle ROI.
 
     ``options`` (an EdgeOptions, a dict or a JSON string) selects the edge
@@ -82,7 +114,7 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=Non
     elif isinstance(options, dict):
         options = EdgeOptions(**options)
     if options.method == "transmittance":
-        return _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options, bank)
+        return _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options, bank, effective_backgrounds)
 
     image_type = 33857 if cpiv1 else 89
     ind = np.flatnonzero(ROI_N["imageType"][0, 0][:, 0] == image_type)
@@ -91,11 +123,21 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=Non
     dat = {
         "len": np.zeros((nroi, 1), dtype=float),
         "wid": np.zeros((nroi, 1), dtype=float),
+        "len_feret": np.full((nroi, 1), np.nan),
+        "wid_feret": np.full((nroi, 1), np.nan),
+        "len_ellipse": np.full((nroi, 1), np.nan),
+        "wid_ellipse": np.full((nroi, 1), np.nan),
         "area": np.zeros((nroi, 1), dtype=float),
+        "area_ratio_circle": np.full((nroi, 1), np.nan),
         "round": np.zeros((nroi, 1), dtype=float),
         "orientation": np.zeros((nroi, 1), dtype=float),
         "centroid": np.zeros((nroi, 2), dtype=float),
     }
+
+    if options.shadow_circle_padding is not None:
+        dat["shadow_deq"] = np.full((nroi, 1), np.nan)
+        dat["shadow_area_px"] = np.full((nroi, 1), np.nan)
+        dat["shadow_radius_px"] = np.full((nroi, 1), np.nan)
 
     if b_flag:
         foc = np.zeros(
@@ -105,6 +147,7 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=Non
         foc = np.zeros(nroi, dtype=[("focus", "float")])
     foc.fill(np.nan)
     dat["foc"] = foc
+    dat["local_illum_bg"] = np.full((nroi, 1), np.nan)
     dat["Time"] = ROI_N["Time"][0, 0][:, 0]
     dat["proc_options"] = options_json(options, {"note": "legacy algorithm (Otsu, 100 median passes, "
                                                           "radius=2 mask, ellipse major axis, 30 boundary points)"})
@@ -222,15 +265,40 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=Non
                 pbar.update(1)
                 continue
 
+            dat["len_ellipse"][roi_index] = length
+            dat["wid_ellipse"][roi_index] = minor_axis * px_um
+            fmax, fmin = _feret_dimensions(contour, px_um)
+            dat["len_feret"][roi_index] = fmax
+            dat["wid_feret"][roi_index] = fmin
             dat["len"][roi_index] = length
             dat["wid"][roi_index] = minor_axis * px_um
             dat["area"][roi_index] = area
+            dat["area_ratio_circle"][roi_index] = contour_area_ratio(contour, area, px_um)
             dat["round"][roi_index] = filled_area / (
                 np.pi / 4.0 * major_axis**2
             )
             dat["centroid"][roi_index, :] = region.centroid
             dat["orientation"][roi_index] = region.orientation
             dat["foc"][roi_index] = calculate_focus(contour, arr, b_flag)
+            dat["local_illum_bg"][roi_index] = local_illumination(image, background, contour)
+            if options.shadow_circle_padding is not None:
+                try:
+                    measurement = measure_shadow_circle(
+                        image, background, contour,
+                        padding_px=options.shadow_circle_padding, pixel_um=px_um,
+                        denoise=options.denoise, smooth_sigma=options.smooth_sigma,
+                        radius_mode="adaptive" if options.shadow_circle_auto else "fixed",
+                        max_padding_px=options.shadow_circle_max_padding)
+                    dat["shadow_deq"][roi_index] = measurement["shadow_diameter"]
+                    dat["shadow_area_px"][roi_index] = measurement["shadow_area_px"]
+                    dat["shadow_radius_px"][roi_index] = measurement["aperture_radius_px"]
+                    if "shadow_coverage" in dat:
+                        dat["shadow_coverage"][roi_index] = measurement["coverage_min"]
+                        dat["shadow_plateau_fraction"][roi_index] = measurement["plateau_fraction_observed"]
+                        dat["shadow_extrapolated"][roi_index] = int(measurement["roi_extrapolated"])
+                except (ValueError, IndexError, FloatingPointError):
+                    pass
+
 
             pbar.update(1)
 
@@ -319,7 +387,7 @@ def _unwrap(value):
     return v
 
 
-def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options, bank=None):
+def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options, bank=None, effective_backgrounds=None):
     """Transmittance edge method (see edgeDetect.py); variable-length boundaries."""
     image_type = 33857 if cpiv1 else 89
     ind = np.flatnonzero(ROI_N["imageType"][0, 0][:, 0] == image_type)
@@ -327,13 +395,22 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
     nan = lambda *shape: np.full(shape, np.nan)
     dat = {
         "len": nan(nroi, 1), "wid": nan(nroi, 1), "area": nan(nroi, 1), "round": nan(nroi, 1),
+        "area_ratio_circle": nan(nroi, 1),
         "orientation": nan(nroi, 1), "centroid": nan(nroi, 2),
-        "len_ellipse": nan(nroi, 1), "perimeter": nan(nroi, 1), "deq": nan(nroi, 1),
+        "len_ellipse": nan(nroi, 1), "wid_ellipse": nan(nroi, 1),
+        "len_feret": nan(nroi, 1), "wid_feret": nan(nroi, 1), "perimeter": nan(nroi, 1), "deq": nan(nroi, 1),
         "T_min": nan(nroi, 1), "T_centre": nan(nroi, 1), "T_border": nan(nroi, 1), "edge_level_used": nan(nroi, 1),
         "n_boundary": np.zeros((nroi, 1)), "edge_touch": np.zeros((nroi, 1)), "outline_radial": np.zeros((nroi, 1)),
         "cutoff_pct": nan(nroi, 1),
         "bg_source": np.zeros((nroi, 1)), "bg_dt_s": nan(nroi, 1),
     }
+    if options.shadow_circle_padding is not None:
+        dat["shadow_deq"] = nan(nroi, 1)
+        dat["shadow_area_px"] = nan(nroi, 1)
+        dat["shadow_radius_px"] = nan(nroi, 1)
+        dat["shadow_coverage"] = nan(nroi, 1)
+        dat["shadow_plateau_fraction"] = nan(nroi, 1)
+        dat["shadow_extrapolated"] = np.zeros((nroi, 1))
     use_cpiview = bool(getattr(options, "cpiview", False))
     if use_cpiview:
         try:
@@ -351,6 +428,7 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
     foc["focus"] = np.nan
     foc["focus_T"] = np.nan
     dat["foc"] = foc
+    dat["local_illum_bg"] = np.full((nroi, 1), np.nan)
     dat["Time"] = ROI_N["Time"][0, 0][:, 0]
     dat["imageType"] = ROI_N["imageType"][0, 0][:, 0]
     dat["proc_options"] = options_json(options)
@@ -380,8 +458,10 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
                     corners, when = (0, image.shape[0], 0, image.shape[1]), float("nan")
                 background, source, dt_s = choose_background(
                     image, background, bank if np.isfinite(when) else None, when, corners, prepare)
-                dat["bg_source"][roi_index] = source
-                dat["bg_dt_s"][roi_index] = dt_s
+                dat["bg_source"][roi_index, 0] = source
+                dat["bg_dt_s"][roi_index, 0] = dt_s
+            if effective_backgrounds is not None and int(dat["bg_source"][roi_index, 0]) != 0:
+                effective_backgrounds[roi_index] = np.asarray(background, dtype=np.float32).copy()
             try:
                 res = measure_transmittance(image, background, options)
             except (ValueError, IndexError, FloatingPointError):
@@ -400,13 +480,33 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
                     cpv = {}
                 for key, value in cpv.items():
                     dat[key][roi_index] = value
+            if res is not None and options.shadow_circle_padding is not None:
+                try:
+                    measurement = measure_shadow_circle(
+                        image, background, res["boundary"],
+                        padding_px=options.shadow_circle_padding, pixel_um=options.pixel_um,
+                        denoise=options.denoise, smooth_sigma=options.smooth_sigma,
+                        radius_mode="adaptive" if options.shadow_circle_auto else "fixed",
+                        max_padding_px=options.shadow_circle_max_padding)
+                    dat["shadow_deq"][roi_index] = measurement["shadow_diameter"]
+                    dat["shadow_area_px"][roi_index] = measurement["shadow_area_px"]
+                    dat["shadow_radius_px"][roi_index] = measurement["aperture_radius_px"]
+                    if "shadow_coverage" in dat:
+                        dat["shadow_coverage"][roi_index] = measurement["coverage_min"]
+                        dat["shadow_plateau_fraction"][roi_index] = measurement["plateau_fraction_observed"]
+                        dat["shadow_extrapolated"][roi_index] = int(measurement["roi_extrapolated"])
+                except (ValueError, IndexError, FloatingPointError):
+                    pass
             if res is None:
                 continue
-            for key in ("len", "wid", "area", "round", "orientation", "len_ellipse", "perimeter", "deq",
+            for key in ("len", "wid", "area", "round", "orientation", "len_ellipse", "wid_ellipse", "len_feret", "wid_feret", "perimeter", "deq",
                         "T_min", "T_centre", "T_border", "n_boundary", "edge_touch", "edge_level_used",
                         "outline_radial", "cutoff_pct"):
                 dat[key][roi_index] = res[key]
+            dat["area_ratio_circle"][roi_index] = contour_area_ratio(
+                res["boundary"], res["area"], options.pixel_um)
             dat["centroid"][roi_index, :] = res["centroid"]
+            dat["local_illum_bg"][roi_index] = local_illumination(image, background, res["boundary"])
             foc[roi_index]["focus"] = res["focus"]
             foc[roi_index]["focus_T"] = res["focus_T"]
             if b_flag:

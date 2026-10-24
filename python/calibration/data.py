@@ -145,7 +145,15 @@ class ParticleRecord:
     start_y: float = float("nan")
     end_y: float = float("nan")
     focus_T: float = float("nan")      # focus on transmittance (new edge method)
-    deq_um: float = float("nan")       # equivalent-area diameter (new edge method)
+    deq_um: float = float("nan")
+    shadow_deq_um: float = float("nan")  # signed-shadow circle equivalent diameter from processing
+    area_ratio_circle: float = float("nan")
+    len_feret_um: float = float("nan")
+    wid_feret_um: float = float("nan")
+    len_ellipse_um: float = float("nan")
+    wid_ellipse_um: float = float("nan")
+    shadow_radius_px: float = float("nan")  # circle aperture, not the physical edge
+       # equivalent-area diameter (new edge method)
     edge_touch: int = -1               # 1 = particle reaches the ROI border (size is a lower limit); -1 unknown
     processing: str = ""               # short label of the edge method that produced len/focus
     pixel_um: float = 2.3              # pixel size the file was processed with (dat.proc_options; 2.3 if unrecorded)
@@ -482,12 +490,24 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
     detected = detect_cpi_type(roi.get("imageType"))
     image_structs = _struct_list(roi.get("IMAGE"), n)
     illum = [roi_edge_brightness(item.get("IM")) if "IM" in item else float("nan") for item in image_structs]
+    # New processing stores a beam-profile-corrected illumination at the actual
+    # contour. Old MATs retain the legacy image-border estimate.
+    illum_bg = _vector(dat.get("local_illum_bg"), n)
+    illum = [float(v) if np.isfinite(v) and v > 0 else old
+             for v, old in zip(illum_bg, illum)]
 
     foc_structs = _struct_list(dat.get("foc"), n)
     focuses = np.asarray([_safe_float(item.get("focus")) for item in foc_structs])
     focus_T = np.asarray([_safe_float(item.get("focus_T")) for item in foc_structs])
     edge_touch = _vector(dat.get("edge_touch"), n, default=-1)
     deqs = _vector(dat.get("deq"), n)
+    len_ferets = _vector(dat.get("len_feret"), n)
+    wid_ferets = _vector(dat.get("wid_feret"), n)
+    len_ellipses = _vector(dat.get("len_ellipse"), n)
+    wid_ellipses = _vector(dat.get("wid_ellipse"), n)
+    shadow_deqs = _vector(dat.get("shadow_deq"), n)
+    shadow_radii = _vector(dat.get("shadow_radius_px"), n)
+    area_ratios = _vector(dat.get("area_ratio_circle"), n)
     cutoffs = _vector(dat.get("cutoff_pct"), n)
     cpv = {k: _vector(dat.get(k), n) for k in ("cpv_focus", "cpv_focus_sd", "cpv_fwhm_px", "cpv_distinct",
                                                "cpv_cutoff_pct")}
@@ -516,7 +536,10 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
                 start_x=float(start_x[i]), end_x=float(end_x[i]),
                 start_y=float(start_y[i]), end_y=float(end_y[i]),
                 focus_T=float(focus_T[i]),
-                deq_um=float(deqs[i]),
+                len_feret_um=float(len_ferets[i]), wid_feret_um=float(wid_ferets[i]),
+                len_ellipse_um=float(len_ellipses[i]), wid_ellipse_um=float(wid_ellipses[i]),
+                deq_um=float(deqs[i]), shadow_deq_um=float(shadow_deqs[i]),
+                shadow_radius_px=float(shadow_radii[i]), area_ratio_circle=float(area_ratios[i]),
                 cpv_focus=float(cpv["cpv_focus"][i]), cpv_focus_sd=float(cpv["cpv_focus_sd"][i]),
                 cpv_fwhm_px=float(cpv["cpv_fwhm_px"][i]), cpv_distinct=float(cpv["cpv_distinct"][i]),
                 cpv_cutoff_pct=float(cpv["cpv_cutoff_pct"][i]),

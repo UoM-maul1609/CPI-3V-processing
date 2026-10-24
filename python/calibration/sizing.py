@@ -86,13 +86,18 @@ def _num(value) -> float:
 # retrieval reads the same column, so a model is never applied to the wrong size.
 SIZE_MEASURES = {
     "length": {"columns": ("length_um", "len"), "label": "Length (maximum Feret)"},
-    "deq": {"columns": ("deq_um", "deq"), "label": "Equivalent-area diameter"},
+    "deq": {"columns": ("deq_um", "deq"), "label": "Equivalent-area diameter (contour)"},
+    "area_corrected_shadow": {"columns": ("shape_corrected_shadow_um",),
+        "label": "Shape-corrected shadow diameter (shadow / sqrt(CPI area ratio))"},
+    "shadow_deq": {"columns": ("shadow_deq_um", "shadow_deq"),
+                   "label": "Signed-shadow circle equivalent diameter (extra processing measure)"},
 }
 
 
 # Which focus value a calibration is built on (same rule: the model remembers it, retrieval reads it).
 FOCUS_MEASURES = {
     "focus": {"columns": ("focus",), "label": "Focus (as processed)"},
+    "focus_per_illum": {"columns": ("focus",), "label": "Focus ÷ local illumination (raw gradient)"},
     "cpv_focus": {"columns": ("cpv_focus",), "label": "CPIview focus (processed with --cpiview)"},
 }
 
@@ -121,6 +126,8 @@ class CalibrationTable:
     focus_measure: str = "focus"     # which focus value is in ``focus`` (see FOCUS_MEASURES)
     roundness: np.ndarray = None     # measured projected-area roundness Ar = A / (pi/4 L_app^2), per particle
     size_measure: str = "length"     # which measured size is in ``length`` (see SIZE_MEASURES)
+    edge_deq: np.ndarray = None      # independent saved contour equivalent-area diameters for like-for-like comparisons
+    edge_length: np.ndarray = None   # independent saved maximum Feret lengths
 
     def __len__(self):
         return len(self.length)
@@ -146,16 +153,29 @@ class CalibrationTable:
             values = sorted({str(r.get(key)) for r in rows if r.get(key)})
             if values:
                 instrument[key] = ", ".join(values)
+        foc = col(*FOCUS_MEASURES[focus_measure]["columns"])
+        illumination = col("local_illum")
+        if focus_measure == "focus_per_illum":
+            with np.errstate(divide="ignore", invalid="ignore"):
+                foc = np.where(illumination > 0, foc / illumination, np.nan)
+        if size_measure == "area_corrected_shadow":
+            with np.errstate(invalid="ignore", divide="ignore"):
+                area_ratio = col("area_ratio_circle")
+                sized = np.where((area_ratio > 0) & (area_ratio <= 1),
+                                 col("shadow_deq_um", "shadow_deq") / np.sqrt(area_ratio), np.nan)
+        else:
+            sized = col(*SIZE_MEASURES[size_measure]["columns"])
         return cls(true_length=col("actual_length_um", "true_length_um"),
-                   length=col(*SIZE_MEASURES[size_measure]["columns"]),
-                   focus=col(*FOCUS_MEASURES[focus_measure]["columns"]), focus_measure=focus_measure,
-                   illum=col("local_illum"), size_measure=size_measure,
+                   length=sized,
+                   focus=foc, focus_measure=focus_measure,
+                   illum=illumination, size_measure=size_measure,
                    d=col("d_signed_plane", "d_mm"), d_in_plane=col("d_in_plane"),
                    x_stage=col("x_stage", "stage_x"), z_stage=col("z_stage", "stage_z"),
                    image_x=col("image_x_px"), image_y=col("image_y_px"), time=col("time_matlab"),
                    group=cls._groups(rows), label=text("label"), instrument=instrument,
                    edge_touch=col("edge_touch"), processing=text("processing"), pixel_um=col("pixel_um"),
-                   roundness=col("roundness"))
+                   roundness=col("roundness"),
+                   edge_deq=col("deq_um", "deq"), edge_length=col("length_um", "len"))
 
     @staticmethod
     def _groups(rows):
@@ -193,6 +213,8 @@ class SizingModel:
     L_ref_um: float = 100.0
     size_sigma: List[float] = field(default_factory=lambda: [0.03, 0.05])     # log sd = s0 + s1*Zd (+ side)
     size_sigma_minus: Optional[List[float]] = None     # − side, when fitted separately (None = same as + side)
+    size_model: str = "defocus"       # defocus = existing model; shadow_linear = near-invariant shadow diameter
+    focus_model: str = "legacy"       # legacy or normalised_generalised (focus / local illumination)
     focus_F0: float = 50.0
     focus_gamma: float = 1.0
     focus_w_plus_mm: float = 0.5
@@ -243,6 +265,8 @@ class SizingModel:
         return fresnel
 
     def mean_length(self, L, d, irel=1.0, ar=None):
+        if self.size_model == "shadow_linear":
+            return self.scale * np.asarray(L, float) + self.offset_um
         L = np.asarray(L, float)
         d = np.asarray(d, float)
         plus = (d - self.size_d0_mm) >= 0
@@ -252,6 +276,8 @@ class SizingModel:
         return self.scale * L * (1.0 + A * self.zd(L, d, ar) ** p * irel ** self.size_kappa) + self.offset_um
 
     def sigma_length(self, L, d, ar=None):
+        if self.size_model == "shadow_linear":
+            return np.maximum(self.size_sigma[0], 0.01) + np.zeros_like(np.asarray(d, float))
         zd = self.zd(L, d, ar)
         plus = self.size_sigma[0] + self.size_sigma[1] * zd
         if not self.size_sigma_minus:
@@ -271,7 +297,11 @@ class SizingModel:
         if ar is not None and self.focus_Ar_power:
             amp = amp * self.ar_clip(ar) ** self.focus_Ar_power
         irel = np.clip(np.asarray(irel, float), 0.05, 20)
-        return amp * irel ** self.focus_gamma * np.exp(-(np.abs(u) / w) ** self.focus_q) + self.focus_floor
+        curve = amp * np.exp(-(np.abs(u) / w) ** self.focus_q)
+        if self.focus_model == "normalised_generalised":
+            # The observed variable already is F_raw/I_local; no second illumination division.
+            return curve + self.focus_floor
+        return curve * irel ** self.focus_gamma + self.focus_floor
 
     def sigma_focus(self, d):
         return self.focus_sigma[0] + self.focus_sigma[1] * np.abs(np.asarray(d, float) - self.focus_d0_mm)
@@ -348,7 +378,10 @@ def processed_pixel_um(table: CalibrationTable) -> float:
 def fit_model(table: CalibrationTable, illum_min: Optional[float] = None, fit_offset: Optional[bool] = None,
               offset_um: Optional[float] = None, foc_crit: float = DEFAULT_FOC_CRIT,
               pixel_um: Optional[float] = None, pixel_mode: str = "processed",
-              pixel_set_um: Optional[float] = None, shape: bool = False) -> SizingModel:
+              pixel_set_um: Optional[float] = None, shape: bool = False,
+              size_model: str = "defocus", focus_model: str = "legacy",
+              fit_focus_p: bool = True, asymmetric_focus: bool = True,
+              fit_peak_size: bool = True, fit_width_size: bool = True) -> SizingModel:
     """Fit the length and focus models to labelled particles with known signed d.
 
     ``pixel_mode``: "processed" uses sizes as processed (pixel size ``pixel_um``;
@@ -367,17 +400,33 @@ def fit_model(table: CalibrationTable, illum_min: Optional[float] = None, fit_of
     and Ar^c on the focus peak, Ar = measured roundness.  Needs particles of different shapes
     (e.g. beads and ice analogues); skipped if Ar hardly varies.
     """
+    if size_model not in ("defocus", "shadow_linear"):
+        raise ValueError(f"Unknown size model {size_model}")
+    if focus_model not in ("legacy", "normalised_generalised"):
+        raise ValueError(f"Unknown focus model {focus_model}")
+    if focus_model == "normalised_generalised" and table.focus_measure != "focus_per_illum":
+        raise ValueError("Normalised focus model requires the 'focus / local illumination' measurement")
+    if size_model == "shadow_linear" and table.size_measure not in ("shadow_deq", "area_corrected_shadow"):
+        raise ValueError("Shadow-size model requires the signed-shadow processing diameter")
+    if size_model == "shadow_linear" and pixel_mode == "fitted":
+        raise ValueError("Use as-processed pixel size for the shadow method; its scale is fitted directly")
     if pixel_um is None:
         pixel_um = processed_pixel_um(table)
     if pixel_mode == "fitted":
         first = fit_model(table, illum_min, fit_offset=True if fit_offset is None else fit_offset,
-                          offset_um=offset_um, foc_crit=foc_crit, pixel_um=pixel_um, shape=shape)
+                          offset_um=offset_um, foc_crit=foc_crit, pixel_um=pixel_um, shape=shape,
+                          size_model=size_model, focus_model=focus_model, fit_focus_p=fit_focus_p,
+                          asymmetric_focus=asymmetric_focus, fit_peak_size=fit_peak_size,
+                          fit_width_size=fit_width_size)
         if not first.size_L_power_fitted:
             raise ValueError("fitting the pixel size needs two or more true sizes (scale and edge offset are "
                              "otherwise indistinguishable)")
         factor = 1.0 / first.scale
         model = fit_model(table, illum_min, fit_offset=fit_offset, offset_um=offset_um, foc_crit=foc_crit,
-                          pixel_um=pixel_um, pixel_mode="set", pixel_set_um=pixel_um * factor, shape=shape)
+                          pixel_um=pixel_um, pixel_mode="set", pixel_set_um=pixel_um * factor, shape=shape,
+                          size_model=size_model, focus_model=focus_model, fit_focus_p=fit_focus_p,
+                          asymmetric_focus=asymmetric_focus, fit_peak_size=fit_peak_size,
+                          fit_width_size=fit_width_size)
         model.pixel_mode = "fitted"
         return model
     factor = 1.0
@@ -395,6 +444,8 @@ def fit_model(table: CalibrationTable, illum_min: Optional[float] = None, fit_of
     irel = np.where(np.isfinite(illum), illum / illum_ref, 1.0)
     ar = SizingModel.ar_clip(t.roundness if t.roundness is not None else np.full(len(L), np.nan))
     shape_note = None
+    if size_model == "shadow_linear":
+        shape = False  # shape remains represented by conventional stored contour, not the circle
     if shape:
         spread = float(np.nanstd(np.log(ar)))
         if spread < 0.05:
@@ -409,7 +460,8 @@ def fit_model(table: CalibrationTable, illum_min: Optional[float] = None, fit_of
                         d_range_mm=[float(np.min(d)), float(np.max(d))],
                         size_range_um=[float(np.min(L)), float(np.max(L))],
                         L_ref_um=float(np.exp(np.mean(np.log(sizes)))), size_L_power_fitted=multi,
-                        length_factor=factor, pixel_mode=pixel_mode, shape_terms=bool(shape))
+                        length_factor=factor, pixel_mode=pixel_mode, shape_terms=bool(shape),
+                        size_model=size_model, focus_model=focus_model)
 
     # ---- focus first: it pins the object plane and gives the scale of d
     near = np.abs(d) <= np.quantile(np.abs(d), 0.15)
@@ -420,25 +472,52 @@ def fit_model(table: CalibrationTable, illum_min: Optional[float] = None, fit_of
     def unpack_focus(c, m):
         m.focus_F0, m.focus_gamma, m.focus_w_plus_mm, m.focus_w_minus_mm, m.focus_q, m.focus_d0_mm, m.focus_floor = (
             math.exp(c[0]), float(c[1]), math.exp(c[2]), math.exp(c[3]), float(c[4]), float(c[5]), math.exp(c[6]))
+        if focus_model == "normalised_generalised":
+            m.focus_gamma = 0.0  # data already F_raw / I_local; reference illumination irrelevant
+        if not asymmetric_focus:
+            m.focus_w_minus_mm = m.focus_w_plus_mm
         k = 7
         if multi:
-            m.focus_L_amp, m.focus_L_width = float(c[7]), float(c[8])
+            m.focus_L_amp, m.focus_L_width = (float(c[7]) if fit_peak_size else 0.0,
+                                               float(c[8]) if fit_width_size else 0.0)
             k = 9
         if shape:
             m.focus_Ar_power = float(c[k])
 
-    def focus_res(c):
+    if focus_model == "normalised_generalised":
+        # Equal total influence per size and stage-position group, not per camera frame.
+        groups, counts = np.unique(np.column_stack((np.round(L, 1), np.round(d / .02))),
+                                   axis=0, return_counts=True)
+        lookup = {tuple(map(float, group)): n for group, n in zip(groups, counts)}
+        fw = np.array([1.0 / np.sqrt(lookup[(float(round(li, 1)), float(round(di / .02)))])
+                       for li, di in zip(L, d)])
+        fw /= np.sqrt(np.mean(fw**2))
+    else:
+        fw = 1.0
+
+    def focus_res(c, weighted=True):
         m = SizingModel(**{**model.__dict__})
         unpack_focus(c, m)
-        return np.log(foc) - np.log(m.mean_focus(d, irel, L, ar))
+        residual = np.log(foc) - np.log(m.mean_focus(d, irel, L, ar))
+        return residual * fw if weighted else residual
 
-    c0 = [math.log(max(F0 - floor0, 1e-2)), 1.0, math.log(w0), math.log(w0), 1.5, 0.0, math.log(floor0)]
+    c0 = [math.log(max(F0 - floor0, 1e-3)), 0.0 if focus_model == "normalised_generalised" else 1.0,
+          math.log(w0), math.log(w0), 2.0 if focus_model == "normalised_generalised" else 1.5,
+          0.0, math.log(floor0)]
     lo = [-5, -3, math.log(1e-3), math.log(1e-3), 0.5, -0.5, math.log(1e-3)]
     hi = [10, 4, math.log(20), math.log(20), 4.0, 0.5, math.log(max(F0, 1.0))]
+    if focus_model == "normalised_generalised":
+        lo[1], hi[1] = -1e-10, 1e-10
+        if not fit_focus_p:
+            lo[4], hi[4] = 2.0 - 1e-8, 2.0 + 1e-8
+        if not asymmetric_focus:
+            lo[3], hi[3] = c0[3]-1e-8, c0[3]+1e-8
     if multi:
-        c0 += [0.0, 0.0]
-        lo += [-3.0, -3.0]
-        hi += [3.0, 3.0]
+        c0 += [0.35 if fit_peak_size and focus_model == "normalised_generalised" else 0.0,
+               0.5 if fit_width_size and focus_model == "normalised_generalised" else 0.0]
+        lo += [0.0 if focus_model == "normalised_generalised" and fit_peak_size else (-3.0 if fit_peak_size else -1e-10),
+               0.0 if focus_model == "normalised_generalised" and fit_width_size else (-3.0 if fit_width_size else -1e-10)]
+        hi += [3.0 if fit_peak_size else 1e-10, 3.0 if fit_width_size else 1e-10]
     if shape:
         c0.append(0.0)
         lo.append(-3.0)
@@ -446,7 +525,42 @@ def fit_model(table: CalibrationTable, illum_min: Optional[float] = None, fit_of
     fres = least_squares(focus_res, c0, bounds=(lo, hi), loss="soft_l1", f_scale=0.3)
     c = fres.x
     unpack_focus(c, model)
-    model.focus_sigma = _scatter_fit(focus_res(c), np.abs(d - model.focus_d0_mm))
+    model.focus_sigma = _scatter_fit(focus_res(c, weighted=False), np.abs(d - model.focus_d0_mm))
+
+    # ---- signed-shadow diameter: fit measured diameter = scale * true diameter + offset.
+    # No arbitrary Zd-dependent correction, so size remains a separate observation from focus.
+    if size_model == "shadow_linear":
+        if len(sizes) < 2:
+            # With only one bead size, scale and offset cannot both be identified.
+            fit_offset = False
+        if fit_offset:
+            xy = np.column_stack([L, np.ones_like(L)])
+            coeff = np.linalg.lstsq(xy, Lapp, rcond=None)[0]
+            initial = [np.clip(coeff[0], .2, 4), np.clip(coeff[1], -20, 40)]
+            opt = least_squares(lambda c: np.log(Lapp)-np.log(np.maximum(c[0]*L+c[1], 1e-3)),
+                                initial, bounds=([.1, -30.], [5., 50.]), loss="soft_l1", f_scale=.05)
+            model.scale, model.offset_um = map(float, opt.x)
+        else:
+            model.scale = float(np.exp(np.median(np.log(Lapp / np.maximum(L + model.offset_um, 1e-6)))))
+            opt = None
+        model.offset_fitted = bool(fit_offset)
+        resid = np.log(Lapp) - np.log(np.maximum(model.mean_length(L, d), 1e-3))
+        model.size_sigma = [float(max(np.median(np.abs(resid)) * 1.4826, .015)), 0.]
+        model.size_sigma_minus = None
+        model.size_L_power_fitted = False
+        model.fit_stats = {
+            "n_particles": int(len(L)), "true_sizes_um": [float(v) for v in sizes],
+            "processing": sorted({str(v) for v in t.processing if v}) if t.processing is not None else [],
+            "excluded_edge_touch": int(np.sum(table.edge_touch == 1)) if table.edge_touch is not None else 0,
+            "illum_min": illum_min, "focus_cost": float(fres.cost),
+            "size_cost": float(opt.cost if opt is not None else np.sum(resid**2)/2),
+            "ratio_at_focus_measured": float(np.median(Lapp[near] / L[near])) if near.any() else None,
+            "length_at_focus_um": {f"{v:g}": float(model.mean_length(v, 0)) for v in sizes},
+            "effective_pixel_um_if_offset_correct": float(pixel_um * model.scale),
+            "shape_note": "circle shadow integral is separate from stored morphology",
+            "roundness_range": [float(np.nanpercentile(ar, 5)), float(np.nanpercentile(ar, 95))],
+        }
+        return model
 
     # ---- length
     r0 = np.median((Lapp[near] - model.offset_um) / L[near]) if near.any() else 1.0
@@ -832,14 +946,43 @@ def format_report(model: SizingModel, validation: Optional[dict] = None, trackin
                      f"{model.pixel_um * model.length_factor:.4f} µm (measured sizes × {model.length_factor:.4f}; "
                      "scale s fixed at 1)")
     lines += [
+        f"Fit options: size={model.size_model}; focus={model.focus_model}; p={model.focus_q:.3f}; "
+        f"amplitude size exponent={model.focus_L_amp:.3f}; width size exponent={model.focus_L_width:.3f}",
         "",
-        "Length at best focus",
+        "Shadow-circle size calibration" if model.size_model == "shadow_linear" else "Length at best focus",
         f"  measured median L_app/L near focus: {fs.get('ratio_at_focus_measured', float('nan')):.3f}",
-        f"  model: L_app = {model.scale:.4f}·L·(…) + {model.offset_um:.2f} µm"
-        + ("  (offset fitted)" if model.offset_fitted else "  (offset fixed = processing mask pad)"),
+        (f"  model: D_shadow = {model.scale:.4f}·L + {model.offset_um:.2f} µm (no Z term)"
+         if model.size_model == "shadow_linear" else
+         f"  model: L_app = {model.scale:.4f}·L·(…) + {model.offset_um:.2f} µm")
+        + ("  (offset fitted)" if model.offset_fitted else
+           "  (offset fixed)" if model.size_model == "shadow_linear" else
+           "  (offset fixed = processing mask pad)"),
         f"  length at focus: " + ", ".join(f"{k} µm → {v:.1f} µm" for k, v in fs.get("length_at_focus_um", {}).items()),
-        f"  size minimum at d0 = {model.size_d0_mm * 1000:+.0f} µm (focus peak at {model.focus_d0_mm * 1000:+.0f} µm)",
+        (f"  size assumed independent of Z (focus peak at {model.focus_d0_mm * 1000:+.0f} µm)"
+         if model.size_model == "shadow_linear" else
+         f"  size minimum at d0 = {model.size_d0_mm * 1000:+.0f} µm (focus peak at {model.focus_d0_mm * 1000:+.0f} µm)"),
         "",
+        "Focus",
+        (f"  F_raw/I_local = {model.focus_floor:.4f} + {model.focus_F0:.4f} × exp[-(|d-d0|/w±(L))^{model.focus_q:.2f}]"
+         if model.focus_model == "normalised_generalised" else
+         f"  F0 = {model.focus_F0:.1f}·(I/I_ref)^{model.focus_gamma:.2f}, I_ref = {model.illum_ref:.1f}"),
+        f"  half-widths: + {model.focus_w_plus_mm:.3f} mm, − {model.focus_w_minus_mm:.3f} mm, shape q = "
+        f"{model.focus_q:.2f}, floor {model.focus_floor:.2f}",
+        f"  scatter σ(log foc) = {model.focus_sigma[0]:.3f} + {model.focus_sigma[1]:.3f}·|d|",
+        (f"  size dependence: peak × (L/{model.L_ref_um:.0f} µm)^{model.focus_L_amp:+.2f}, "
+         f"half-widths × (L/{model.L_ref_um:.0f} µm)^{model.focus_L_width:+.2f}"
+         if len(fs.get("true_sizes_um", [])) > 1 else "  size dependence: no slope identifiable (single true size)"),
+        (f"  particle shape: peak × Ar^{model.focus_Ar_power:+.2f}" if getattr(model, "shape_terms", False) else
+         "  particle shape: not used"),
+        "",
+        f"Depth of field at {'F_raw/I_local' if model.focus_model == 'normalised_generalised' else 'raw focus'} "
+        f"threshold = {model.foc_crit:g}",
+    ]
+    if model.size_model == "shadow_linear":
+        lines[lines.index("Focus"):lines.index("Focus")] = [
+            "No contour-based defocus correction is applied to the circle-shadow size proxy.", ""]
+    else:
+        lines[lines.index("Focus"):lines.index("Focus")] = [
         "Oversizing away from focus (Zd = λ|d|/(L/2)²" + (
             f"·(L/{model.L_ref_um:.0f} µm)^{2 - model.size_L_power:+.2f})" if model.size_L_power != 2.0 else ")"),
         (f"  size scaling: Zd ∝ |d|/L^{model.size_L_power:.2f} (fitted; 2 = Fresnel, Z/L²)"
@@ -855,24 +998,13 @@ def format_report(model: SizingModel, validation: Optional[dict] = None, trackin
            f"{model.size_sigma_minus[0]:.3f} + {model.size_sigma_minus[1]:.3f}·Zd" if model.size_sigma_minus else
            f"{model.size_sigma[0]:.3f} + {model.size_sigma[1]:.3f}·Zd"),
         "",
-        "Focus",
-        f"  F0 = {model.focus_F0:.1f}·(I/I_ref)^{model.focus_gamma:.2f}, I_ref = {model.illum_ref:.1f}",
-        f"  half-widths: + {model.focus_w_plus_mm:.3f} mm, − {model.focus_w_minus_mm:.3f} mm, shape q = "
-        f"{model.focus_q:.2f}, floor {model.focus_floor:.2f}",
-        f"  scatter σ(log foc) = {model.focus_sigma[0]:.3f} + {model.focus_sigma[1]:.3f}·|d|",
-        (f"  size dependence: peak × (L/{model.L_ref_um:.0f} µm)^{model.focus_L_amp:+.2f}, "
-         f"half-widths × (L/{model.L_ref_um:.0f} µm)^{model.focus_L_width:+.2f}"
-         if model.size_L_power_fitted else "  size dependence: none assumed (single true size)"),
-        (f"  particle shape: peak × Ar^{model.focus_Ar_power:+.2f}" if getattr(model, "shape_terms", False) else
-         "  particle shape: not used"),
-        "",
-        f"Depth of field at foc_crit = {model.foc_crit:g}",
-    ]
+        ]
     sizes = fs.get("true_sizes_um") or [None]
     for size in sizes:
         if len(sizes) > 1:
             lines.append(f"  {size:g} µm particles:")
-        for row in dof_table(model, L=size):
+        for row in (dof_table(model, irels=(1.0,), L=size)
+                    if model.focus_model == "normalised_generalised" else dof_table(model, L=size)):
             cap = "  (≥, curve never reaches threshold)" if row["capped"] else ""
             lines.append(f"  I/I_ref {row['irel']:.1f}: {row['d_minus']:+.2f} … {row['d_plus']:+.2f} mm, "
                          f"total {row['total_mm']:.2f} mm, acceptance-weighted {row['acceptance_mm']:.2f} mm{cap}")
@@ -930,6 +1062,35 @@ def format_report(model: SizingModel, validation: Optional[dict] = None, trackin
     return "\n".join(lines)
 
 
+def paired_contour_shadow_errors(table: CalibrationTable):
+    """Uncorrected diameter/label errors for *the same* ROIs.
+
+    Shadow is the exact stored/temporarily computed signed integral used by
+    Edge Lab; it is not the model-corrected estimate and no true-size label
+    enters its calculation. Use contour equivalent-area diameter if present,
+    otherwise fall back to maximum Feret length. Never mix rows with missing
+    paired measurements or compare disjoint populations.
+    """
+    if table.size_measure not in ("shadow_deq", "area_corrected_shadow"):
+        return None
+    true = np.asarray(table.true_length, float)
+    shadow = np.asarray(table.length, float)
+    edge_deq = (np.full_like(true, np.nan) if table.edge_deq is None
+                else np.asarray(table.edge_deq, float))
+    edge_length = (np.full_like(true, np.nan) if table.edge_length is None
+                   else np.asarray(table.edge_length, float))
+    # Prefer the contour equivalent-area diameter, suitable for bead trials.
+    contour = edge_deq
+    contour_label = "Contour equivalent-area diameter"
+    if not np.any(np.isfinite(edge_deq) & (edge_deq > 0)):
+        contour = edge_length
+        contour_label = "Contour maximum Feret length"
+    both = (np.isfinite(true) & (true > 0) & np.isfinite(shadow) & (shadow > 0) &
+            np.isfinite(contour) & (contour > 0))
+    return (contour[both] / true[both] - 1.,
+            shadow[both] / true[both] - 1., contour_label, int(both.sum()))
+
+
 def make_figure(model: SizingModel, table: CalibrationTable, validation: Optional[dict] = None,
                 tracking: Optional[dict] = None, figure=None):
     """Six-panel diagnostic figure.  Pass an existing matplotlib Figure to draw into it."""
@@ -954,30 +1115,42 @@ def make_figure(model: SizingModel, table: CalibrationTable, validation: Optiona
     colours = ["tab:blue", "tab:orange", "tab:green", "tab:purple", "tab:brown", "tab:pink"]
 
     ax = axes[0, 0]
-    if multi:
-        # All sizes on one axis: signed Zd (∝ Z/L^m).  If the scaling is right, they collapse.
-        sign = np.sign(t.d - model.size_d0_mm)
+    if model.size_model == "shadow_linear":
         for k, size in enumerate(sizes):
-            m = np.round(t.true_length, 1) == size
-            ax.scatter(sign[m] * model.zd(t.true_length[m], t.d[m]), t.length[m] / t.true_length[m], s=4,
-                       color=colours[k % 6], alpha=0.5, rasterized=True, label=f"{size:g} µm")
-            ds = np.linspace(min(t.d[m].min(), -0.05), max(t.d[m].max(), 0.05), 200)
-            ax.plot(np.sign(ds - model.size_d0_mm) * model.zd(size, ds), model.mean_length(size, ds) / size,
-                    color=_darker(colours[k % 6]), lw=2.0, zorder=5, path_effects=_HALO)
-        ax.set_xlabel(f"signed Zd = ±λ|d|/(L/2)²" + (f"·(L/L_ref)^{2 - model.size_L_power:+.2f}"
-                                                    if model.size_L_power != 2.0 else ""))
-        ax.set_title(f"L_app/L, all sizes (m = {model.size_L_power:.2f})", fontsize=10)
-        ax.legend(fontsize=7, markerscale=3)
-    else:
-        sc = ax.scatter(t.d, t.length / t.true_length, s=4, c=irel, cmap="viridis", vmin=0.6, vmax=1.4, alpha=0.6,
-                        rasterized=True)
-        for r, ls in ((0.8, ":"), (1.0, "-"), (1.2, "--")):
-            ax.plot(dg, model.mean_length(Lref, dg, r) / Lref, "r", ls=ls, lw=1.4, label=f"model I/I_ref={r}")
+            mask = np.round(t.true_length, 1) == size
+            ax.scatter(t.d[mask], t.length[mask] / t.true_length[mask], s=4,
+                       color=colours[k % 6], alpha=.3, rasterized=True, label=f"{size:g} µm")
+            ax.plot(dg, model.mean_length(size, dg) / size * np.ones_like(dg),
+                    color=_darker(colours[k % 6]), lw=2)
+        ax.axhline(1, color="k", lw=.6)
         ax.set_xlabel("signed distance d [mm]")
-        ax.set_title(f"L_app / L ({Lref:g} µm)", fontsize=10)
+        ax.set_title("Circle signed-shadow diameter / true size")
         ax.legend(fontsize=7)
-        figure.colorbar(sc, ax=ax, label="I/I_ref")
-    ax.axhline(1.0, color="k", lw=0.6)
+    else:
+        if multi:
+            # All sizes on one axis: signed Zd (∝ Z/L^m).  If the scaling is right, they collapse.
+            sign = np.sign(t.d - model.size_d0_mm)
+            for k, size in enumerate(sizes):
+                m = np.round(t.true_length, 1) == size
+                ax.scatter(sign[m] * model.zd(t.true_length[m], t.d[m]), t.length[m] / t.true_length[m], s=4,
+                           color=colours[k % 6], alpha=0.5, rasterized=True, label=f"{size:g} µm")
+                ds = np.linspace(min(t.d[m].min(), -0.05), max(t.d[m].max(), 0.05), 200)
+                ax.plot(np.sign(ds - model.size_d0_mm) * model.zd(size, ds), model.mean_length(size, ds) / size,
+                        color=_darker(colours[k % 6]), lw=2.0, zorder=5, path_effects=_HALO)
+            ax.set_xlabel(f"signed Zd = ±λ|d|/(L/2)²" + (f"·(L/L_ref)^{2 - model.size_L_power:+.2f}"
+                                                        if model.size_L_power != 2.0 else ""))
+            ax.set_title(f"L_app/L, all sizes (m = {model.size_L_power:.2f})", fontsize=10)
+            ax.legend(fontsize=7, markerscale=3)
+        else:
+            sc = ax.scatter(t.d, t.length / t.true_length, s=4, c=irel, cmap="viridis", vmin=0.6, vmax=1.4, alpha=0.6,
+                            rasterized=True)
+            for r, ls in ((0.8, ":"), (1.0, "-"), (1.2, "--")):
+                ax.plot(dg, model.mean_length(Lref, dg, r) / Lref, "r", ls=ls, lw=1.4, label=f"model I/I_ref={r}")
+            ax.set_xlabel("signed distance d [mm]")
+            ax.set_title(f"L_app / L ({Lref:g} µm)", fontsize=10)
+            ax.legend(fontsize=7)
+            figure.colorbar(sc, ax=ax, label="I/I_ref")
+        ax.axhline(1.0, color="k", lw=0.6)
     ax.set_ylabel("L_app / L")
     if getattr(model, "length_factor", 1.0) != 1.0:
         ax.text(0.02, 0.02, f"pixel {model.pixel_um * model.length_factor:.3f} µm ({model.pixel_mode})",
@@ -986,7 +1159,8 @@ def make_figure(model: SizingModel, table: CalibrationTable, validation: Optiona
     ax = axes[0, 1]
     # Focus divided by the fitted illumination dependence (I/I_ref)^γ: every particle shown as if at I_ref,
     # so the scatter left is what the illumination does not explain.  Curves are the model at I_ref.
-    focus_n = t.focus / np.power(np.clip(irel, 0.05, 20), model.focus_gamma)
+    focus_n = (t.focus if model.focus_model == "normalised_generalised"
+               else t.focus / np.power(np.clip(irel, 0.05, 20), model.focus_gamma))
     if multi:
         for k, size in enumerate(sizes):                 # all points first, then the model lines on top
             m = np.round(t.true_length, 1) == size
@@ -1004,23 +1178,36 @@ def make_figure(model: SizingModel, table: CalibrationTable, validation: Optiona
         if np.isfinite(v):
             ax.axvline(v, color="grey", lw=0.8, ls=":")
     ax.set_xlabel("signed distance d [mm]")
-    ax.set_ylabel(f"focus ÷ (I/I_ref)^{model.focus_gamma:.2f}")
+    ax.set_ylabel("F_raw / local illumination" if model.focus_model == "normalised_generalised"
+                  else f"focus ÷ (I/I_ref)^{model.focus_gamma:.2f}")
     ax.set_title(f"Focus · DOF {dof['total_mm']:.2f} mm @ {model.foc_crit:g}"
                  + (f" ({sizes[-1]:g} µm)" if multi else ""), fontsize=10)
 
     ax = axes[0, 2]
-    for k, size in enumerate(sizes if multi else [None]):
-        rows = dof_table(model, np.linspace(0.5, 1.5, 11), L=size)
-        colour = colours[k % 6]
-        tag = f"{size:g} µm " if size is not None else ""
-        ax.plot([r["irel"] for r in rows], [r["total_mm"] for r in rows], "o-", color=colour, ms=3,
-                label=f"{tag}mean-curve crossing")
-        ax.plot([r["irel"] for r in rows], [r["acceptance_mm"] for r in rows], "s--", color=colour, ms=3,
-                label=f"{tag}acceptance-weighted")
-    ax.set_xlabel("local illumination I/I_ref")
-    ax.set_ylabel("depth of field [mm]")
-    ax.set_title("DOF vs illumination", fontsize=10)
-    ax.legend(fontsize=6)
+    if model.focus_model == "normalised_generalised":
+        xs = np.linspace(max(1., min(sizes)), max(sizes), 65) if multi else sizes
+        values = [depth_of_field(model, 1.0, L=float(size)) for size in xs]
+        ax.plot(xs, [v["total_mm"] for v in values], label="mean-curve DOF")
+        ax.plot(xs, [v["acceptance_mm"] for v in values], "--", label="acceptance-weighted")
+        ax.set_xlabel("True diameter [µm]")
+        ax.set_ylabel("Depth of field [mm]")
+        ax.set_title(f"DOF vs size · F/I ≥ {model.foc_crit:g}", fontsize=10)
+        ax.legend(fontsize=7)
+    else:
+        pass
+    if model.focus_model != "normalised_generalised":
+        for k, size in enumerate(sizes if multi else [None]):
+            rows = dof_table(model, np.linspace(0.5, 1.5, 11), L=size)
+            colour = colours[k % 6]
+            tag = f"{size:g} µm " if size is not None else ""
+            ax.plot([r["irel"] for r in rows], [r["total_mm"] for r in rows], "o-", color=colour, ms=3,
+                    label=f"{tag}mean-curve crossing")
+            ax.plot([r["irel"] for r in rows], [r["acceptance_mm"] for r in rows], "s--", color=colour, ms=3,
+                    label=f"{tag}acceptance-weighted")
+        ax.set_xlabel("local illumination I/I_ref")
+        ax.set_ylabel("depth of field [mm]")
+        ax.set_title("DOF vs illumination", fontsize=10)
+        ax.legend(fontsize=6)
 
     def overall_histogram(ax):
         bins = np.linspace(-0.3, 0.8, 56)
@@ -1035,7 +1222,8 @@ def make_figure(model: SizingModel, table: CalibrationTable, validation: Optiona
                     label="retrieved, side unknown")
         ax.axvline(0, color="grey", lw=0.6)
         ax.set_xlabel("(L_est − L) / L")
-        ax.set_title("Sizing error (held-out batches)", fontsize=10)
+        ax.set_title("Sizing error (held-out batches)" if validation is not None
+                     else "Raw diameter error (fit sample; no hold-out)", fontsize=10)
         ax.legend(fontsize=6.5, loc="upper center", bbox_to_anchor=(0.5, -0.2), ncol=3, frameon=False)
 
     ax = axes[1, 0]
@@ -1058,7 +1246,31 @@ def make_figure(model: SizingModel, table: CalibrationTable, validation: Optiona
     ax.set_title("Distance retrieval", fontsize=10)
 
     ax = axes[1, 2]
-    if tracking and tracking.get("ok"):
+    if model.size_model == "shadow_linear":
+        # The *same particles* must contribute to both distributions. Both
+        # quantities are raw observed diameters divided by the labelled size:
+        # no fitted scale/offset, no model retrieval, no stage medians.
+        paired = paired_contour_shadow_errors(t)
+        if paired is not None and paired[3]:
+            edge_error, shadow_error, edge_label, n = paired
+            pool = np.r_[edge_error, shadow_error]
+            lo, hi = np.percentile(pool, [0.5, 99.5])
+            lo = min(-.10, float(lo)); hi = max(.10, float(hi))
+            if lo == hi: hi = lo + .1
+            bins = np.linspace(lo, hi, 50)
+            ax.hist(edge_error, bins=bins, histtype="step", lw=1.5, label=edge_label)
+            ax.hist(shadow_error, bins=bins, histtype="step", lw=1.5,
+                    label="Signed shadow integral (fitted circle)")
+            ax.axvline(0, color="grey", lw=.8, ls="--")
+            ax.set_xlabel("Measured diameter / labelled diameter − 1")
+            ax.set_ylabel("Number of ROIs")
+            ax.set_title(f"Contour vs shadow · same {n:,} ROIs", fontsize=10)
+            ax.legend(fontsize=6.5, frameon=False)
+        else:
+            ax.text(.5, .52, "No paired contour and shadow sizes available",
+                    ha="center", va="center", transform=ax.transAxes, fontsize=9)
+            ax.set_axis_off()
+    elif tracking and tracking.get("ok"):
         S = np.array(tracking["shifts"])
         used = np.array(tracking["used"], bool)
         u = math.radians(tracking["direction_deg"])
@@ -1078,6 +1290,72 @@ def make_figure(model: SizingModel, table: CalibrationTable, validation: Optiona
         reason = (tracking or {}).get("reason", "not computed")
         ax.text(0.98, 0.98, "pixel size from bead tracking:\n" + reason, transform=ax.transAxes, ha="right",
                 va="top", fontsize=6.5, color="#555", wrap=True)
+    return figure
+
+
+
+def shadow_shape_diagnostics(table: CalibrationTable):
+    """Observed CPI shape/shadow quantities; no microscopy or fitted correction.
+
+    The geometrical reference uses CPI contour roundness, not an independently
+    measured projected area. It is diagnostic only and must not be presented as
+    extinction efficiency or geometric ground truth.
+    """
+    true = np.asarray(table.true_length, float)
+    shadow = (np.asarray(table.length, float) if table.size_measure == "shadow_deq"
+              else np.full_like(true, np.nan))
+    if table.roundness is None:
+        roundness = np.full_like(true, np.nan)
+    else:
+        roundness = np.asarray(table.roundness, float)
+    labels = np.asarray(table.label, object)
+    valid = (np.isfinite(true) & (true > 0) & np.isfinite(shadow) & (shadow > 0) &
+             np.isfinite(roundness) & (roundness > 0) & (roundness <= 1.01))
+    return {'roundness': roundness[valid], 'shadow_ratio': shadow[valid] / true[valid],
+            'labels': labels[valid], 'n': int(valid.sum())}
+
+
+def make_shadow_shape_figure(table: CalibrationTable, figure=None):
+    """Validation diagnostic, not an image-by-image physics correction.
+
+    Compares CPI-derived shape against squared signed-shadow diameter ratio.
+    Microscopy is deliberately absent: a calibration needing reference images
+    cannot be applied generally to atmospheric particles.
+    """
+    if figure is None:
+        from matplotlib.figure import Figure
+        figure = Figure(figsize=(11, 7), layout='constrained')
+    figure.clear()
+    ax, hist = figure.subplots(1, 2)
+    info = shadow_shape_diagnostics(table)
+    if info['n'] == 0:
+        for a in (ax, hist):
+            a.text(.5, .5, 'Select circle shadow sizing and use data with CPI roundness',
+                   ha='center', va='center', transform=a.transAxes, wrap=True)
+            a.set_axis_off()
+        return figure
+    x, y = info['roundness'], info['shadow_ratio'] ** 2
+    # CPI roundness is an area / Feret-circle ratio, not necessarily the
+    # minimum-enclosing-circle area ratio used in microscopy. Explicit label.
+    groups = np.unique(info['labels'])
+    for i, label in enumerate(groups[:16]):
+        m = info['labels'] == label
+        ax.scatter(x[m], y[m], s=4, alpha=.25, rasterized=True,
+                   label=str(label)[:20])
+    ax.plot([0,1], [0,1], 'k--', lw=1, label='equal area proxies')
+    ax.set(xlim=(0, 1.05), xlabel='CPI contour area / Feret circle area',
+           ylabel='(D shadow / labelled L)²',
+           title='Optical shadow vs CPI morphology (not microscopy)')
+    if len(groups) <= 12:
+        ax.legend(fontsize=7, markerscale=3)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        efficiency = y / x
+    efficiency = efficiency[np.isfinite(efficiency) & (efficiency > 0)]
+    hist.hist(efficiency, bins=50, histtype='step', color='tab:blue')
+    hist.axvline(1, ls='--', color='black', lw=1)
+    hist.set(xlabel='(D shadow / labelled L)² / CPI contour area ratio',
+             ylabel='Particle count', title='Apparent shadow/contour area ratio')
+    figure.suptitle(f'{info["n"]:,} matched CPI images · area correction equals contour equivalent-area size', fontsize=12)
     return figure
 
 
@@ -1115,6 +1393,11 @@ def model_equations(model: SizingModel):
         rf"$A_+={model.size_plus['A']:.3f},\ p_+={model.size_plus['p']:.2f},\ "
         rf"A_-={model.size_minus['A']:.3f},\ p_-={model.size_minus['p']:.2f}$",
     ]
+    if model.size_model == "shadow_linear":
+        size = [r"$D_{shadow}=s\,L_{true}+b$",
+                r"$A_{shadow}=\sum_{circle}(1-T_{ij})\,\Delta x^2$",
+                rf"$s={model.scale:.3f},\ b={model.offset_um:.2f}\,\mu m$",
+                r"$\mathrm{Stored\ Feret\ length\ and\ morphology\ unchanged}$"]
     Lterm = rf"\,(L/{Lr}\,\mu m)^{{{model.focus_L_amp:.2f}}}" if model.focus_L_amp else ""
     if getattr(model, "shape_terms", False):
         Lterm += rf"\,A_r^{{{model.focus_Ar_power:.2f}}}"
@@ -1126,6 +1409,14 @@ def model_equations(model: SizingModel):
         rf"$w_+={model.focus_w_plus_mm:.3f}\,mm,\ w_-={model.focus_w_minus_mm:.3f}\,mm,\ "
         rf"d_{{0f}}={model.focus_d0_mm:+.3f}\,mm$",
     ]
+    if model.focus_model == "normalised_generalised":
+        focus = [
+            r"$F_{raw}/I_{local}=B+A(L)\,\exp[-(|d-d_0|/w_\pm(L))^p]$",
+            rf"$A(L)={model.focus_F0:.3f}(L/{Lr})^{{{model.focus_L_amp:.2f}}},\ "
+            rf"w_\pm(L)=w_\pm(L/{Lr})^{{{model.focus_L_width:.2f}}}$",
+            rf"$w_+={model.focus_w_plus_mm:.3f},\ w_-={model.focus_w_minus_mm:.3f}\,mm,\ "
+            rf"p={model.focus_q:.2f},\ B={model.focus_floor:.3f}$",
+        ]
     return size, focus
 
 
@@ -1245,7 +1536,8 @@ def fit_main(argv=None):
     ap.add_argument("--figure", help="save the diagnostic figure (png/pdf)")
     ap.add_argument("--label", action="append", help="only use particles with this label (repeatable)")
     ap.add_argument("--illum-min", type=float, default=None, help="ignore particles with local illumination below this")
-    ap.add_argument("--foc-crit", type=float, default=DEFAULT_FOC_CRIT)
+    ap.add_argument("--foc-crit", type=float, default=None,
+                    help="focus threshold for DOF: default 5 for original, 0.12 for F/I_local")
     ap.add_argument("--offset-um", type=float, default=None, help="fix the additive edge offset (default 2 px)")
     ap.add_argument("--fit-offset", action="store_true", help="fit the offset (needs two or more true sizes)")
     ap.add_argument("--flip-side", action="store_true", help="multiply d by -1 before fitting")
@@ -1257,6 +1549,13 @@ def fit_main(argv=None):
                          "the focus peak, Ar = measured roundness (needs beads and non-spherical analogues)")
     ap.add_argument("--max-cutoff", type=float,
                     help="leave out particles with more than this %% of their outline on the ROI edge (cutoff_pct)")
+    ap.add_argument("--fit-recipe", choices=("original", "circle", "contour"), default=None,
+                    help="quick preset: original CPI, signed-shadow circle + normalised focus, or "
+                         "contour equivalent diameter + normalised focus")
+    ap.add_argument("--fixed-gaussian", action="store_true", help="fix focus p=2 instead of fitting p")
+    ap.add_argument("--symmetric-focus", action="store_true", help="use the same width for +Z and -Z")
+    ap.add_argument("--no-peak-size", action="store_true", help="fix focus peak independent of true diameter")
+    ap.add_argument("--no-width-size", action="store_true", help="fix focus width independent of true diameter")
     ap.add_argument("--focus", choices=tuple(FOCUS_MEASURES), default="focus",
                     help="focus value to calibrate with: focus (as processed) or cpv_focus (CPIview's, --cpiview)")
     px = ap.add_mutually_exclusive_group()
@@ -1264,6 +1563,14 @@ def fit_main(argv=None):
     px.add_argument("--fit-pixel", action="store_true",
                     help="fit the pixel size from the bead sizes (needs two or more), then rescale")
     args = ap.parse_args(argv)
+    if args.fit_recipe == "circle":
+        args.size, args.focus = "shadow_deq", "focus_per_illum"
+    elif args.fit_recipe == "contour":
+        args.size, args.focus = "deq", "focus_per_illum"
+    elif args.fit_recipe == "original":
+        args.size, args.focus = "length", "focus"
+    if args.foc_crit is None:
+        args.foc_crit = .12 if args.focus == "focus_per_illum" else DEFAULT_FOC_CRIT
     inputs = []
     if all(str(p).lower().endswith(".json") for p in args.inputs):
         from .combine import load_projects_for_fit
@@ -1294,7 +1601,14 @@ def fit_main(argv=None):
                                                   fit_offset=True if args.fit_offset else None, shape=args.shape,
                                                   pixel_mode=("fitted" if args.fit_pixel else "set" if args.pixel_um
                                                               else "processed"),
-                                                  pixel_set_um=args.pixel_um)
+                                                  pixel_set_um=args.pixel_um,
+                                                  size_model=("shadow_linear" if args.size == "shadow_deq" else "defocus"),
+                                                  focus_model=("normalised_generalised" if args.focus == "focus_per_illum"
+                                                               else "legacy"),
+                                                  fit_focus_p=not args.fixed_gaussian,
+                                                  asymmetric_focus=not args.symmetric_focus,
+                                                  fit_peak_size=not args.no_peak_size,
+                                                  fit_width_size=not args.no_width_size)
     model.inputs = inputs
     model.save(args.output)
     print(format_report(model, validation, tracking))
@@ -1311,7 +1625,8 @@ def _rows_from_processed(path: Path) -> List[dict]:
     for f in files:
         for r in scan_processed_file(f, f.parent):
             rows.append({"particle_id": r.particle_id, "time_iso": r.time_iso, "time_matlab": r.time_matlab,
-                         "length_um": r.length_um, "deq_um": r.deq_um, "focus": r.focus, "cpv_focus": r.cpv_focus,
+                         "length_um": r.length_um, "deq_um": r.deq_um, "shadow_deq_um": r.shadow_deq_um,
+                         "focus": r.focus, "cpv_focus": r.cpv_focus,
                          "local_illum": r.local_illum,
                          "roundness": r.roundness, "image_x_px": r.image_x_px, "image_y_px": r.image_y_px})
     return rows
@@ -1342,6 +1657,10 @@ def retrieve_main(argv=None):
                          f"{SIZE_MEASURES[model.size_measure]['label'].lower()}")
     focus_col = FOCUS_MEASURES.get(getattr(model, "focus_measure", "focus"), FOCUS_MEASURES["focus"])["columns"][0]
     focus = np.array([_num(r.get(focus_col)) for r in rows])
+    if model.focus_measure == "focus_per_illum":
+        illum_for_focus = np.array([_num(r.get("local_illum")) for r in rows])
+        with np.errstate(divide="ignore", invalid="ignore"):
+            focus = np.where(illum_for_focus > 0, focus / illum_for_focus, np.nan)
     if not np.isfinite(focus).any():
         raise SystemExit(f"no {focus_col} values in the input: this model was fitted on "
                          f"{FOCUS_MEASURES[model.focus_measure]['label'].lower()}")

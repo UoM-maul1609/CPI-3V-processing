@@ -26,7 +26,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QPolygonF, QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
                                QGraphicsEllipseItem, QGraphicsLineItem, QGraphicsPixmapItem, QGraphicsScene,
                                QGraphicsTextItem, QGraphicsView, QGroupBox, QHBoxLayout, QHeaderView,
@@ -112,6 +112,9 @@ class MeasureView(QGraphicsView):
         self._pan = None
         self._drag = None           # ("new", m) or ("end", index, which)
         self.pixmap_item: Optional[QGraphicsPixmapItem] = None
+        self.crop_mode = False
+        self.crop_anchor = None
+        self.crop_item = None
 
     # ---------------------------------------------------------------- display
     def set_image(self, qimage: QImage, keep_view=False):
@@ -134,6 +137,9 @@ class MeasureView(QGraphicsView):
         self.scale(factor, factor)
 
     def wheelEvent(self, event):
+        if event.modifiers() & Qt.ShiftModifier:
+            self.window.export_rotation.setValue(self.window.export_rotation.value()+event.angleDelta().y()/120)
+            event.accept(); return
         steps = event.angleDelta().y() / 120.0
         if steps:
             self.zoom(1.25 ** steps)
@@ -156,6 +162,13 @@ class MeasureView(QGraphicsView):
             return
         if event.button() != Qt.LeftButton or self.pixmap_item is None:
             return super().mousePressEvent(event)
+        if self.crop_mode:
+            self.crop_anchor = self._scene(event)
+            if self.crop_item is not None:
+                self.scene().removeItem(self.crop_item)
+            self.crop_item = self.scene().addPolygon(QPolygonF(),
+                                                  QPen(QColor('#ffe83b'),2,Qt.DashLine))
+            return
         ms = self.window.current_measurements()
         # an end of a line?
         best = None
@@ -190,6 +203,15 @@ class MeasureView(QGraphicsView):
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - int(d.y()))
             return
         p = self._scene(event)
+        if self.crop_anchor is not None:
+            from .export_transform import rotated_crop_rect
+            w,h=self.window.image_size()
+            polygon, fractions, _ = rotated_crop_rect(
+                (self.crop_anchor.x(),self.crop_anchor.y()), (p.x(),p.y()),
+                w,h,self.window.export_rotation.value(),self.window.crop_aspect_ratio())
+            self.crop_item.setPolygon(polygon)
+            self._crop_fraction = fractions
+            return
         self.window.show_cursor(p.x(), p.y())
         if self._drag is None:
             return
@@ -208,6 +230,11 @@ class MeasureView(QGraphicsView):
             self.window.changed(i)
 
     def mouseReleaseEvent(self, event):
+        if self.crop_anchor is not None and event.button()==Qt.LeftButton:
+            self.crop_anchor=None
+            if self.crop_item is not None:
+                self.window.set_crop_rect(self._crop_fraction)
+            return
         if self._pan is not None and event.button() in (Qt.RightButton, Qt.MiddleButton):
             self._pan = None
             self.unsetCursor()
@@ -388,6 +415,33 @@ class MeasureWindow(QMainWindow):
         self.bar_check.setChecked(True)
         self.caption_check = QCheckBox("Caption (file, image, pixel size)")
         self.caption_check.setChecked(True)
+        self.export_rotation = QDoubleSpinBox()
+        self.export_rotation.setRange(-360,360); self.export_rotation.setDecimals(1)
+        self.export_rotation.setSingleStep(1); self.export_rotation.setSuffix('° clockwise')
+        self.export_rotation.valueChanged.connect(self.preview_rotation)
+        self.export_crop = []
+        for name, val in (("Crop left (%)", 0), ("Crop top (%)", 0),
+                          ("Crop right (%)", 100), ("Crop bottom (%)", 100)):
+            spin = QDoubleSpinBox(); spin.setRange(0, 100); spin.setValue(val)
+            spin.setSingleStep(5); spin.setDecimals(3)
+            self.export_crop.append(spin)
+            exl.addRow(name, spin)
+        self.crop_ratio = QComboBox()
+        for label,ratio in [('Free',0),('1:1',1),('4:3',4/3),('3:2',1.5),('16:9',16/9),('9:16',9/16),('Custom',-1)]:
+            self.crop_ratio.addItem(label,ratio)
+        self.crop_ratio_width = QDoubleSpinBox(); self.crop_ratio_width.setRange(.01,10000); self.crop_ratio_width.setValue(4)
+        self.crop_ratio_height = QDoubleSpinBox(); self.crop_ratio_height.setRange(.01,10000); self.crop_ratio_height.setValue(3)
+        exl.addRow('Crop aspect ratio',self.crop_ratio)
+        exl.addRow('Custom aspect width',self.crop_ratio_width)
+        exl.addRow('Custom aspect height',self.crop_ratio_height)
+        self.crop_drag_button = QPushButton('Drag export crop on image')
+        self.crop_drag_button.setCheckable(True)
+        self.crop_drag_button.toggled.connect(lambda on: setattr(self.view,'crop_mode',on))
+        exl.addRow(self.crop_drag_button)
+        exl.addRow("Rotate image / PNG", self.export_rotation)
+        self.export_pixel_info = QCheckBox("Include original pixel dimensions and x/y axis arrows")
+        self.export_pixel_info.setChecked(True)
+        exl.addRow(self.export_pixel_info)
         b_png = QPushButton("Export image as PNG…")
         b_csv = QPushButton("Export all measurements as CSV…")
         b_png.clicked.connect(self.export_png_dialog)
@@ -768,7 +822,7 @@ class MeasureWindow(QMainWindow):
             self._refresh_measurements()
 
     # ================================================================ export
-    def render_png(self, scale: int = 0) -> QImage:
+    def render_png(self, scale: int = 0, upright_labels: bool = False) -> QImage:
         """The current image enlarged ``scale`` times (sharp pixels) with its measurements drawn on."""
         if self.array is None:
             raise ValueError("No image")
@@ -779,7 +833,7 @@ class MeasureWindow(QMainWindow):
         caption_h = 0
         font = QFont()
         font.setPixelSize(max(11, int(min(w, h) * scale / 45)))
-        if self.caption_check.isChecked():
+        if self.caption_check.isChecked() and not upright_labels:
             caption_h = int(font.pixelSize() * 2.0)
         out = QImage(w * scale, h * scale + caption_h, QImage.Format_RGB32)
         out.fill(QColor("white"))
@@ -814,9 +868,10 @@ class MeasureWindow(QMainWindow):
             tw = fm.horizontalAdvance(text)
             tx = min(tx, w * scale - tw - 4)
             r = QRectF(tx - 3, ty - fm.ascent() - 2, tw + 6, fm.height() + 4)
-            p.fillRect(r, QColor(0, 0, 0, 150))
-            p.setPen(LINE)
-            p.drawText(QPointF(tx, ty), text)
+            if not upright_labels:
+                p.fillRect(r, QColor(0, 0, 0, 150))
+                p.setPen(LINE)
+                p.drawText(QPointF(tx, ty), text)
         if px and self.bar_check.isChecked():
             bar_um = nice_bar_length(0.25 * w * px)
             bar_px = bar_um / px * scale
@@ -827,16 +882,97 @@ class MeasureWindow(QMainWindow):
                               fm.height() + 22), QColor(0, 0, 0, 140))
             p.fillRect(QRectF(x0, y0 - 4, bar_px, max(3.0, scale / 1.5)), QColor("white"))
             p.setPen(QColor("white"))
-            p.drawText(QPointF(x0, y0 - 8), label)
-        if caption_h:
+            if not upright_labels:
+                p.drawText(QPointF(x0, y0 - 8), label)
+        if caption_h and not upright_labels:
             p.setPen(QColor("#222222"))
             text = self.entry.title() + f"  ·  {w}×{h} px" + (f"  ·  pixel {px:.4g} µm" if px else "")
             p.drawText(QRectF(6, h * scale, w * scale - 12, caption_h), Qt.AlignVCenter | Qt.AlignLeft, text)
         p.end()
         return out
 
+    def crop_aspect_ratio(self):
+        ratio=self.crop_ratio.currentData()
+        if ratio==-1:
+            return self.crop_ratio_width.value()/self.crop_ratio_height.value()
+        return ratio or 0
+
+    def set_crop_rect(self, fractions):
+        if fractions is not None:
+            values=fractions
+            for spin,value in zip(self.export_crop,values):
+                spin.setValue(round(max(0,min(100,value*100)),3))
+
+    def preview_rotation(self, angle):
+        if self.view.pixmap_item is not None:
+            self.view.resetTransform()
+            self.view.fit()
+            self.view.rotate(float(angle))
+            self.view.centerOn(self.view.pixmap_item)
+
     def export_png(self, path, scale: int = 0) -> str:
-        img = self.render_png(scale)
+        img = self.render_png(scale, upright_labels=True)
+        try:
+            from .export_transform import crop_rotate_image
+        except ImportError:
+            from export_transform import crop_rotate_image
+        crop = [spin.value() / 100 for spin in self.export_crop]
+        angle = self.export_rotation.value()
+        img = crop_rotate_image(img, crop, angle)
+        # Render all editorial labels after rotating/cropping, in paper orientation.
+        from PySide6.QtGui import QFont
+        p = QPainter(img)
+        try:
+            p.setRenderHint(QPainter.Antialiasing, True)
+            font=QFont(); font.setBold(True); font.setPixelSize(max(12,min(30,img.width()//52)))
+            p.setFont(font)
+            fm=p.fontMetrics()
+            y=6
+            px=self.pixel_um()
+            def line(text):
+                nonlocal y
+                while fm.horizontalAdvance(text)>img.width()-18 and font.pixelSize()>10:
+                    font.setPixelSize(font.pixelSize()-1); p.setFont(font)
+                metrics=p.fontMetrics()
+                p.fillRect(QRectF(3,y,max(10,min(img.width()-3,metrics.horizontalAdvance(text)+13)),metrics.height()+5), QColor(0,0,0,170))
+                p.setPen(QColor('white'))
+                p.drawText(9,int(y+metrics.ascent()+2),text)
+                y += metrics.height()+8
+            if self.caption_check.isChecked():
+                line(self.entry.title() + f' · {self.array.shape[1]}×{self.array.shape[0]} source px')
+            for n,m in enumerate(self.current_measurements(),1):
+                line(f'{n}: {_fmt(m,px)}')
+            if px and self.bar_check.isChecked():
+                line(f'Scale bar: {nice_bar_length(.25*self.array.shape[1]*px):g} µm')
+        finally:
+            p.end()
+        if self.export_pixel_info.isChecked():
+            # The arrows explicitly describe ORIGINAL CPI image coordinates.
+            # Rotating the export rotates the arrow vectors consistently.
+            from PySide6.QtCore import QPointF
+            import math
+            s = max(25, min(img.width(), img.height()) // 7)
+            if img.width() > 3*s and img.height() > 3*s:
+                painter = QPainter(img)
+                try:
+                    painter.setRenderHint(QPainter.Antialiasing, True)
+                    theta = math.radians(angle)
+                    ex = (math.cos(theta), math.sin(theta))
+                    ey = (-math.sin(theta), math.cos(theta))
+                    origin = QPointF(s + 12, s + 12)
+                    painter.setPen(QPen(QColor('#000000'), 6))
+                    for dx,dy in (ex,ey):
+                        painter.drawLine(origin, QPointF(origin.x()+dx*s*.75, origin.y()+dy*s*.75))
+                    painter.setPen(QPen(QColor('#ffff38'), 3))
+                    for name,(dx,dy) in (('x',ex), ('y',ey)):
+                        end = QPointF(origin.x()+dx*s*.75, origin.y()+dy*s*.75)
+                        painter.drawLine(origin, end)
+                        painter.drawText(QPointF(end.x()+6, end.y()-6), name)
+                    painter.setPen(QColor('#ffff38'))
+                    painter.drawText(10, img.height()-12,
+                        f'CPI source axes · export {img.width()} × {img.height()} pixels')
+                finally:
+                    painter.end()
         if not img.save(str(path), "PNG"):
             raise OSError(f"Could not write {path}")
         return str(path)
