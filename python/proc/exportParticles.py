@@ -19,7 +19,7 @@ import tempfile
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy.io import loadmat
-from exportBackground import corrected_roi, options_from_dat
+from exportBackground import corrected_roi, options_from_dat, apply_visual_colormap
 
 _FIELDS = ('source_id','project','flight','date','timestamp','source_mat','source_roi','roi_index','particle_index','size_um','focus','eligible','export_status','png_relative_path','processing_options','error')
 
@@ -125,11 +125,12 @@ def _png_bytes_array(roi):
     return np.asarray(np.clip(arr,0,255), dtype=np.uint8)
 
 def _encode_image(arr, outline):
-    # Original pixel values are kept intact except for an OPTIONAL overlay.
-    img=Image.fromarray(arr, 'L')
-    if outline is not None and len(outline)>2:
-        img=img.convert('RGB')
-        draw=ImageDraw.Draw(img)
+    # Apply the same visual colourmap as exportImages.py after background
+    # normalisation so individual particle PNGs match the montage exporter.
+    rgb = apply_visual_colormap(arr, 'Blues_r')
+    img = Image.fromarray(rgb, 'RGB')
+    if outline is not None and len(outline) > 2:
+        draw = ImageDraw.Draw(img)
         # CPI boundaries use coordinates (row,column), matching numpy image indexing.
         xy=[(float(p[1]),float(p[0])) for p in outline]
         draw.line(xy+[xy[0]],fill=(255,0,0),width=1)

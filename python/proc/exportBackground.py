@@ -1,6 +1,7 @@
 """Export-time intensity normalisation using CPI processing's own transmittance."""
 import json
 import numpy as np
+from matplotlib import cm
 try:
     from edgeDetect import EdgeOptions, transmittance
 except ImportError:
@@ -50,3 +51,19 @@ def corrected_roi(roi, bg, bg_used, index, options, *, start_x=None, cpiv1=False
     if not np.isfinite(T).all():
         raise ValueError('Nonfinite background-normalised transmittance')
     return np.clip(np.rint(255.0 * T), 0, 255).astype(np.uint8)
+
+
+def apply_visual_colormap(arr8, cmap_name='Blues_r'):
+    """Apply a matplotlib colormap to an 8-bit grayscale image.
+
+    This is for visual exports only. Input is assumed to already be background-
+    normalised and scaled to uint8 in the range 0..255. Output is an RGB uint8
+    image matching matplotlib's colormap mapping with vmin=0, vmax=255.
+    """
+    arr = np.asarray(arr8)
+    if arr.ndim != 2:
+        raise ValueError(f'Expected a 2-D uint8 image, got shape {arr.shape}')
+    if arr.dtype != np.uint8:
+        arr = np.clip(np.rint(arr), 0, 255).astype(np.uint8)
+    rgba = cm.get_cmap(cmap_name)(arr.astype(np.float32) / 255.0, bytes=True)
+    return np.asarray(rgba[..., :3], dtype=np.uint8)
