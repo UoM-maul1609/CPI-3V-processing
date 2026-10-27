@@ -88,10 +88,18 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
 
     image_type_value = 33857 if cpiv1 else 89
 
+    processed_files = 0
+    missing_mat_files = []
+
     for filename in filename1:
+        mat_file = os.path.join(path1, os.path.splitext(filename)[0] + ".mat")
+        if not os.path.isfile(mat_file):
+            print(f"WARNING: Skipping {filename}: corresponding MAT file is missing", flush=True)
+            missing_mat_files.append(filename)
+            continue
         print(f"Loading from file... {filename}")
-        mat_file = os.path.join(path1, filename.replace(".roi", ".mat"))
         data = sio.loadmat(mat_file, variable_names=["HOUSE", "IMAGE1", "dat"])
+        processed_files += 1
         HOUSE = data["HOUSE"]
         IMAGE1 = data["IMAGE1"]
         dat = data["dat"]
@@ -162,6 +170,11 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
                 bins=(time_edges, size_edges, ar_edges),
             )
             timeser["conc2ar"] += histogram
+
+    print(f"Time-series input: {processed_files} MAT file(s) used; "
+          f"{len(missing_mat_files)} missing MAT file(s) skipped", flush=True)
+    if processed_files == 0:
+        raise RuntimeError("No converted MAT files available for time-series calculation")
 
     # Sample area: the image projected onto the plane across the flow (object plane at 45°), using the
     # actual frame size and the pixel size the files were processed with (dat.proc_options).

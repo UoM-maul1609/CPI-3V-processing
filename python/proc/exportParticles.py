@@ -27,6 +27,20 @@ def _single(value):
         value = value.flat[0]
     return value
 
+def _scalar_float(value):
+    """Convert a MATLAB/NumPy scalar (possibly a nested 1x1 array) to float.
+
+    Return NaN for missing, nonscalar, or nonnumeric values. Importantly,
+    size and focus are converted independently so bad focus cannot erase size.
+    """
+    try:
+        arr = np.asarray(value)
+        if arr.size != 1:
+            return float('nan')
+        return float(_single(arr))
+    except (TypeError, ValueError, OverflowError):
+        return float('nan')
+
 def _field(struct, name):
     struct = _single(struct)
     if isinstance(struct, np.void) and struct.dtype.names and name in struct.dtype.names:
@@ -172,10 +186,8 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
             flight=_choose_flight(dt,mat.stem,rows)
             folder=project_dir / (_safe(date)+'_'+_safe(flight) if flight else _safe(date))
             png=folder/(source_id+'.png')
-            try:
-                size=float(sizes[i]); foc=float(focus[i])
-            except (TypeError,ValueError):
-                size=foc=float('nan')
+            size=_scalar_float(sizes[i])
+            foc=_scalar_float(focus[i])
             eligible=(math.isfinite(size) and size>=min_size_um and
                       (min_focus is None or (math.isfinite(foc) and foc>=min_focus)))
             status='filtered' if not eligible else 'pending'
@@ -232,5 +244,3 @@ def main():
     if args.min_size_um < 0 or (args.min_focus is not None and not math.isfinite(args.min_focus)):
         p.error('Invalid size/focus threshold')
     export(args.path,args.png_dir,args.project,args.flight_csv,args.min_size_um,args.min_focus,overwrite=args.overwrite)
-
-if __name__=='__main__':main()
