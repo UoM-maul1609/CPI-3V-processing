@@ -31,6 +31,7 @@ import contextlib
 import copy
 import csv
 import json
+import hashlib
 import math
 import os
 import shutil
@@ -44,6 +45,11 @@ from typing import Dict, Optional
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
 from matplotlib.figure import Figure
+from scipy.ndimage import map_coordinates
+try:
+    from .transmission_profiles import normalised_transmission, feret_profile, aggregate_profiles
+except ImportError:
+    from transmission_profiles import normalised_transmission, feret_profile, aggregate_profiles
 from matplotlib.ticker import FuncFormatter
 import matplotlib.patheffects as mpl_path_effects
 from PySide6.QtCore import Qt, QItemSelectionModel, QObject, QDateTime, QRect, QSize, QTimer, QPoint, QPointF, QThread, Signal, QSettings
@@ -54,7 +60,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox,
     QDoubleSpinBox, QFileDialog, QFormLayout, QFrame, QGridLayout, QGroupBox, QHBoxLayout,
     QInputDialog, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMainWindow, QMenu, QMessageBox,
-    QPlainTextEdit, QProgressDialog, QPushButton, QScrollArea, QSizePolicy, QSlider, QSplitter, QStatusBar, QTabWidget,
+    QPlainTextEdit, QProgressDialog, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QStatusBar, QTabWidget,
     QToolButton, QVBoxLayout, QWidget, QWidgetAction,
 )
 
@@ -71,7 +77,7 @@ try:
     from .labels import LabelLibrary, ParticleLabel, apply_label_dimensions, LABEL_KINDS
     from .reference_library import cpi_library_path, copy_reference_library
     from .combine import combine_projects, project_instrument, load_projects_for_fit
-    from . import sizing, edge_preview, batch_netcdf
+    from . import sizing, edge_preview, batch_netcdf, contour_diagnostics
     from .time_windows import window_bounds, make_window, suggest_windows, in_window, overlapping
     from .data import (FilterSpec, CPI_DISPLAY, particle_key, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog, stage_burst_check,
                        datetime_to_matlab_datenum, matlab_datenum_to_datetime, _scan_via_subprocess)
@@ -91,6 +97,7 @@ except ImportError:  # Support ``python gui.py`` from this directory.
     import sizing
     import edge_preview
     import batch_netcdf
+    import contour_diagnostics
     from time_windows import window_bounds, make_window, suggest_windows, in_window, overlapping
     from data import (FilterSpec, CPI_DISPLAY, particle_key, ParticleCatalog, ParticleRecord, ParticleStore, PositionLog, stage_burst_check,
                       datetime_to_matlab_datenum, matlab_datenum_to_datetime, _scan_via_subprocess)
@@ -109,9 +116,11 @@ MEDIAN_COLOUR = "#13294b"
 METRICS = (("focus", "Focus"), ("focus_norm", "Focus ÷ local illumination"), ("length", "Length [µm]"),
            ("width", "Width [µm]"), ("ratio", "Measured / actual length"), ("roundness", "Roundness"),
            ("illum", "Local illumination (ROI edge)"), ("focus_T", "Focus on transmittance (new edge method)"),
-           ("deq", "Equivalent-area diameter [µm] (new edge method)"),
+           ("deq", "CPI equivalent-area diameter [µm] (new edge method)"),
            ("shadow_deq", "Shadow-circle diameter [µm] (additional processing measure)"),
-           ("ratio_shadow", "Shadow-circle diameter / true diameter"),
+           ("ratio_shadow", "Shadow-circle diameter / true length"),
+           ("ratio_deq_true_area", "CPI equivalent-area diameter / true equivalent-area diameter"),
+           ("ratio_shadow_true_area", "Shadow diameter / true equivalent-area diameter"),
            ("ratio_deq", "Equivalent-area diameter / actual length"),
            ("cutoff", "Cut off by the ROI edge [% of outline]"),
            ("cpv_focus", "CPIview focus (processed with --cpiview)"),
@@ -178,7 +187,12 @@ class ParticleCanvas(FigureCanvasQTAgg):
         self.axes.set_axis_on()
         # ROI arrays are stored [x, y] (camera X down the rows).  Shown as the camera sees them --
         # X across, Y down -- the same way round as the Camera X-Y plot.
-        self.axes.imshow(np.asarray(image).T, cmap="gray", origin="upper", interpolation="nearest", aspect="equal")
+        arr = np.asarray(image)
+        is_transmission = (np.issubdtype(arr.dtype, np.floating) and
+                           np.isfinite(arr).any() and np.nanmedian(arr) > 0.25 and
+                           np.nanmedian(arr) < 1.75)
+        self.axes.imshow(arr.T, cmap="gray", origin="upper", interpolation="nearest", aspect="equal",
+                         **({"vmin": 0.0, "vmax": 1.5} if is_transmission else {}))
         if show_boundary and boundary is not None:
             finite = np.isfinite(boundary).all(axis=1)
             b = boundary[finite]
@@ -226,7 +240,7 @@ class LiveSelectionCanvas(FigureCanvasQTAgg):
         self.reference_enabled = False
         self.mode_for = lambda modifiers: "new"
         self.on_box = self.on_click = self.on_double_click = None
-        self.on_hover = self.on_leave = self.on_wheel = None
+        self.on_hover = self.on_leave = self.on_wheel = self.on_context_menu = None
         self.on_reference_changed = self.on_navigation_changed = None
         self._drag = None        # [axes index, start QPoint, end QPoint, modifiers]
         self._reference = None   # [axes index, QPoint]
@@ -270,6 +284,9 @@ class LiveSelectionCanvas(FigureCanvasQTAgg):
         if event.button() == Qt.RightButton and self.cancel_drag():
             event.accept(); return  # right-click while dragging = cancel
         index = self.axes_index_at(point)
+        if event.button() == Qt.RightButton and index is not None and self.on_context_menu is not None:
+            self.on_context_menu(self, index, point)
+            event.accept(); return
         if event.button() == Qt.LeftButton and index is not None:
             if self.reference_enabled:
                 self._reference = [index, point]
@@ -425,7 +442,7 @@ class MatLoader(QThread):
     def run(self):
         import scipy.io as sio
         try:
-            data = sio.loadmat(str(self.store_root / self.source_file), variable_names=["ROI_N", "BG", "dat"],
+            data = sio.loadmat(str(self.store_root / self.source_file), variable_names=["ROI_N", "BG", "BG_USED", "dat"],
                                simplify_cells=True)
         except Exception:
             data = None
@@ -637,11 +654,11 @@ class SizingDialog(QDialog):
         self.preset = QComboBox()
         # Keep established fitting/retrieval behaviour as the default.
         # Shadow integration is a new, optional calibration experiment.
-        self.preset.addItem("Original size and focus fit (default)", "original")
+        self.preset.addItem("Standard size fit + normalised asymmetric focus (default)", "original")
         self.preset.addItem("Contour size + normalised focus", "contour")
         self.preset.addItem("Circle shadow size + normalised focus (experimental)", "circle")
         self.preset.addItem("Shape-corrected shadow (Dshadow / sqrt(area ratio)) + normalised focus", "area_corrected")
-        self.preset.setToolTip("Original size and focus is the established default. "
+        self.preset.setToolTip("Standard contour size fit is retained; focus is normalised by local illumination. "
                                "The circle shadow method is experimental and must be selected explicitly; "
                                "individual measurements and fit terms remain editable below.")
         self.method_help = QLabel("")
@@ -651,20 +668,32 @@ class SizingDialog(QDialog):
         form.addRow(self.method_help)
         self.fit_p = QCheckBox("Fit exponent p (otherwise Gaussian p = 2)")
         self.fit_p.setChecked(True)
+        self.two_width_focus = QCheckBox("Two-component focus (narrow peak + broad shoulders; experimental)")
+        self.two_width_focus.setChecked(True)
+        self.two_width_focus.setToolTip("Fits two co-centred focus components with different widths to stage medians. Does not force the single-curve FWHM prior. Compare with the unchecked fit.")
         self.focus_asymmetric = QCheckBox("Different widths for −Z and +Z")
         self.focus_asymmetric.setChecked(True)
         self.peak_by_size = QCheckBox("Peak focus increases with true diameter")
         self.peak_by_size.setChecked(True)
         self.width_by_size = QCheckBox("Focus width increases with true diameter")
         self.width_by_size.setChecked(True)
+        self.baseline_mode = QComboBox()
+        self.baseline_mode.addItem("Free (fit baseline)", "free")
+        self.baseline_mode.addItem("Zero (fix baseline to 0)", "zero")
+        self.baseline_mode.addItem("Fixed from far-focus data", "far_focus")
+        self.baseline_mode.setCurrentIndex(self.baseline_mode.findData("zero"))
+        self.baseline_mode.setToolTip("Controls the additive floor of normalised focus. Far-focus mode uses outer stage-position medians, equally weighted by particle population.")
+        self.population_balance = QCheckBox("Population-balanced focus fit (profiles + height-aware FWHM; experimental)")
+        self.population_balance.setChecked(True)
+        self.population_balance.setToolTip("Fit population/stage-median focus profiles with equal population weight, and explicitly match full-widths at half the peak amplitude above background. Includes peak height and left/right asymmetry.")
         self.validate_folds = QCheckBox("Evaluate on held-out batches (slower, recommended)")
-        self.validate_folds.setChecked(True)
+        self.validate_folds.setChecked(False)
         self.flip = QCheckBox("Flip side (d → −d)")
         self.flip.setToolTip("Use if the + side in the workbench is the side nearer the laser in your convention.")
         self.illum_min = QDoubleSpinBox(); self.illum_min.setRange(0, 255); self.illum_min.setValue(0)
         self.illum_min.setToolTip("Ignore particles whose local illumination (ROI border) is below this; 0 = use all")
         self.max_cutoff = QDoubleSpinBox(); self.max_cutoff.setRange(0, 100); self.max_cutoff.setDecimals(1)
-        self.max_cutoff.setValue(100); self.max_cutoff.setSuffix(" %")
+        self.max_cutoff.setValue(0); self.max_cutoff.setSuffix(" %")
         self.max_cutoff.setToolTip("Leave out particles with more than this % of their outline on the ROI edge "
                                    "(their size is cut short); 100 = use all. Particles without a cut-off value "
                                    "(processed before v14.23) are kept.")
@@ -679,6 +708,7 @@ class SizingDialog(QDialog):
         self.offset.setToolTip("Additive edge offset. proc/imageStats.py grows the particle mask by "
                                "contains_points(radius=2) ≈ +2 px on the diameter.")
         self.fit_offset = QCheckBox("fit it (needs ≥2 true sizes)")
+        self.fit_offset.setChecked(True)
         off_row = QHBoxLayout(); off_row.addWidget(self.offset); off_row.addWidget(self.fit_offset)
         self.size_measure = QComboBox()
         for key, info in sizing.SIZE_MEASURES.items():
@@ -735,19 +765,47 @@ class SizingDialog(QDialog):
         form.addRow("Min local illumination", self.illum_min)
         form.addRow("Max cut-off by ROI edge", self.max_cutoff)
         form.addRow("DOF focus threshold", self.foc_crit)
+        self.contrast_dof_enabled = QCheckBox("Constrain reported DOF with recorded CPI acquisition threshold (experimental)")
+        self.contrast_dof_enabled.setChecked(True)
+        self.contrast_dof_enabled.setToolTip("Uses saved background-minus-image intensity and the recorded CPI IThreshold (0–255). Does not reject particles or refit the focus curve. No extrapolation.")
+        form.addRow(self.contrast_dof_enabled)
         form.addRow(self.fit_p)
+        form.addRow(self.two_width_focus)
         form.addRow(self.focus_asymmetric)
         form.addRow(self.peak_by_size)
         form.addRow(self.width_by_size)
+        form.addRow("Focus baseline", self.baseline_mode)
+        self.normalise_focus_plot = QCheckBox("Normalise focus plot (display only)")
+        self.normalise_focus_plot.setChecked(True)
+        self.normalise_focus_plot.setToolTip("Normalise the displayed focus curves only. The reference can be the population peak or median near d=0; neither changes fitting or retrieval.")
+        self.normalise_focus_plot.toggled.connect(lambda *_: self._redraw())
+        form.addRow(self.normalise_focus_plot)
+        self.focus_plot_reference = QComboBox()
+        self.focus_plot_reference.addItem("Population peak (existing)", "peak")
+        self.focus_plot_reference.addItem("Median near d = 0", "zero_median")
+        self.focus_plot_reference.setCurrentIndex(self.focus_plot_reference.findData("zero_median"))
+        self.focus_plot_reference.setToolTip("Display-only normalisation of measured stage medians near the object plane (±0.075 mm). The fitted curve is divided by its predicted value at d=0. Fit and DOF remain unchanged.")
+        self.focus_plot_reference.currentIndexChanged.connect(lambda *_: self._redraw())
+        form.addRow("Focus plot reference", self.focus_plot_reference)
+        form.addRow(self.population_balance)
         form.addRow(self.validate_folds)
         form.addRow("Edge offset b", off_row)
         self.shape_terms = QCheckBox("Particle shape terms (Park et al. 2026)")
+        self.shape_terms.setChecked(True)
         self.shape_terms.setToolTip(
             "Fit the effect of particle shape: defocus variable Zd / Ar^α in the size model (α = 1 is Park et al.'s "
             "Z/(L² Ar)) and Ar^c on the focus peak, with Ar = measured roundness (projected area ÷ circle of the "
             "same length). Needs particles of different shapes, e.g. beads and ice analogues. Retrieval with the "
             "saved model uses each particle's roundness.")
         form.addRow(self.shape_terms)
+        self.focus_ar_amp = QCheckBox("Focus peak depends on aspect ratio Ar")
+        self.focus_ar_amp.setChecked(True)
+        self.focus_ar_amp.setToolTip("Fit focus peak amplitude × Ar^ηA using measured projected-area roundness; independent of length-shape correction.")
+        form.addRow(self.focus_ar_amp)
+        self.focus_ar_width = QCheckBox("Focus widths depend on aspect ratio Ar")
+        self.focus_ar_width.setChecked(True)
+        self.focus_ar_width.setToolTip("Fit both narrow and broad focus widths × Ar^ηw; off by default. Requires variation in saved roundness.")
+        form.addRow(self.focus_ar_width)
         self.circle_padding = QDoubleSpinBox(); self.circle_padding.setRange(0, 30)
         self.circle_padding.setDecimals(1); self.circle_padding.setValue(8.)
         self.circle_padding.setSuffix(" px")
@@ -775,6 +833,7 @@ class SizingDialog(QDialog):
         self.preset.currentIndexChanged.connect(self._preset_changed)
         self.size_measure.currentIndexChanged.connect(self._fit_measure_changed)
         self.focus_measure.currentIndexChanged.connect(self._fit_measure_changed)
+        self.width_by_size.toggled.connect(self._fit_measure_changed)
         # Start with the established fit, regardless of whether circle data exist.
         # Circle sizing can be selected explicitly and optionally computed in memory.
         self._preset_changed()
@@ -834,6 +893,14 @@ class SizingDialog(QDialog):
         shape_layout.addWidget(NavigationToolbar2QT(self.shape_canvas, shape_tab))
         shape_layout.addWidget(self.shape_canvas, 1)
         self.tabs.addTab(shape_tab, "Shadow / shape check")
+        self.focus_population_figure = Figure(figsize=(11, 8))
+        self.focus_population_canvas = FigureCanvasQTAgg(self.focus_population_figure)
+        population_tab = QWidget()
+        population_layout = QVBoxLayout(population_tab)
+        population_layout.setContentsMargins(0, 0, 0, 0)
+        population_layout.addWidget(NavigationToolbar2QT(self.focus_population_canvas, population_tab))
+        population_layout.addWidget(self.focus_population_canvas, 1)
+        self.tabs.addTab(population_tab, "Focus by population")
         self.tabs.addTab(self.report, "Report")
         self.tabs.setCurrentIndex(1)
         layout.addWidget(self.tabs, 1)
@@ -841,14 +908,14 @@ class SizingDialog(QDialog):
     def _preset_changed(self, *_):
         recipe = self.preset.currentData()
         size = {"circle": "shadow_deq", "contour": "deq", "area_corrected": "area_corrected_shadow", "original": "length"}[recipe]
-        foc = "focus" if recipe == "original" else "focus_per_illum"
+        foc = "focus_per_illum"
         for widget, key in ((self.size_measure, size), (self.focus_measure, foc)):
             pos = widget.findData(key)
             if pos >= 0:
                 widget.setCurrentIndex(pos)
         self.offset.setValue(0. if recipe == "circle" else sizing.PIPELINE_PAD_PX*sizing.NOMINAL_PIXEL_UM)
-        self.fit_offset.setChecked(recipe == "circle")
-        self.foc_crit.setValue(5. if recipe == "original" else .12)
+        self.fit_offset.setChecked(True)
+        self.foc_crit.setValue(.12)
         self._fit_measure_changed()
 
     def _fit_measure_changed(self, *_):
@@ -863,6 +930,8 @@ class SizingDialog(QDialog):
         self.focus_asymmetric.setEnabled(norm)
         self.peak_by_size.setEnabled(norm)
         self.width_by_size.setEnabled(norm)
+        self.population_balance.setEnabled(norm)
+        self.baseline_mode.setEnabled(norm)
         n = sum(math.isfinite(sizing._num(r.get("shadow_deq_um"))) and
                 sizing._num(r.get("shadow_deq_um")) > 0 for r in self.rows)
         self.method_help.setText(
@@ -943,10 +1012,14 @@ class SizingDialog(QDialog):
         if self._drawn is None:
             return
         model, table, validation, tracking = self._drawn
-        sizing.make_figure(model, table, validation, tracking, figure=self.figure)
+        sizing.make_figure(model, table, validation, tracking, figure=self.figure,
+                           normalise_focus_peak=self.normalise_focus_plot.isChecked(),
+                           focus_plot_reference=self.focus_plot_reference.currentData())
         self.canvas.draw_idle()
         sizing.make_shadow_shape_figure(table, figure=self.shape_figure)
         self.shape_canvas.draw_idle()
+        sizing.make_focus_by_population_figure(model, table, figure=self.focus_population_figure)
+        self.focus_population_canvas.draw_idle()
 
     def _table(self):
         chosen = {self.label_box.item(i).data(Qt.UserRole) for i in range(self.label_box.count())
@@ -995,6 +1068,12 @@ class SizingDialog(QDialog):
                 focus_model="normalised_generalised" if normalised else "legacy",
                 fit_focus_p=self.fit_p.isChecked(), asymmetric_focus=self.focus_asymmetric.isChecked(),
                 fit_peak_size=self.peak_by_size.isChecked(), fit_width_size=self.width_by_size.isChecked(),
+                empirical_width_constraint=False,
+                population_balanced_focus=self.population_balance.isChecked(),
+                two_width_focus=self.two_width_focus.isChecked(),
+                focus_ar_amp=self.focus_ar_amp.isChecked(),
+                focus_ar_width=self.focus_ar_width.isChecked(),
+                focus_baseline_mode=self.baseline_mode.currentData() if normalised else "free",
                 do_validation=self.validate_folds.isChecked())
         except Exception as exc:   # report fitting problems instead of crashing the workbench
             QApplication.restoreOverrideCursor()
@@ -1004,11 +1083,42 @@ class SizingDialog(QDialog):
         if self.flip.isChecked():
             self.model.sign_convention += " (flipped: d → −d)"
         self.model.inputs = self.inputs
+        if self.contrast_dof_enabled.isChecked():
+            try:
+                try:
+                    from .contrast_dof import contrast_dof_from_rows
+                except ImportError:
+                    from contrast_dof import contrast_dof_from_rows
+                self.model.fit_stats['contrast_limited_dof'] = contrast_dof_from_rows(
+                    [r for r in self.rows if (r.get('label') or '') in
+                     {self.label_box.item(i).data(Qt.UserRole) for i in range(self.label_box.count())
+                      if self.label_box.item(i).checkState() == Qt.Checked}],
+                    self.model, self.foc_crit.value())
+            except Exception as exc:
+                self.model.fit_stats['contrast_limited_dof_error'] = str(exc)
         self.table = table
         self._drawn = (self.model, table, self.validation, self.tracking)
         self.tabs.setCurrentIndex(0)
         self._redraw()
-        self.report.setPlainText(sizing.format_report(self.model, self.validation, self.tracking))
+        report_text = sizing.format_report(self.model, self.validation, self.tracking)
+        if self.contrast_dof_enabled.isChecked():
+            report_text += "\n\nPROCESSING-THRESHOLD DOF (optional; does not affect the focus fit)\n"
+            values = self.model.fit_stats.get('contrast_limited_dof', [])
+            if not values:
+                report_text += "No saved acquisition threshold measurements. Reimport original ROIs with updated postProcess.py, then reprocess with updated imageStats.py.\n"
+            for row in values:
+                fmt = lambda value: 'not observed' if value is None else f'{value:.3f} mm'
+                report_text += (f"{row['label']}  {row['L_um']:g} µm (n={row['n']}, "
+                                f"IThreshold={row['acquisition_threshold_counts']:.0f} counts): "
+                                f"contrast -/+ {fmt(row['contrast_d_minus'])} / "
+                                f"{fmt(row['contrast_d_plus'])}; "
+                                f"combined DOF {row['combined_total_mm']:.3f} mm "
+                                f"[{row['combined_d_minus']:.3f}, {row['combined_d_plus']:.3f}]\n")
+            report_text += ("Only observed threshold crossings restrict the focus DOF; missing crossings "
+                            "do not imply unlimited contrast DOF. Accepted-particle selection may bias limits.\n")
+            if self.model.fit_stats.get('contrast_limited_dof_error'):
+                report_text += 'ERROR: ' + self.model.fit_stats['contrast_limited_dof_error'] + '\n'
+        self.report.setPlainText(report_text)
         self.save_button.setEnabled(True)
         self.figure_button.setEnabled(True)
 
@@ -1461,6 +1571,7 @@ class CalibrationWindow(QMainWindow):
         canvas.on_click = self._on_click
         canvas.on_double_click = self._on_double_click
         canvas.on_hover = self._on_hover
+        canvas.on_context_menu = self._on_plot_context_menu
         canvas.on_leave = self._hide_hover
         canvas.on_wheel = self._on_wheel
         canvas.on_navigation_changed = self._lock_plot_navigation
@@ -1591,9 +1702,16 @@ class CalibrationWindow(QMainWindow):
         self.test_boundary_checkbox.setChecked(True)
         self.test_boundary_checkbox.toggled.connect(lambda _: self.refresh_particle())
         col.addWidget(self.test_boundary_checkbox)
-        self.background_checkbox = QCheckBox("Background-subtracted ROI")
-        self.background_checkbox.stateChanged.connect(lambda _: self.refresh_particle())
-        col.addWidget(self.background_checkbox)
+        roi_mode_row = QHBoxLayout()
+        roi_mode_row.addWidget(QLabel("ROI display"))
+        self.roi_display_mode = QComboBox()
+        self.roi_display_mode.addItem("Normalised transmission (T=1 clear)", "transmission")
+        self.roi_display_mode.addItem("Raw ROI", "raw")
+        self.roi_display_mode.addItem("Background difference (ROI − BG)", "difference")
+        self.roi_display_mode.setToolTip("Display only: this does not reprocess saved particle measurements")
+        self.roi_display_mode.currentIndexChanged.connect(lambda _: self.refresh_particle())
+        roi_mode_row.addWidget(self.roi_display_mode, 1)
+        col.addLayout(roi_mode_row)
         measure_button = QPushButton("📏 Measure on this ROI / full frames…")
         measure_button.setToolTip("Open the measuring window on this particle's ROI: measure distances at any angle "
                                   "in px (and µm), view full frames, export PNG/CSV")
@@ -1628,6 +1746,8 @@ class CalibrationWindow(QMainWindow):
         self.edge_batch_name = QLabel("Select one or more batches in Review → Flag history")
         self.edge_batch_name.setStyleSheet("font-weight:700; color:#193c5e;")
         header.addWidget(self.edge_batch_name, 1)
+        header.addWidget(self._button('Diffraction reconstruction…', self._edge_open_diffraction, None,
+                                      'Open original ROIs from the current Edge Lab batch selection, without running a trial'))
         header.addWidget(self._button("Clear all trials", self._clear_edge_preview, None,
                                       "Discard all Edge Lab trials; never writes MAT, flags, or project data"))
         layout.addLayout(header)
@@ -1679,6 +1799,56 @@ class CalibrationWindow(QMainWindow):
         self.edge_smooth.setDecimals(1)
         self.edge_smooth.setSingleStep(.2)
         controls.addWidget(self.edge_smooth)
+        self.edge_inset_label = QLabel("Inset [px]")
+        controls.addWidget(self.edge_inset_label)
+        self.edge_inset = QDoubleSpinBox()
+        self.edge_inset.setRange(0, 10)
+        self.edge_inset.setDecimals(2)
+        self.edge_inset.setSingleStep(.25)
+        self.edge_inset.setToolTip("Optional inward offset applied after the boundary is found. "
+                                   "Useful when a higher threshold follows the shadow shape well but sits too far out.")
+        controls.addWidget(self.edge_inset)
+        self.edge_preserve_necks = QCheckBox("Protect narrow necks during inset")
+        self.edge_preserve_necks.setChecked(True)
+        self.edge_preserve_necks.setToolTip("Union only: preserve thin connectors from being severed by the inset. "
+                                           "Local necks may receive less than the requested inset; inspect the contour.")
+        controls.addWidget(self.edge_preserve_necks)
+        self.edge_union_area_label = QLabel("Min union fragment area [px²]")
+        controls.addWidget(self.edge_union_area_label)
+        self.edge_union_area = QSpinBox()
+        self.edge_union_area.setRange(1, 10000)
+        self.edge_union_area.setValue(10)
+        self.edge_union_area.setToolTip("Minimum pixel area of each additional fragment (no percentage-of-main constraint).")
+        controls.addWidget(self.edge_union_area)
+        self.edge_union_gap_label = QLabel("Max union gap [px]")
+        controls.addWidget(self.edge_union_gap_label)
+        self.edge_union_gap = QDoubleSpinBox()
+        self.edge_union_gap.setRange(0, 50)
+        self.edge_union_gap.setDecimals(1)
+        self.edge_union_gap.setSingleStep(1)
+        self.edge_union_gap.setValue(6)
+        self.edge_union_gap.setToolTip("Maximum edge-to-edge separation between dark components; "
+                                       "only components within the same weak-shadow footprint are eligible. "
+                                       "Union traces a raw threshold contour, not a convex hull.")
+        controls.addWidget(self.edge_union_gap)
+        self.edge_union_weak_shadow = QCheckBox("Require weak-shadow connection")
+        self.edge_union_weak_shadow.setChecked(True)
+        self.edge_union_weak_shadow.setToolTip("Checked: candidate fragments must share a broader weak shadow and have a short path within it. Unchecked: connect fragments by nearest-distance line only.")
+        controls.addWidget(self.edge_union_weak_shadow)
+        self.edge_local_close_label = QLabel("Local close radius [px]")
+        self.edge_local_close = QDoubleSpinBox()
+        self.edge_local_close.setRange(0, 10)
+        self.edge_local_close.setDecimals(1)
+        self.edge_local_close.setSingleStep(.5)
+        self.edge_local_close.setValue(0)
+        self.edge_local_close.setToolTip("Union only. After inset, close small slots/concavities using a disk of this radius. Zero disables; not a convex hull.")
+        self.edge_local_area_label = QLabel("Max added area [%]")
+        self.edge_local_area = QDoubleSpinBox()
+        self.edge_local_area.setRange(0, 25)
+        self.edge_local_area.setDecimals(1)
+        self.edge_local_area.setSingleStep(1)
+        self.edge_local_area.setValue(3)
+        self.edge_local_area.setToolTip("Limit added area as a percentage of the post-inset particle silhouette. Genuine concavities may still be altered: inspect the boundary.")
         self.edge_cpiview = QCheckBox("CPIview focus")
         self.edge_cpiview.setToolTip("Run the separate CPIview 2 algorithm (slower): 12 median passes, "
                                       "16 edge-gradient profiles and peak/FWHM focus")
@@ -1686,6 +1856,23 @@ class CalibrationWindow(QMainWindow):
         info = self._button("ⓘ", self._edge_info, None, "Processing and CPIview parameter definitions")
         controls.addWidget(info)
         layout.addLayout(controls)
+        close_row = QHBoxLayout()
+        close_row.setSpacing(8)
+        for widget in (self.edge_local_close_label, self.edge_local_close,
+                       self.edge_local_area_label, self.edge_local_area):
+            close_row.addWidget(widget)
+        close_row.addStretch(1)
+        layout.addLayout(close_row)
+        # High-contrast numeric entry fields; applies only to Edge Lab controls.
+        for widget in (self.edge_level, self.edge_smooth, self.edge_inset,
+                       self.edge_union_area, self.edge_union_gap, self.edge_local_close,
+                       self.edge_local_area, self.edge_padding):
+            widget.setMinimumWidth(78)
+            widget.setStyleSheet("QSpinBox, QDoubleSpinBox { color: #10253d; background-color: white; "
+                                 "border: 1px solid #829bb2; border-radius: 4px; "
+                                 "padding: 4px 6px; font-size: 12px; min-height: 23px; } "
+                                 "QSpinBox:focus, QDoubleSpinBox:focus { border: 2px solid #156bb5; }")
+        self.edge_algorithm.setMinimumWidth(240)
 
         flag_row = QHBoxLayout()
         flag_row.addWidget(QLabel("Production CLI flags"))
@@ -1730,7 +1917,9 @@ class CalibrationWindow(QMainWindow):
         self.edge_metric = QComboBox()
         for key, title in (("deq", "Equivalent-area diameter"), ("len", "Maximum Feret length"),
                            ("wid", "Minimum Feret width"),
-                           ("ratio_deq", "Contour equivalent diameter / labelled true size"),
+                           ("ratio_deq", "Contour equivalent diameter / labelled true length (legacy)"),
+                           ("ratio_deq_true_area", "CPI equivalent-area diameter / true equivalent-area diameter"),
+                           ("ratio_shadow_true_area", "Shadow diameter / true equivalent-area diameter"),
                            ("ratio_len", "Feret length / true size"),
                            ("shadow_deq", "Stored shadow-circle diameter (processing)"),
                            ("ratio_shadow", "Stored shadow-circle diameter / true size"),
@@ -1800,8 +1989,8 @@ class CalibrationWindow(QMainWindow):
         hint.setWordWrap(True)
         layout.addWidget(hint)
         for ctrl in (self.edge_algorithm, self.edge_level, self.edge_denoise,
-                     self.edge_smooth, self.edge_cpiview, self.edge_padding, self.edge_radius_mode):
-            signal = (ctrl.valueChanged if isinstance(ctrl, QDoubleSpinBox) else
+                     self.edge_smooth, self.edge_inset, self.edge_preserve_necks, self.edge_union_area, self.edge_union_gap, self.edge_union_weak_shadow, self.edge_local_close, self.edge_local_area, self.edge_cpiview, self.edge_padding, self.edge_radius_mode):
+            signal = (ctrl.valueChanged if isinstance(ctrl, (QDoubleSpinBox, QSpinBox)) else
                       ctrl.toggled if isinstance(ctrl, QCheckBox) else ctrl.currentIndexChanged)
             signal.connect(self._edge_settings_changed)
         for ctrl in (self.edge_xaxis, self.edge_metric):
@@ -1887,13 +2076,96 @@ class CalibrationWindow(QMainWindow):
         self.edge_padding_label.setText("Max extra radius [px]" if adaptive else "Extra radius [px]")
         self.edge_padding.setToolTip("Maximum radius to search beyond the saved contour" if adaptive else
                                      "Additional fixed radius beyond the saved contour")
+        self.edge_inset_label.setVisible(not shadow)
+        self.edge_inset.setVisible(not shadow)
+        self.edge_preserve_necks.setVisible(method.endswith("/union") and not shadow)
+        self.edge_union_area_label.setVisible(method.endswith("/union"))
+        self.edge_union_area.setVisible(method.endswith("/union"))
+        self.edge_union_gap_label.setVisible(method.endswith("/union"))
+        self.edge_union_gap.setVisible(method.endswith("/union"))
+        self.edge_union_weak_shadow.setVisible(method.endswith("/union"))
+        for widget in (self.edge_local_close_label, self.edge_local_close,
+                       self.edge_local_area_label, self.edge_local_area):
+            widget.setVisible(method.endswith("/union"))
         self.edge_cpiview.setEnabled(not shadow)
-        self.edge_level_label.setText("Shadow fraction" if method.startswith("relative") else "Absolute T")
-        self.edge_level.setToolTip("Fixed: T=0.8 means 20% attenuation. Relative: fraction of shadow depth.")
+        counts = method.startswith("scaled_counts")
+        self.edge_level_label.setText("Difference [counts]" if counts else
+                                     ("Shadow fraction" if method.startswith("relative") else "Absolute T"))
+        current_range = self.edge_level.maximum() > 1.0
+        if counts != current_range:
+            self.edge_level.blockSignals(True)
+            self.edge_level.setRange(1.0, 254.0) if counts else self.edge_level.setRange(.05, .95)
+            self.edge_level.setDecimals(0 if counts else 2)
+            self.edge_level.setSingleStep(1.0 if counts else .01)
+            self.edge_level.setValue(41.0 if counts else .55)
+            self.edge_level.blockSignals(False)
+        self.edge_level.setToolTip("After clear-field scaling: k·BG − ROI > threshold [8-bit counts]." if counts else
+                                   "Fixed: T=0.8 means 20% attenuation. Relative: fraction of shadow depth.")
         self.edge_cli.setText((f"--shadow-circle-auto --shadow-circle-max-padding {max(6,self.edge_padding.value()):g}"
                                if adaptive else f"--shadow-circle-padding {self.edge_padding.value():g}") if shadow else
             edge_preview.command_flags(method, self.edge_level.value(), self.edge_denoise.currentData(),
-                                       self.edge_smooth.value(), self.edge_cpiview.isChecked()))
+                                       self.edge_smooth.value(), self.edge_cpiview.isChecked(),
+                                       self.edge_inset.value(), self.edge_union_gap.value(),
+                                       self.edge_union_weak_shadow.isChecked(), self.edge_union_area.value(), self.edge_preserve_necks.isChecked(),
+                                       self.edge_local_close.value(), self.edge_local_area.value()))
+
+    def _edge_open_diffraction(self, initial_record=None):
+        """Open original ROI diffraction viewer without requiring an Edge Lab trial.
+
+        Prefer the current multi-batch selection, then the active batch row,
+        then all saved batches. Only image/background data are loaded on demand.
+        """
+        if self.store is None or not self.catalog:
+            QMessageBox.information(self, 'Diffraction reconstruction',
+                                    'Load a calibration dataset first.')
+            return
+        names, records = self._edge_batch_records()
+        if not records:
+            current = self._selected_batch_name()
+            available = [current] if current in self.saved_sets else []
+            if not available:
+                available = list(self.saved_sets)
+            by_id = self.catalog._by_id
+            ids = dict.fromkeys(
+                pid for name in available
+                for pid in self.saved_sets[name].get('particle_ids', ())
+                if pid in by_id and by_id[pid].status != 'reject')
+            records = [by_id[pid] for pid in ids]
+        if not records:
+            QMessageBox.information(self, 'Diffraction reconstruction',
+                                    'No saved non-rejected particles are available. '
+                                    'Save or select a particle batch in Review first; '
+                                    'an Edge Lab trial is not required.')
+            return
+        try:
+            try:
+                from .diffraction_gui import DiffractionDialog
+            except ImportError:
+                from diffraction_gui import DiffractionDialog
+
+            def load_roi(rec):
+                return edge_preview.load_roi_for_preview(self.store.root, rec)
+
+            def particle_position(rec):
+                # Exactly the same signed object-plane coordinate as the calibration plots.
+                # Do not mistake raw stage Z or a missing record field for distance to focus.
+                ref, source, _kind = self._reference_for(rec)
+                x, z = float(rec.stage_x), float(rec.stage_y)
+                if ref is None or not (math.isfinite(x) and math.isfinite(z)):
+                    return float('nan'), 'No calibrated Xbest/Zbest reference or stage coordinate'
+                theta = self.plane_normal.value()
+                d_mm = signed_plane_distance(x, z, ref, theta)
+                details = (f'Stage X={x:g}, Z={z:g}; '
+                           f'Xbest={ref["x_best"]:g}, Zbest={ref["z_best"]:g}; '
+                           f'plane normal={theta:g}°; reference: {source or "available"}')
+                return d_mm, details
+
+            initial_id = getattr(initial_record, 'particle_id', None)
+            viewer = DiffractionDialog(parent=self, records=records, loader=load_roi,
+                                       initial_id=initial_id, position_getter=particle_position)
+            viewer.exec()
+        except Exception as exc:
+            QMessageBox.warning(self, 'Diffraction reconstruction', str(exc))
 
     def _edge_batch_records(self):
         """Union of ALL selected saved batches, de-duplicated by stable particle ID."""
@@ -1902,7 +2174,7 @@ class CalibrationWindow(QMainWindow):
             return (), []
         by_id = self.catalog._by_id
         ids = dict.fromkeys(pid for name in names for pid in self.saved_sets[name].get("particle_ids", ())
-                            if pid in by_id)
+                            if pid in by_id and by_id[pid].status != "reject")
         return names, [by_id[pid] for pid in ids]
 
     def _open_edge_batch(self):
@@ -1959,18 +2231,27 @@ class CalibrationWindow(QMainWindow):
             return
         method = self.edge_algorithm.currentData()
         level, denoise, smooth = self.edge_level.value(), self.edge_denoise.currentData(), self.edge_smooth.value()
+        inset_px = self.edge_inset.value()
         cpiview = self.edge_cpiview.isChecked()
         shadow = method == "shadow/circle"
         auto = shadow and self.edge_radius_mode.currentData() == "adaptive"
         options = (edge_preview.shadow_options(self.edge_padding.value() if not auto else 8., denoise, smooth,
                                                radius_mode="adaptive" if auto else "fixed",
                                                max_padding_px=max(6., self.edge_padding.value()))
-                   if shadow else edge_preview.preview_options(method, level, denoise, smooth, cpiview=cpiview))
+                   if shadow else edge_preview.preview_options(method, level, denoise, smooth, cpiview=cpiview,
+                                                                 inset_px=inset_px, union_gap_px=self.edge_union_gap.value(),
+                                                                 union_require_weak_shadow=self.edge_union_weak_shadow.isChecked(), union_min_area_px=self.edge_union_area.value(),
+                                                                 inset_preserve_necks=self.edge_preserve_necks.isChecked(),
+                                                                 local_close_radius_px=self.edge_local_close.value(),
+                                                                 local_close_max_added_pct=self.edge_local_area.value()))
         number = self._edge_next_id
         self._edge_next_id += 1
         label = (f"#{number} {dict((*edge_preview.METHODS, edge_preview.SHADOW_METHOD))[method]} · "
                  + ((f"adaptive ≤+{options.max_padding_px:g} px" if auto else f"+{options.padding_px:g} px")
-                    if shadow else f"{level:g}")
+                    if shadow else f"{level:g}" + (f" · inset {inset_px:g} px" if inset_px > 0 else "")
+                    + (f" · local close {self.edge_local_close.value():g}px / {self.edge_local_area.value():g}%" if method.endswith("/union") and self.edge_local_close.value() > 0 else "")
+                    + (" · neck protection" if method.endswith("/union") and inset_px > 0 and self.edge_preserve_necks.isChecked() else "")
+                    + (f" · min area {self.edge_union_area.value()} px² · max gap {self.edge_union_gap.value():g} px · " + ("weak shadow" if self.edge_union_weak_shadow.isChecked() else "distance only") if method.endswith("/union") else ""))
                  + f" · {len(names)} batch(es)" + (" · CPIview" if cpiview and not shadow else ""))
         palette = ("#009ebc", "#bd4f84", "#e38a13", "#5d58af", "#168b63", "#9e4938", "#557999")
         trial = {"id": number, "kind": "shadow" if shadow else "edge", "label": label,
@@ -2074,11 +2355,16 @@ class CalibrationWindow(QMainWindow):
             # any of the other independent trials on the graph.
             values = ((self.edge_algorithm, "shadow/circle" if shadow else f"{opts.edge_mode}/{opts.outline}"),
                       (self.edge_denoise, opts.denoise), (self.edge_smooth, opts.smooth_sigma),
+                      (self.edge_union_area, opts.union_min_component_area_px if not shadow else self.edge_union_area.value()),
+                      (self.edge_union_gap, opts.union_max_separation_px if not shadow else self.edge_union_gap.value()),
+                      (self.edge_union_weak_shadow, opts.union_require_weak_shadow if not shadow else self.edge_union_weak_shadow.isChecked()),
+                      (self.edge_local_close, opts.local_close_radius_px if not shadow else self.edge_local_close.value()),
+                      (self.edge_local_area, 100 * opts.local_close_max_added_fraction if not shadow else self.edge_local_area.value()),
                       (self.edge_radius_mode, opts.radius_mode if shadow else "fixed"),
                       (self.edge_padding, (opts.max_padding_px if opts.radius_mode == "adaptive" else opts.padding_px)
                        if shadow else self.edge_padding.value()))
             if not shadow:
-                values += ((self.edge_level, opts.edge_fraction if opts.edge_mode == "relative" else opts.edge_level),
+                values += ((self.edge_level, opts.edge_fraction if opts.edge_mode == "relative" else (opts.count_threshold if opts.edge_mode == "scaled_counts" else opts.edge_level)),
                            (self.edge_cpiview, opts.cpiview))
             for widget, value in values:
                 widget.blockSignals(True)
@@ -2127,6 +2413,10 @@ class CalibrationWindow(QMainWindow):
             notes.append(f"Median ΔDeq {np.median(differences):+.2f} µm")
         if ratios:
             notes.append(f"Median Deq / known size {np.median(ratios):.3f}")
+        if trial.get("kind") == "edge" and any("union_selected_components" in v for v in trial["results"].values()):
+            joined = [v for v in trial["results"].values() if v.get("union_components_joined", 0) > 0]
+            warnings = sum(not v.get("union_final_retention_ok", False) for v in joined)
+            notes.append(f"Union: {len(joined)} ROI(s) joined; {warnings} final-outline retention warnings")
         self.edge_diagnostics.setText(" · ".join(notes))
 
     def _edge_toggle_trial(self, item):
@@ -2203,8 +2493,24 @@ class CalibrationWindow(QMainWindow):
             return WAVELENGTH_UM * d * 1000.0 / (L / 2.0) ** 2 if math.isfinite(L) and L > 0 else float("nan")
         return d
 
-    @staticmethod
-    def _edge_y_value(record, result, metric):
+    def _true_area_diameter(self, record):
+        """True projected-area equivalent diameter from the independent label area."""
+        label = self.labels.get(record.label) if record.label else None
+        area = getattr(label, "area_um2", float("nan")) if label else float("nan")
+        return 2.0 * math.sqrt(area / math.pi) if math.isfinite(area) and area > 0 else float("nan")
+
+    def _edge_y_value(self, record, result, metric):
+        if metric in ("ratio_deq_true_area", "ratio_shadow_true_area"):
+            true_d = self._true_area_diameter(record)
+            if not math.isfinite(true_d) or true_d <= 0:
+                return float("nan")
+            if metric == "ratio_deq_true_area":
+                measured = (result.get("deq", float("nan")) if result is not None
+                            else record.deq_um)
+            else:
+                measured = (result.get("shadow_diameter", float("nan")) if result is not None
+                            else record.shadow_deq_um)
+            return measured / true_d if measured is not None and math.isfinite(measured) else float("nan")
         if result is None:
             if metric == "shadow_deq":
                 return record.shadow_deq_um
@@ -2263,8 +2569,12 @@ class CalibrationWindow(QMainWindow):
         # would just plot sqrt(area ratio), a constant, and hide all scatter.
         correction = (np.sqrt(self.edge_microscopy_area_ratio.value()) /
                       self.edge_reference_shadow_ratio.value())
+        # Use the very same base filters, review visibility and focus/size selection
+        # as the standard viewer. The trial still retains all its original records.
+        visible_ids = {self._records()[i].particle_id for i in self._visible_indices("metric")}
         for trial in active:
-            records = trial["records"]
+            records = [r for r in trial["records"]
+                       if r.status != "reject" and r.particle_id in visible_ids]
             xs = np.array([self._edge_x_value(r) for r in records], dtype=float)
             for ax, metric in ((axes[0], size_metric), (axes[1], focus_metric)):
                 # Focus is an INDEPENDENT stored measurement: even a shadow
@@ -2389,8 +2699,18 @@ class CalibrationWindow(QMainWindow):
                         text = f"Trial #{number}: Deq {result['deq']:.2f} µm · F(T) {result['focus_T']:.3g}"
                     else:
                         text = "No valid trial measurement"
+                    text += (f"\nCPI stored len / wid {self._format(record.length_um,2)} / "
+                             f"{self._format(record.width_um,2)} µm"
+                             f"\nFeret len / wid {self._format(record.len_feret_um,2)} / "
+                             f"{self._format(record.wid_feret_um,2)} µm"
+                             f"\nEllipse len / wid {self._format(record.len_ellipse_um,2)} / "
+                             f"{self._format(record.wid_ellipse_um,2)} µm"
+                             f"\nCPI area ratio {self._format(record.area_ratio_circle,3)}")
                     detail = QLabel(text)
-                    detail.setAlignment(Qt.AlignCenter)
+                    detail.setWordWrap(True)
+                    detail.setMaximumWidth(400)
+                    detail.setTextInteractionFlags(Qt.TextSelectableByMouse)
+                    detail.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                     preview_layout.addWidget(detail)
                 preview_action = QWidgetAction(menu)
                 preview_action.setDefaultWidget(preview)
@@ -2403,6 +2723,8 @@ class CalibrationWindow(QMainWindow):
             if trial is not None and trial.get("kind") == "shadow":
                 integral_action = menu.addAction("Cumulative shadow integral vs circle radius…")
                 integral_action.triggered.connect(lambda: self._edge_show_integral_profile(record, number))
+            diagnostics_action = menu.addAction("Inspect saved / trial boundaries and CPI dimensions…")
+            diagnostics_action.triggered.connect(lambda: self._open_geometry_inspector(record, trial_id=number))
             action = menu.addAction(f"Inspect ROI with #{number} outline / circle…")
             action.triggered.connect(lambda: self.set_current(record.particle_id, open_viewer=True))
             menu.addSeparator()
@@ -2494,11 +2816,62 @@ class CalibrationWindow(QMainWindow):
         ax.axhline(threshold, color="red", linestyle="--", label=f"Trial threshold T = {threshold:.3f}")
         ax.set(xlabel="Position relative to particle centre (pixels)", ylabel="Normalised transmittance")
         ax.legend(loc="best")
+        if "union_original_contours" in result:
+            # On-image diagnostic: original threshold fragments, synthetic
+            # connector, and the FINAL post-inset measurement boundary.
+            ax.set_position([0.07, 0.19, 0.42, 0.72])
+            image_ax = figure.add_axes([0.55, 0.20, 0.40, 0.72])
+            image_ax.imshow(image, cmap="gray", origin="upper", interpolation="nearest")
+            for contour in result["union_original_contours"]:
+                coords = np.asarray(contour, dtype=float)
+                if coords.ndim == 2 and coords.shape[1] == 2:
+                    image_ax.plot(coords[:, 1], coords[:, 0], color="orange", lw=0.9)
+            points = np.asarray(result.get("union_connection_xy", []), dtype=float)
+            if points.ndim == 2 and points.shape[1] == 2 and len(points):
+                image_ax.scatter(points[:, 1], points[:, 0], s=2, c="cyan", alpha=.35)
+            final = np.asarray(result["boundary"], dtype=float)
+            image_ax.plot(final[:, 1], final[:, 0], color="lime", lw=1.4)
+            image_ax.set_title("Orange: fragments · cyan: joins · green: final", fontsize=8)
+            image_ax.set_xlim(-1, image.shape[1]); image_ax.set_ylim(image.shape[0], -1)
+            image_ax.set_aspect("equal")
         canvas = FigureCanvasQTAgg(figure)
         layout.addWidget(canvas, 1)
         layout.addWidget(QLabel(f"Boundary: {trial['label']} · minimum T = {result['T_min']:.3f} · "
                                 f"ROI border median T = {profile['border_median']:.3f} · "
                                 f"measured Deq = {result['deq']:.2f} µm"))
+        if "union_components_found" in result:
+            layout.addWidget(QLabel(
+                f"Union diagnostics: {result['union_components_found']} threshold components in ROI · "
+                f"{result['union_components_considered']} eligible · "
+                f"{result['union_components_joined']} joined to main component · "
+                f"largest accepted gap {result['union_max_gap_used_px']:.2f} px"))
+            layout.addWidget(QLabel(
+                f"Final outline: {result.get('union_components_in_final_outline', 0)}/"
+                f"{result.get('union_selected_components', 1)} selected components represented · "
+                f"connector pixels {result.get('union_connector_pixels', 0)} · "
+                f"neck pixels protected {result.get('union_inset_protected_pixels', 0)} · "
+                f"{'PASS' if result.get('union_final_retention_ok', False) else 'WARNING: component lost after inset'}"))
+            if result.get("local_close_added_px", 0) or "local_close_added_px" in result:
+                layout.addWidget(QLabel(
+                    f"Local closure: +{result.get('local_close_added_px', 0)} px "
+                    f"({result.get('local_close_added_pct', 0):.2f}% area); "
+                    f"{result.get('local_close_rejected_patches', 0)} patches refused by area cap"))
+            details = result.get("union_component_details", ())
+            if details:
+                report = "\n".join(
+                    f"Component {d['component']}: area {d['area_px']} px², "
+                    f"gap {d['gap_px'] if d['gap_px'] is not None else '—'} px, "
+                    f"weak-shadow overlap {d['weak_shadow_overlap']:.0%}, "
+                    f"{d['status']}" for d in details)
+                breakdown = QLabel("Other threshold components:\n" + report)
+                breakdown.setWordWrap(True)
+                layout.addWidget(breakdown)
+        reconstruct = QPushButton("Experimental diffraction reconstruction…")
+        reconstruct.setToolTip("Explore signed coherent propagation on this ROI, without altering the stored image or calibration")
+        def open_reconstruction():
+            self._edge_open_diffraction(initial_record=record)
+        reconstruct.clicked.connect(open_reconstruction)
+        layout.addWidget(reconstruct)
         layout.addWidget(QLabel("Two orthogonal centre profiles are diagnostic slices; the radial detector "
                                 "samples many rays. Stored files and particle measurements are unchanged."))
         dialog.exec()
@@ -2697,6 +3070,13 @@ class CalibrationWindow(QMainWindow):
         hist.addWidget(self._button("Export selected batch(es) to NetCDF…", self.export_batches_netcdf,
                                     None, "Export original ROIs and matching saved backgrounds, label true lengths, "
                                     "stage X/Z and signed object-plane distance. Read-only; Ctrl/Shift for several batches."))
+        hist.addWidget(self._button("Plot transmission profiles from selected batches…", self.open_transmission_profiles,
+                                    None, "Aligned profiles along maximum Feret; mean by label class, x/L_true option; accepted only."))
+        tool_row = QHBoxLayout()
+        tool_row.addWidget(self._button("Minimum transmission vs defocus…",
+                                        lambda: self.open_transmission_profiles(initial_mode="contrast"),
+                                        None, "Contrast calibration against signed d or Zd with threshold and CSV export."))
+        hist.addLayout(tool_row)
         row = QHBoxLayout()
         row.addWidget(self._button("Save Xbest/Zbest to batch", self.save_batch_reference, "primary",
                                    "Give this batch its own best focus: the Xbest/Zbest currently in the "
@@ -2742,6 +3122,8 @@ class CalibrationWindow(QMainWindow):
         col.addLayout(row)
         col.addWidget(self._button("🔬 Microscope / SEM reference images…", self.open_label_microscopy, "primary",
                                     "Open multiple images for the chosen label; mark the object, scale and dimensions"))
+        col.addWidget(self._button("🔬 Shared microscope / graticule images…", self.open_shared_microscopy, "primary",
+                                    "Annotate many particle boundaries and circles on one graticule photo; link objects to existing labels"))
         col.addWidget(self._button("Export SEM / optical figure panel…", self.open_microscopy_panel, None,
                                     "Choose labels and a SEM / optical image for each, then export a consistent PNG figure"))
         grid = QGridLayout()
@@ -3150,6 +3532,52 @@ class CalibrationWindow(QMainWindow):
         page.addLayout(instrument_row)
         page.addStretch(1)
 
+    def _remember_project_location(self):
+        """Keep a short persistent history of project JSON paths across sessions."""
+        if self.project_file is None:
+            return
+        location = str(Path(self.project_file).resolve())
+        old = self._library_settings.value("recent_projects", []) or []
+        if isinstance(old, str):
+            old = [old]
+        values = [location] + [str(v) for v in old if str(v) != location]
+        self._library_settings.setValue("recent_projects", values[:12])
+        self._library_settings.sync()
+
+    def _refresh_recent_projects_menu(self):
+        if not hasattr(self, '_recent_projects_menu'):
+            return
+        menu = self._recent_projects_menu
+        menu.clear()
+        paths = self._library_settings.value("recent_projects", []) or []
+        if isinstance(paths, str):
+            paths = [paths]
+        found = [str(path) for path in paths if Path(str(path)).is_file()]
+        if not found:
+            action = menu.addAction("No recent projects")
+            action.setEnabled(False)
+            return
+        for path in found[:12]:
+            action = menu.addAction(f"{Path(path).stem} — {Path(path).parent}")
+            action.setToolTip(path)
+            action.triggered.connect(lambda checked=False, filename=path: self._open_recent_project(filename))
+
+    def _open_recent_project(self, filename):
+        if not Path(filename).is_file():
+            QMessageBox.warning(self, "Recent project", f"File not found:\n{filename}")
+            return
+        other = self._window_with_project(filename)
+        if other is not None:
+            other.raise_()
+            other.activateWindow()
+            return
+        if self._finish_current_project():
+            try:
+                self.open_project(filename)
+                self._update_window_title()
+            except Exception as exc:
+                QMessageBox.warning(self, "Open recent project", str(exc))
+
     def _build_menu(self) -> None:
         file_menu = self.menuBar().addMenu("File")
         for text, slot in (("New window", self.new_window),
@@ -3172,6 +3600,8 @@ class CalibrationWindow(QMainWindow):
             action = QAction(text, self)
             action.triggered.connect(slot)
             file_menu.addAction(action)
+        self._recent_projects_menu = file_menu.addMenu("Open recent project")
+        self._recent_projects_menu.aboutToShow.connect(self._refresh_recent_projects_menu)
         edit_menu = self.menuBar().addMenu("Edit")
         for text, slot, keys in (("Undo", self.undo, "Ctrl+Z"),
                                  ("Redo", self.redo, "Ctrl+Shift+Z"),
@@ -3431,6 +3861,10 @@ class CalibrationWindow(QMainWindow):
                     else float("nan"))
         if metric == "deq":
             return record.deq_um
+        if metric in ("ratio_deq_true_area", "ratio_shadow_true_area"):
+            true_d = self._true_area_diameter(record)
+            value = record.deq_um if metric == "ratio_deq_true_area" else record.shadow_deq_um
+            return value / true_d if math.isfinite(value) and math.isfinite(true_d) and true_d > 0 else float("nan")
         if metric == "shadow_deq":
             return record.shadow_deq_um
         if metric == "ratio_shadow":
@@ -4154,6 +4588,154 @@ class CalibrationWindow(QMainWindow):
         self._change_selection(new, f"{verb} {count:,} particles on the {where}{note} · "
                                     f"{len(new):,} selected{tip}", push=True)
 
+    def _on_plot_context_menu(self, canvas, index, pixel):
+        """Right click a dot on either standard plot, without changing selection."""
+        record = self._nearest_record(canvas, index, pixel, radius=14)
+        if record is None:
+            return
+        menu = QMenu(self)
+        details = menu.addAction("Show saved particle boundary and CPI size definitions…")
+        details.triggered.connect(lambda: self._open_geometry_inspector(record))
+        open_roi = menu.addAction("Open particle viewer")
+        open_roi.triggered.connect(lambda: self.set_current(record.particle_id, open_viewer=True))
+        menu.exec(QCursor.pos())
+
+    def _open_geometry_inspector(self, record, trial_id=None):
+        """Read-only view of the actual stored ROI, its outline, and named sizes.
+
+        Both standard plot and Edge Lab context menus use the same inspector.
+        Trial outlines are separate from stored CPI processing measurements.
+        """
+        if self.store is None:
+            return
+        try:
+            image, stored = self.store.particle(record)
+        except (OSError, ValueError, IndexError, KeyError) as exc:
+            QMessageBox.warning(self, "Particle measurements", f"Cannot read saved ROI: {exc}")
+            return
+        trial = self._edge_trials.get(trial_id) if trial_id is not None else None
+        result = self._edge_trial_result(record.particle_id, trial_id) if trial is not None else None
+        # An integration aperture is explicitly *not* a geometrical contour.
+        trial_outline = (result.get('boundary') if result is not None and
+                         trial.get('kind') in ('edge', 'shadow') else None)
+        is_aperture = trial is not None and trial.get('kind') == 'shadow'
+        stored = np.asarray(stored, dtype=float) if stored is not None else None
+        trial_outline = (np.asarray(trial_outline, dtype=float)
+                         if trial_outline is not None else None)
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"CPI geometry — ROI {record.roi_index} — {record.label or 'unlabelled'}")
+        dlg.resize(890, 710)
+        body = QVBoxLayout(dlg)
+        controls = QHBoxLayout()
+        show_stored = QCheckBox("Show stored CPI boundary")
+        show_stored.setChecked(stored is not None)
+        show_stored.setEnabled(stored is not None)
+        controls.addWidget(show_stored)
+        show_trial = QCheckBox("Show trial integration circle" if is_aperture else "Show trial boundary")
+        show_trial.setChecked(trial_outline is not None)
+        show_trial.setEnabled(trial_outline is not None)
+        if trial is not None:
+            controls.addWidget(show_trial)
+        controls.addStretch(1)
+        body.addLayout(controls)
+        canvas = ParticleCanvas()
+        canvas.setMinimumHeight(390)
+        body.addWidget(canvas, 1)
+        label = QLabel()
+        label.setTextFormat(Qt.RichText)
+        label.setWordWrap(True)
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        body.addWidget(label)
+        close = QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        row = QHBoxLayout(); row.addStretch(1); row.addWidget(close)
+        body.addLayout(row)
+        px = record.pixel_um if np.isfinite(record.pixel_um) and record.pixel_um > 0 else 2.3
+        try:
+            saved_measures = contour_diagnostics.contour_metrics(stored, px)
+        except (ValueError, TypeError):
+            saved_measures = {}
+        if (trial_outline is not None and not is_aperture):
+            try:
+                trial_measures = contour_diagnostics.contour_metrics(trial_outline, px)
+            except (ValueError, TypeError):
+                trial_measures = {}
+        else:
+            trial_measures = {}
+
+        def num(v, precision=2):
+            try:
+                return f"{float(v):.{precision}f}" if np.isfinite(float(v)) else "—"
+            except (TypeError, ValueError):
+                return "—"
+
+        def stored_or_calculated(field, derived):
+            value = getattr(record, field, float('nan'))
+            return value if np.isfinite(value) else saved_measures.get(derived, float('nan'))
+
+        html = (
+            "<b>Saved CPI processing (µm unless stated)</b><br>"
+            f"len / wid: {num(record.length_um)} / {num(record.width_um)} · "
+            f"equivalent-area D: {num(record.deq_um)}<br>"
+            f"Maximum / minimum Feret: {num(stored_or_calculated('len_feret_um','len_feret_um'))} / "
+            f"{num(stored_or_calculated('wid_feret_um','wid_feret_um'))} · "
+            f"ellipse major / minor: {num(stored_or_calculated('len_ellipse_um','len_ellipse_um'))} / "
+            f"{num(stored_or_calculated('wid_ellipse_um','wid_ellipse_um'))}<br>"
+            f"Contour area ratio (enclosing circle): "
+            f"{num(stored_or_calculated('area_ratio_circle','area_ratio_circle'),3)} · "
+            f"contour area: {num(saved_measures.get('contour_area_um2'))} µm² · "
+            f"raw shadow diameter: {num(record.shadow_deq_um)} µm"
+        )
+        if trial is not None:
+            if is_aperture:
+                html += ("<br><b>Trial integration aperture (not the particle boundary)</b>: "
+                         f"shadow diameter {num(result.get('shadow_diameter') if result else None)} µm")
+            elif trial_measures:
+                html += ("<br><b>Trial outline (temporary)</b>: "
+                         f"Feret len / wid {num(trial_measures.get('len_feret_um'))} / "
+                         f"{num(trial_measures.get('wid_feret_um'))} µm · "
+                         f"ellipse len / wid {num(trial_measures.get('len_ellipse_um'))} / "
+                         f"{num(trial_measures.get('wid_ellipse_um'))} µm · "
+                         f"area ratio {num(trial_measures.get('area_ratio_circle'),3)}")
+
+        # Exploratory transmittance diagnostic: bright *inside* the filled
+        # outline, not the geometrical area of a void in a 3-D ice crystal.
+        if stored is not None:
+            try:
+                raw, bg = edge_preview.load_roi_for_preview(self.store.root, record)
+                try:
+                    from proc.edgeDetect import transmittance, EdgeOptions
+                except ImportError:
+                    from ..proc.edgeDetect import transmittance, EdgeOptions
+                T = transmittance(raw, bg, EdgeOptions(method='transmittance'))
+                bright = contour_diagnostics.interior_light_metrics(T, stored)
+                if bright:
+                    html += ("<br><b>Exploratory inner optical brightness</b>: "
+                             f"T≥{num(bright['interior_bright_threshold'],2)} area "
+                             f"{num(100*bright['interior_bright_fraction'],1)}% · "
+                             f"T≥0.90 area {num(100*bright['interior_near_background_fraction'],1)}% · "
+                             f"T&gt;1 area {num(100*bright['interior_above_one_fraction'],1)}% · "
+                             f"enclosed bright islands {num(100*bright['interior_enclosed_bright_fraction'],1)}% · "
+                             f"mean T {num(bright['interior_mean_T'],3)}"
+                             "<br><small>Relative to interior contour pixels, with a 2-pixel rim omitted; "
+                             "not a measured geometrical hole or validated phase classification.</small>")
+            except (OSError, ValueError, KeyError, IndexError, TypeError, ImportError):
+                pass
+        label.setText(html)
+
+        def redraw(_=None):
+            sb = stored if show_stored.isChecked() else None
+            tb = trial_outline if trial is not None and show_trial.isChecked() else None
+            title = f"ROI {record.roi_index} · {record.label or Path(record.source_file).name}"
+            canvas.show_particle(image, sb, title, comparison_boundary=tb,
+                                 comparison_label=("Trial integration aperture" if is_aperture
+                                                   else "Trial boundary"))
+        show_stored.toggled.connect(redraw)
+        if trial is not None:
+            show_trial.toggled.connect(redraw)
+        redraw()
+        dlg.exec()
+
     def _on_hover(self, canvas, index, pixel):
         if not self.hover_action.isChecked() or self.catalog is None:
             return
@@ -4184,11 +4766,9 @@ class CalibrationWindow(QMainWindow):
     def _tested_hover_pixmap(self, image, record, size=150):
         """Draw the contour OR integration aperture in this dataset's curve colour."""
         trial = self._edge_trials.get(self._edge_hover_trial_id)
-        if trial is None:
-            return self._plain_pixmap(image, size)
-        result = self._edge_trial_result(record.particle_id, self._edge_hover_trial_id)
-        if trial.get("kind") == "stored":
-            b = self._edge_stored_outline(record)
+        result = self._edge_trial_result(record.particle_id, self._edge_hover_trial_id) if trial else None
+        if trial is None or trial.get("kind") == "stored":
+            b = self._edge_stored_outline(record, allow_load=True)
         else:
             b = result.get("boundary") if result is not None else None
         b = np.asarray(b if b is not None else [], dtype=float)
@@ -4205,7 +4785,7 @@ class CalibrationWindow(QMainWindow):
         pm = base.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         painter = QPainter(pm)
         painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor(trial["colour"]), 2.25)
+        pen = QPen(QColor(trial["colour"] if trial else "#00edaa"), 2.25)
         pen.setCosmetic(True)
         painter.setPen(pen)
         points = [QPointF(float(x) * pm.width() / shape[0], float(y) * pm.height() / shape[1])
@@ -4219,8 +4799,6 @@ class CalibrationWindow(QMainWindow):
         return pm
 
     def _show_hover_record(self, record, trial_id=None):
-        if trial_id is None:
-            trial_id = self._edge_active_id
         if (self.hover.isVisible() and self.hover.particle_id == record.particle_id
                 and getattr(self.hover, "trial_id", None) == trial_id):
             self.hover.move(QCursor.pos() + QPoint(18, 14))
@@ -4242,6 +4820,30 @@ class CalibrationWindow(QMainWindow):
                 f"<span style='color:#516579'>{Path(record.source_file).name} {record.time_iso[11:19]}</span>"
                 + (f"<br>🗂 {self._batch_text(record)}" if self._groups_of.get(record.particle_id)
                    or record.status == "keep" else ""))
+        html += (f"<br><b>CPI measurements</b>: len {self._format(record.length_um, 2)} µm"
+                 f" · wid {self._format(record.width_um, 2)} µm"
+                 f" · area {self._format(math.pi * (record.deq_um / 2) ** 2, 2)} µm²"
+                 f" · area-equivalent D {self._format(record.deq_um, 2)} µm"
+                 f" · area ratio {self._format(record.area_ratio_circle, 3)}"
+                 f" · shadow D {self._format(record.shadow_deq_um, 2)} µm")
+        # Compare integrated shadow size and measured contour geometry on the
+        # same particle. These ratios use the CPI image, not independent truth.
+        try:
+            d_shadow = float(record.shadow_deq_um)
+            d_contour = float(record.deq_um)
+            l_contour = float(record.length_um)
+            if all(math.isfinite(v) and v > 0 for v in (d_shadow, d_contour, l_contour)):
+                shadow_area = math.pi * (d_shadow / 2.0) ** 2
+                contour_area = math.pi * (d_contour / 2.0) ** 2
+                effective_deficit = shadow_area / contour_area
+                shape_factor = contour_area / (math.pi * (l_contour / 2.0) ** 2)
+                html += (f"<br><b>Shadow / geometry</b>: shadow area {shadow_area:.2f} µm²"
+                         f" · shadow/contour area {effective_deficit:.3f}"
+                         f"<br>Dshadow/Dcontour {d_shadow/d_contour:.3f}"
+                         f" · Dshadow/Lcontour {d_shadow/l_contour:.3f}"
+                         f" · contour roundness {shape_factor:.3f}")
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError):
+            pass
         trial = self._edge_trials.get(trial_id)
         result = self._edge_trial_result(record.particle_id, trial_id)
         if trial is not None and trial.get("kind") == "stored":
@@ -4268,11 +4870,41 @@ class CalibrationWindow(QMainWindow):
                 if "cpv_focus" in result:
                     html += (f"<br>CPIview focus {result['cpv_focus']:.3g} · "
                              f"edge FWHM {result['cpv_fwhm_px']:.2f} px")
+        # Full-ROI transmission diagnostics: show the saved ROI where available,
+        # or the current preview's values (identical normalisation, no smoothing).
+        stats = result if result is not None and "T_peak" in result else None
+        if stats is None and self.store is not None:
+            try:
+                raw_roi, raw_bg, _ = self.store.particle_image_pair(record)
+                if raw_roi is not None and raw_bg is not None:
+                    try:
+                        from ..proc.edgeDetect import transmission_integrals
+                    except ImportError:
+                        from proc.edgeDetect import transmission_integrals
+                    stats = transmission_integrals(raw_roi, raw_bg)
+            except Exception:
+                pass  # Do not break particle hover on a missing source frame.
+        if stats is not None:
+            try:
+                dsum = float(stats['T_signed_sum'])
+                area_px = math.pi * (float(record.deq_um) / (2.0 * float(record.pixel_um))) ** 2
+                if math.isfinite(area_px) and area_px > 0:
+                    html += (f"<br>Signed deficit / CPI contour area: {dsum/area_px:.3f}"
+                             " (effective contrast; aperture-dependent)")
+            except (TypeError, ValueError, ZeroDivisionError, KeyError, OverflowError):
+                pass
+            html += (f"<br><b>ROI transmission (raw T; full ROI)</b>: "
+                     f"peak {self._format(stats['T_peak'], 3)} · "
+                     f"min {self._format(stats['T_min_raw'], 3)}"
+                     f"<br>Σ max(T−1, 0) {self._format(stats['T_excess_sum'], 2)} · "
+                     f"Σ max(1−T, 0) {self._format(stats['T_deficit_sum'], 2)}"
+                     f"<br>Signed deficit {self._format(stats['T_signed_sum'], 2)} "
+                     f"(pixel sums; no clipping/smoothing)")
         image = self._thumbs.get(record.particle_id)
         self.hover.image.setFixedSize(150, 150)
         self.hover.show_at(QCursor.pos(), html,
                            self._tested_hover_pixmap(image, record) if image is not None else None)
-        needs_saved_outline = (trial is not None and trial.get("kind") == "stored"
+        needs_saved_outline = ((trial is None or trial.get("kind") == "stored")
                                and record.particle_id not in self._edge_saved_outline_cache)
         if (image is None or needs_saved_outline) and self.store is not None:
             self._hover_pending = record
@@ -4870,7 +5502,16 @@ class CalibrationWindow(QMainWindow):
         if self._current_tab() != "particle":
             return
         try:
-            image, boundary = self.store.particle(record, subtract_background=self.background_checkbox.isChecked())
+            mode = self.roi_display_mode.currentData()
+            image, bg, boundary = self.store.particle_image_pair(record)
+            if mode == "difference":
+                if bg is None:
+                    raise ValueError("Matching background is unavailable")
+                image = image.astype(np.int16) - bg.astype(np.int16)
+            elif mode == "transmission":
+                if bg is None:
+                    raise ValueError("Matching background is unavailable")
+                image, _ = normalised_transmission(image, bg)
         except Exception as exc:
             self.canvas.show_message(f"Cannot read image:\n{exc}")
             return
@@ -5316,6 +5957,19 @@ class CalibrationWindow(QMainWindow):
         elif chosen == editing:
             self.edit_label()
 
+    def open_shared_microscopy(self):
+        """Shared graticule photos are not owned by any one particle label."""
+        try:
+            from .microscopy_gui import SharedMicroscopyDialog
+        except ImportError:
+            from microscopy_gui import SharedMicroscopyDialog
+        try:
+            dialog = SharedMicroscopyDialog(self.labels, self)
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, 'Shared microscope images', str(exc))
+            return
+        dialog.exec()
+
     def open_microscopy_panel(self):
         try:
             from .microscopy_gui import MicroscopyPanelDialog
@@ -5726,12 +6380,41 @@ class CalibrationWindow(QMainWindow):
         return dialog
 
     def fit_from_projects_dialog(self):
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "Calibration runs to fit together (one project per run)",
-            str(self.project_file.parent) if self.project_file else "", "Project JSON (*.json)")
-        if files:
-            return self.fit_from_projects(files)
-        return None
+        """Collect project JSON files from any number of directories before fitting.
+
+        Qt's multi-file picker normally selects files from only one directory.
+        Keep the full paths, so each project's particle-position table is
+        resolved beside its own JSON rather than beside the active project.
+        """
+        files = []
+        seen = set()
+        folder = str(self.project_file.parent) if self.project_file else ""
+        while True:
+            chosen, _ = QFileDialog.getOpenFileNames(
+                self, "Add calibration projects (select files in this folder)",
+                folder, "Project JSON (*.json)")
+            for filename in chosen:
+                path = Path(filename).expanduser().resolve()
+                if path not in seen:
+                    seen.add(path)
+                    files.append(str(path))
+            if chosen:
+                folder = str(Path(chosen[-1]).expanduser().resolve().parent)
+            if not files:
+                return None  # Cancel on the first picker.
+            response = QMessageBox.question(
+                self, "Fit from multiple folders",
+                f"{len(files)} distinct calibration project(s) selected.\n\n"
+                "Add project JSON files from another folder?\n\n"
+                "Yes: choose more files.  No: fit the selected projects.\n"
+                "Cancel: stop without fitting.",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.No,
+            )
+            if response == QMessageBox.No:
+                return self.fit_from_projects(files)
+            if response != QMessageBox.Yes:
+                return None
 
     def fit_from_projects(self, files, confirm=True):
         """Fit from the projects' saved particle tables, read live (no copies), recording which were used."""
@@ -6157,6 +6840,525 @@ class CalibrationWindow(QMainWindow):
             return []
         return [self.batch_list.item(i).data(Qt.UserRole) for i in range(self.batch_list.count())
                 if self.batch_list.item(i).isSelected()]
+
+
+    def open_transmission_profiles(self, *, initial_mode=None):
+        """Compare normalised transmission profiles from selected saved batches."""
+        names = self._selected_batch_names()
+        if not names:
+            self._toast("Select batches in Review → Flag history first (Ctrl/Shift-click)", 5000)
+            return
+        if not self.catalog or not self.store:
+            return
+        records_by_id = self.catalog._by_id
+        ids = dict.fromkeys(pid for n in names for pid in self.saved_sets.get(n, {}).get("particle_ids", ())
+                            if pid in records_by_id and records_by_id[pid].status == "keep")
+        if not ids:
+            self._toast("No accepted particles in the selected batches", 5000)
+            return
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Transmission profiles · maximum Feret")
+        dlg.resize(1200, 820)
+        v = QVBoxLayout(dlg)
+
+        controls = QGridLayout()
+        plot_mode = QComboBox()
+        plot_mode.addItems(["Individual particles", "Average by batch", "Average by label class", "Subplots by defocus bin", "Minimum transmission vs defocus"])
+        # Default to averaging by label class when multiple selected batches share the same label,
+        # otherwise individual-particle mode remains the default.
+        try:
+            _selected_labels = []
+            for _n in names:
+                _pids = self.saved_sets.get(_n, {}).get("particle_ids", ())
+                _labs = {records_by_id[_pid].label for _pid in _pids
+                         if _pid in records_by_id and records_by_id[_pid].status == "keep" and records_by_id[_pid].label}
+                _selected_labels.extend(list(_labs))
+            _has_duplicate_labels = len(_selected_labels) != len(set(_selected_labels))
+        except Exception:
+            _has_duplicate_labels = False
+        plot_mode.setCurrentIndex(4 if initial_mode == "contrast" else
+                                  (2 if (len(names) > 1 and _has_duplicate_labels) else 0))
+        xscaled = QCheckBox("x / L_true")
+        xscaled.setChecked(True)
+        method_box = QComboBox()
+        method_box.addItems(["Mean", "Median"])
+        limit = QComboBox()
+        limit.addItems(["Quick preview (25 per group)", "Up to 250 per group", "Up to 1,000 per group", "All particles"])
+        bin_axis = QComboBox()
+        bin_axis.addItem("Signed Zd (dimensionless)", "zd")
+        bin_axis.addItem("Signed Z / d (mm)", "d")
+        zd_edges = QLineEdit("-2,2")
+        zd_edges.setToolTip("Comma-separated Zd bin edges, e.g. -2,-1,0,1,2. If you enter only two values, they are treated as the lower and upper limits and bins are spaced equally across the current subplot grid.")
+        rows_spin = QSpinBox(); rows_spin.setRange(1, 8); rows_spin.setValue(2)
+        cols_spin = QSpinBox(); cols_spin.setRange(1, 8); cols_spin.setValue(3)
+        export_btn = QPushButton("Export figure…")
+        export_csv_btn = QPushButton("Export contrast CSV…")
+        robust_box = QComboBox()
+        robust_box.addItems(["Robust minimum (3×3 median)", "Absolute minimum"])
+        contrast_scatter = QCheckBox("Individual points")
+        contrast_scatter.setChecked(True)
+
+        controls.addWidget(QLabel("Plot"), 0, 0)
+        controls.addWidget(plot_mode, 0, 1)
+        controls.addWidget(xscaled, 0, 2)
+        controls.addWidget(QLabel("Average"), 0, 3)
+        controls.addWidget(method_box, 0, 4)
+        controls.addWidget(QLabel("Load"), 0, 5)
+        controls.addWidget(limit, 0, 6)
+        controls.addWidget(bin_axis, 1, 0, 1, 2)
+        controls.addWidget(QLabel("Bin edges"), 1, 2)
+        controls.addWidget(zd_edges, 1, 3)
+        controls.addWidget(QLabel("Rows"), 1, 4)
+        controls.addWidget(rows_spin, 1, 5)
+        controls.addWidget(QLabel("Cols"), 1, 6)
+        controls.addWidget(cols_spin, 1, 7)
+        controls.addWidget(export_btn, 0, 7)
+        controls.addWidget(QLabel("Contrast"), 2, 4)
+        controls.addWidget(robust_box, 2, 5)
+        controls.addWidget(contrast_scatter, 2, 6)
+        controls.addWidget(export_csv_btn, 2, 7)
+        v.addLayout(controls)
+
+        note = QLabel(
+            "Centred at the midpoint of maximum-Feret endpoints; original ROIs, border-scaled transmission. "
+            "Rejected particles excluded. In subplot mode, each panel is a signed-defocus bin and each curve is a label class."
+        )
+        note.setWordWrap(True)
+        v.addWidget(note)
+        fig = Figure(figsize=(11, 7), constrained_layout=True)
+        canvas = FigureCanvasQTAgg(fig)
+        v.addWidget(canvas, 1)
+        status = QLabel("")
+        v.addWidget(status)
+        toolbar = NavigationToolbar2QT(canvas, dlg)
+        v.addWidget(toolbar)
+        close = QPushButton("Close")
+        close.clicked.connect(dlg.accept)
+        v.addWidget(close)
+
+        state = {"axes": [], "title": "", "xlabel": "", "ylabel": ""}
+        profile_cache = {}  # (particle ID, sample mode) -> (x, transmission, Tmin, T05)
+        contrast_data = {}   # particle ID -> (robust Tmin, raw Tmin); within original outline
+        contrast_export_rows = []  # measurements displayed/exported by the contrast plot
+        # Profiles and contrast measurements are cached only for this dialog session.
+        batch_members = {n: set(self.saved_sets.get(n, {}).get("particle_ids", ())) for n in names}
+
+        def _parse_edges():
+            try:
+                values = [float(t.strip()) for t in zd_edges.text().split(',') if t.strip()]
+            except ValueError:
+                raise ValueError("Bin edges must be comma-separated numbers")
+            if len(values) < 2:
+                raise ValueError("Provide at least two bin edges")
+            if any(b <= a for a, b in zip(values[:-1], values[1:])):
+                raise ValueError("Bin edges must be strictly increasing")
+            if len(values) == 2:
+                lo, hi = values
+                n_bins = rows_spin.value() * cols_spin.value()
+                if n_bins < 1:
+                    raise ValueError("Rows × columns must be at least 1")
+                return list(np.linspace(lo, hi, n_bins + 1))
+            return values
+
+        def _record_defocus(record):
+            reference = self._draft_reference_for(record)
+            if reference is None or not (math.isfinite(record.stage_x) and math.isfinite(record.stage_y)):
+                return float('nan')
+            d_mm = signed_plane_distance(record.stage_x, record.stage_y, reference, self.plane_normal.value())
+            if bin_axis.currentData() == "d":
+                return d_mm
+            if not np.isfinite(record.actual_length_um) or record.actual_length_um <= 0:
+                return float('nan')
+            return WAVELENGTH_UM * d_mm * 1000.0 / (record.actual_length_um / 2.0) ** 2
+
+        def _panel_label(index):
+            letters = "abcdefghijklmnopqrstuvwxyz"
+            if index < len(letters):
+                return f"({letters[index]})"
+            q, r = divmod(index, len(letters))
+            return f"({letters[r]}{q})"
+
+        def _export_current():
+            if not state["axes"]:
+                self._toast("Draw a figure first", 3000)
+                return
+            path, _ = QFileDialog.getSaveFileName(dlg, "Export transmission figure", "transmission_profiles.png",
+                                                  "PNG image (*.png);;PDF file (*.pdf);;SVG file (*.svg)")
+            if not path:
+                return
+            for i, ax in enumerate(state["axes"]):
+                ax.text(0.01, 0.99, _panel_label(i), transform=ax.transAxes, ha='left', va='top',
+                        fontsize=10, fontweight='bold')
+            fig.savefig(path, dpi=300, bbox_inches='tight')
+            canvas.draw_idle()
+            self._toast(f"Saved {Path(path).name}", 3000)
+
+        def _export_contrast_csv():
+            if not contrast_export_rows:
+                QMessageBox.information(dlg, "Export contrast", "Choose the minimum-transmission plot first")
+                return
+            filename, _ = QFileDialog.getSaveFileName(dlg, "Export contrast measurements", "minimum_transmission.csv",
+                                                      "CSV (*.csv)")
+            if filename:
+                try:
+                    with open(filename, 'w', newline='', encoding='utf-8') as f:
+                        w = csv.DictWriter(f, fieldnames=['particle_id', 'label', 'true_length_um',
+                            'signed_d_mm', 'signed_zd', 'minimum_T', 'robust_minimum_T'])
+                        w.writeheader(); w.writerows(contrast_export_rows)
+                except OSError as exc:
+                    QMessageBox.warning(dlg, "Export contrast", str(exc))
+
+        def draw():
+            fig.clear()
+            state["axes"] = []
+            mode = plot_mode.currentIndex()
+            method_box.setEnabled(mode != 0)
+            is_contrast = (mode == 4)
+            is_zd_mode = (mode == 3)
+            robust_box.setEnabled(is_contrast)
+            contrast_scatter.setEnabled(is_contrast)
+            for widget in (bin_axis, zd_edges, rows_spin, cols_spin):
+                widget.setEnabled(is_zd_mode or is_contrast)
+
+            successes = 0
+            skipped = 0
+            total_lines = 0
+            grid_norm = None
+            # Physical x requires a common µm grid rather than a grid cut off at 1.6 L_true.
+            # The latter truncated small beads even when their ROIs contain more pixels.
+            physical_half_range = max(160.0, 1.6 * max(
+                (float(records_by_id[pid].actual_length_um) for pid in ids
+                 if np.isfinite(records_by_id[pid].actual_length_um)
+                 and records_by_id[pid].actual_length_um > 0), default=100.0))
+            physical_grid = np.linspace(-physical_half_range, physical_half_range, 801)
+
+            # Select a bounded subset BEFORE reading any ROI. Previous versions
+            # processed every selected image on every redraw, even with a 250
+            # profile limit, which made large calibration runs very slow.
+            max_per = [25, 250, 1000, 10**9][limit.currentIndex()]
+            candidates = {}
+            if is_zd_mode or is_contrast:
+                try:
+                    edges_for_selection = _parse_edges()
+                except ValueError:
+                    edges_for_selection = []
+            for pid in ids:
+                record = records_by_id[pid]
+                label = record.label or "Unlabelled"
+                zd = _record_defocus(record) if (is_zd_mode or is_contrast) else float('nan')
+                if is_zd_mode or is_contrast:
+                    bin_idx = int(np.searchsorted(edges_for_selection, zd, side='right') - 1) if len(edges_for_selection) > 1 and np.isfinite(zd) else -1
+                    if bin_idx < 0 or bin_idx >= len(edges_for_selection) - 1:
+                        continue
+                    group_key = (bin_idx, label)
+                elif mode == 1:
+                    group_key = tuple(n for n in names if pid in batch_members[n])
+                else:
+                    group_key = label
+                candidates.setdefault(group_key, []).append((pid, record, zd))
+
+            selected_records = {}
+            for members in candidates.values():
+                if len(members) > max_per:
+                    positions = np.linspace(0, len(members) - 1, max_per, dtype=int)
+                    members = [members[i] for i in positions]
+                for pid, record, zd in members:
+                    selected_records[pid] = (record, zd)
+
+            all_items = []
+            for pid, (record, zd) in selected_records.items():
+                try:
+                    if not np.isfinite(record.actual_length_um) or record.actual_length_um <= 0:
+                        raise ValueError("Missing labelled length")
+                    sample_mode = "normalised" if xscaled.isChecked() else "physical"
+                    cache_key = (pid, sample_mode)
+                    if cache_key not in profile_cache or pid not in contrast_data:
+                        roi, bg, boundary = self.store.particle_image_pair(record)
+                        if bg is None or boundary is None:
+                            raise ValueError("Missing background/boundary")
+                        T, _ = normalised_transmission(roi, bg)
+                        # CPI ROI arrays are indexed [camera_x, camera_y], NOT [y, x].
+                        # The contour vertices are also (camera_x, camera_y); using
+                        # conventional image [y,x] indexing samples the wrong patch,
+                        # especially for small beads.
+                        from matplotlib.path import Path as MplPath
+                        outline = np.asarray(boundary, dtype=float)
+                        mask = np.zeros(T.shape, dtype=bool)
+                        if outline.ndim == 2 and outline.shape[0] >= 3 and outline.shape[1] == 2:
+                            xmin = max(0, int(np.floor(np.nanmin(outline[:, 0]))))
+                            xmax = min(T.shape[0], int(np.ceil(np.nanmax(outline[:, 0]))) + 1)
+                            ymin = max(0, int(np.floor(np.nanmin(outline[:, 1]))))
+                            ymax = min(T.shape[1], int(np.ceil(np.nanmax(outline[:, 1]))) + 1)
+                            if xmax > xmin and ymax > ymin:
+                                gx, gy = np.mgrid[xmin:xmax, ymin:ymax]
+                                mask[xmin:xmax, ymin:ymax] = MplPath(outline).contains_points(
+                                    np.column_stack((gx.ravel(), gy.ravel()))).reshape(gx.shape)
+                        inside = T[mask & np.isfinite(T)]
+                        if inside.size:
+                            # A percentile of all ROI pixels misses tiny beads. The robust
+                            # minimum is the darkest 3×3 median-filtered *core* pixel.
+                            # Invalid pixels are filled with clear-field T=1 before smoothing;
+                            # each sample must have at least 5 valid contributing pixels.
+                            from scipy.ndimage import median_filter, uniform_filter
+                            finite = np.isfinite(T)
+                            filled = np.where(finite, T, 1.0)
+                            smooth = median_filter(filled, size=3, mode='nearest')
+                            valid_neighbours = uniform_filter(finite.astype(float), size=3, mode='constant') >= (5.0 / 9.0)
+                            candidates = smooth[mask & valid_neighbours]
+                            contrast_data[pid] = (float(np.min(candidates)) if candidates.size else float('nan'),
+                                                  float(np.min(inside)))
+                        else:
+                            contrast_data[pid] = (float('nan'), float('nan'))
+                        sample_span = (1.6 if sample_mode == "normalised" else
+                                       physical_half_range / float(record.actual_length_um))
+                        profile_cache[cache_key] = feret_profile(
+                            T, boundary, record.pixel_um, record.actual_length_um,
+                            normalise_x=True, points=801 if sample_mode == "physical" else 301,
+                            span=sample_span)
+                    x, yy = profile_cache[cache_key]
+                    grid_norm = x
+                    all_items.append({
+                        "record": record, "x": x, "y": yy,
+                        "L": float(record.actual_length_um),
+                        "label": record.label or "Unlabelled",
+                        "batches": [n for n in names if pid in batch_members[n]],
+                        "zd": zd,
+                        "contrast": contrast_data.get(pid, (float("nan"), float("nan"))),
+                    })
+                except (ValueError, IndexError, KeyError, OSError):
+                    skipped += 1
+
+            if not all_items:
+                ax = fig.add_subplot(111)
+                ax.text(0.5, 0.5, "No valid transmission profiles", ha='center', va='center')
+                state["axes"] = [ax]
+                canvas.draw_idle()
+                status.setText(f"0 profiles plotted · {skipped:,} skipped")
+                return
+
+            if is_contrast:
+                ax = fig.add_subplot(111)
+                state['axes'] = [ax]
+                selected_measure = robust_box.currentIndex()
+                contrast_export_rows.clear()
+                grouped = {}
+                for item in all_items:
+                    r = item['record']
+                    val = item['contrast'][selected_measure]
+                    d = _record_defocus(r)
+                    if not (np.isfinite(d) and np.isfinite(val)):
+                        continue
+                    grouped.setdefault(item['label'], []).append((d, val))
+                    ref = self._draft_reference_for(r)
+                    dmm = signed_plane_distance(r.stage_x, r.stage_y, ref, self.plane_normal.value())
+                    zdval = WAVELENGTH_UM * dmm * 1000.0 / (r.actual_length_um / 2.0)**2
+                    contrast_export_rows.append(dict(particle_id=r.particle_id, label=item['label'],
+                        true_length_um=r.actual_length_um, signed_d_mm=dmm, signed_zd=zdval,
+                        minimum_T=item['contrast'][1], robust_minimum_T=item['contrast'][0]))
+                try:
+                    edges = np.asarray(_parse_edges(), dtype=float)
+                except ValueError as exc:
+                    edges = np.array([], dtype=float)
+                    status.setText(str(exc))
+                for li, (label, values) in enumerate(sorted(grouped.items())):
+                    xy = np.asarray(values)
+                    color = f'C{li % 10}'
+                    if contrast_scatter.isChecked():
+                        ax.scatter(xy[:, 0], xy[:, 1], s=7, alpha=.14, color=color)
+                    xx, yy, lower, upper = [], [], [], []
+                    for bi in range(max(0, len(edges)-1)):
+                        use = (xy[:, 0] >= edges[bi]) & (xy[:, 0] < edges[bi + 1])
+                        if np.any(use):
+                            vv = xy[use, 1]
+                            xx.append(float((edges[bi] + edges[bi+1]) / 2))
+                            yy.append(float(np.nanmedian(vv) if method_box.currentText() == 'Median' else np.nanmean(vv)))
+                            lower.append(float(np.nanpercentile(vv, 25)))
+                            upper.append(float(np.nanpercentile(vv, 75)))
+                    if xx:
+                        ax.plot(xx, yy, color=color, linewidth=2, marker='o', markersize=3,
+                                label=f'{label} (n={len(values)})')
+                        ax.fill_between(xx, lower, upper, color=color, alpha=.12)
+                ax.axhline(.55, color='black', linestyle='--', linewidth=1, label='T = 0.55')
+                ax.set_xlabel('Signed Zd' if bin_axis.currentData() == 'zd' else 'Signed d [mm]')
+                ax.set_ylabel('Robust minimum transmission (3×3 median)' if selected_measure == 0 else 'Minimum transmission')
+                ax.set_title('Particle shadow contrast against defocus (accepted ROIs only)')
+                ax.grid(alpha=.15)
+                ax.legend(fontsize=8)
+                status.setText(f'{len(contrast_export_rows):,} particle contrast values; '
+                    'binned median/mean with 25–75% range. Accepted particles only.')
+            elif is_zd_mode:
+                try:
+                    edges = _parse_edges()
+                except ValueError as exc:
+                    ax = fig.add_subplot(111)
+                    ax.text(0.5, 0.5, str(exc), ha='center', va='center')
+                    state["axes"] = [ax]
+                    canvas.draw_idle()
+                    status.setText("Invalid Zd bin specification")
+                    return
+                n_bins = len(edges) - 1
+                rows = rows_spin.value()
+                cols = cols_spin.value()
+                if rows * cols < n_bins:
+                    ax = fig.add_subplot(111)
+                    ax.text(0.5, 0.5, f"{n_bins} Zd bins need at least {n_bins} subplot slots; "
+                            f"currently {rows} × {cols} = {rows * cols}.",
+                            ha='center', va='center', wrap=True)
+                    state["axes"] = []
+                    status.setText("Increase rows or columns to fit the Zd bins")
+                    canvas.draw_idle()
+                    return
+                axes = fig.subplots(rows, cols, sharex=True, sharey=True)
+                axes = np.atleast_1d(axes).ravel()
+                for extra in axes[n_bins:]:
+                    extra.set_visible(False)
+                label_order = sorted({item['label'] for item in all_items})
+                colors = {lab: f"C{i % 10}" for i, lab in enumerate(label_order)}
+                legend_candidates = []
+                for bi in range(n_bins):
+                    ax = axes[bi]
+                    state["axes"].append(ax)
+                    lo, hi = edges[bi], edges[bi + 1]
+                    in_bin = [item for item in all_items if np.isfinite(item['zd']) and lo <= item['zd'] < hi]
+                    grouped = {}
+                    for item in in_bin:
+                        grouped.setdefault(item['label'], []).append(item)
+                    max_per = [25, 250, 1000, 10**9][limit.currentIndex()]
+                    present_labels = []
+                    for label in label_order:
+                        group_items = grouped.get(label, [])
+                        if not group_items:
+                            continue
+                        present_labels.append(label)
+                        if len(group_items) > max_per:
+                            idx = np.linspace(0, len(group_items)-1, max_per, dtype=int)
+                            group_items = [group_items[i] for i in idx]
+                        curves = [it['y'] for it in group_items]
+                        lengths = [it['L'] for it in group_items]
+                        if xscaled.isChecked():
+                            xx = grid_norm
+                            aligned = curves
+                        else:
+                            xx = physical_grid
+                            aligned = []
+                            for item in group_items:
+                                curve = item['y']
+                                physical_x = item['x'] * item['L']
+                                valid = np.isfinite(curve) & np.isfinite(physical_x)
+                                aligned.append(np.interp(xx, physical_x[valid],
+                                                         np.asarray(curve)[valid], left=np.nan, right=np.nan)
+                                               if valid.sum() >= 2 else np.full_like(xx, np.nan))
+                        yy, _ = aggregate_profiles(aligned, method_box.currentText().lower())
+                        ax.plot(xx, yy, linewidth=1.8, label=f"{label} (n={len(group_items)})",
+                                color=colors[label])
+                        successes += len(group_items)
+                        total_lines += 1
+                    legend_candidates.append((ax, present_labels))
+                    ax.axhline(1, linestyle=':', color='grey', linewidth=1)
+                    ax.axvline(0, linestyle=':', color='grey', linewidth=1)
+                    ax.grid(alpha=0.15)
+                    ax.set_title(f"{'Zd' if bin_axis.currentData() == 'zd' else 'd [mm]'} [{lo:g}, {hi:g})")
+                    if bi % cols == 0:
+                        ax.set_ylabel("Normalised transmission")
+                    if bi >= (rows - 1) * cols:
+                        ax.set_xlabel("Position / true maximum Feret length" if xscaled.isChecked() else "Position [µm]")
+                # Put the legend on a subplot containing all labels if possible; otherwise
+                # choose the subplot containing the largest number of labels.
+                if legend_candidates:
+                    chosen_ax = None
+                    full_count = len(label_order)
+                    best_count = -1
+                    for cand_ax, present_labels in legend_candidates:
+                        count = len(present_labels)
+                        if count == full_count and count > 0:
+                            chosen_ax = cand_ax
+                            break
+                        if count > best_count:
+                            best_count = count
+                            chosen_ax = cand_ax
+                    if chosen_ax is not None and best_count != 0:
+                        chosen_ax.legend(fontsize=8, loc='best')
+                state["title"] = "Transmission profiles by defocus bin"
+                status.setText(f"{successes:,} profiles contributing across {n_bins} Zd bins · {skipped:,} skipped")
+            else:
+                ax = fig.add_subplot(111)
+                state["axes"] = [ax]
+                grouped = {}
+                for item in all_items:
+                    record = item['record']
+                    pid = record.particle_id
+                    if mode == 2:
+                        groups = [item['label']]
+                    elif mode == 1:
+                        groups = item['batches']
+                    else:
+                        groups = [f"{item['label']}"]
+                    for group in groups:
+                        grouped.setdefault(group, []).append(item)
+                for group, group_items in sorted(grouped.items()):
+                    max_per = [25, 250, 1000, len(group_items)][limit.currentIndex()]
+                    selected = group_items if len(group_items) <= max_per else [group_items[i] for i in np.linspace(0, len(group_items)-1, max_per, dtype=int)]
+                    curves = [it['y'] for it in selected]
+                    lengths = [it['L'] for it in selected]
+                    color = f"C{total_lines % 10}"
+                    if mode == 0:
+                        for i, item in enumerate(selected):
+                            curve = item['y']
+                            xx = item['x'] if xscaled.isChecked() else item['x'] * item['L']
+                            ax.plot(xx, curve, linewidth=0.75, alpha=0.22, color=color,
+                                    label=group if i == 0 else "_nolegend_")
+                        total_lines += 1
+                    else:
+                        if xscaled.isChecked():
+                            xx = grid_norm
+                            aligned = curves
+                        else:
+                            xx = physical_grid
+                            aligned = []
+                            for item in selected:
+                                curve = item['y']
+                                physical_x = item['x'] * item['L']
+                                valid = np.isfinite(curve) & np.isfinite(physical_x)
+                                aligned.append(np.interp(xx, physical_x[valid],
+                                                         np.asarray(curve)[valid], left=np.nan, right=np.nan)
+                                               if valid.sum() >= 2 else np.full_like(xx, np.nan))
+                        yy, _ = aggregate_profiles(aligned, method_box.currentText().lower())
+                        ax.plot(xx, yy, linewidth=1.8, label=f"{group} (n={len(curves)})")
+                        total_lines += 1
+                    successes += len(curves)
+                ax.axhline(1, linestyle=':', color='grey', linewidth=1)
+                ax.axvline(0, linestyle=':', color='grey', linewidth=1)
+                ax.set_xlabel("Position / true maximum Feret length" if xscaled.isChecked() else "Position [µm]")
+                ax.set_ylabel("Normalised transmission I / (k × background)")
+                ax.set_title(("Individual particle" if mode == 0 else "Mean / median") +
+                             " transmission along maximum-Feret direction")
+                ax.grid(alpha=0.15)
+                if successes and total_lines <= 15:
+                    ax.legend(fontsize=8, loc='best')
+                status.setText(f"{successes:,} profiles plotted · {skipped:,} skipped "
+                               "(invalid ROI/background/boundary/label). "
+                               + ("Individual traces" if mode == 0 else "Averaged groups"))
+            canvas.draw_idle()
+
+        export_csv_btn.clicked.connect(_export_contrast_csv)
+        robust_box.currentIndexChanged.connect(draw)
+        contrast_scatter.toggled.connect(draw)
+
+        xscaled.toggled.connect(draw)
+        for ctrl in (plot_mode, method_box, limit):
+            ctrl.currentIndexChanged.connect(draw)
+        for spin in (rows_spin, cols_spin):
+            spin.valueChanged.connect(draw)
+        def _change_bin_axis():
+            # Avoid silently treating old dimensionless bounds as millimetres.
+            zd_edges.setText("-2,2" if bin_axis.currentData() == "zd" else "-1,1")
+            draw()
+        bin_axis.currentIndexChanged.connect(_change_bin_axis)
+        zd_edges.editingFinished.connect(draw)
+        export_btn.clicked.connect(_export_current)
+        QTimer.singleShot(0, draw)
+        dlg.exec()
 
     def _batch_export_positions(self, records, names, memberships):
         return batch_netcdf.batch_position_metadata(
@@ -6874,6 +8076,7 @@ class CalibrationWindow(QMainWindow):
                     return False
         if self.project_file is not None:
             self.save_project()
+            self._remember_project_location()
         elif self.catalog is not None and self.catalog.records:
             self._write_flags()
         return True
@@ -7170,6 +8373,10 @@ class CalibrationWindow(QMainWindow):
         "image_x_px", "image_y_px", "x_stage", "z_stage", "reference_from", "reference_kind",
         "x_best", "z_best", "x_minus_xbest", "z_minus_zbest", "plane_normal_deg",
         "d_signed_plane", "d_in_plane", "processing", "focus_T", "edge_touch", "deq_um", "shadow_deq_um", "area_ratio_circle", "shadow_radius_px", "pixel_um",
+        "contrast_min_T", "contrast_robust_T", "contrast_min_raw", "contrast_max_delta",
+        "contrast_area_px", "contrast_level_T",
+        "acq_IThreshold", "acq_ROIMinSize", "acq_peak_difference",
+        "acq_qualified_pixels", "acq_largest_component_px",
         "cpv_focus", "cpv_focus_sd", "cpv_fwhm_px", "cpv_distinct", "cpv_cutoff_pct", "cutoff_pct")
 
     def _export_particle_positions(self):
@@ -7210,7 +8417,14 @@ class CalibrationWindow(QMainWindow):
                        reference_from=source or "", reference_kind=kind or "", plane_normal_deg=theta,
                        processing=r.processing, focus_T=r.focus_T, edge_touch=r.edge_touch, deq_um=r.deq_um,
                        shadow_deq_um=r.shadow_deq_um, area_ratio_circle=r.area_ratio_circle, shadow_radius_px=r.shadow_radius_px,
-                       pixel_um=r.pixel_um, cpv_focus=r.cpv_focus, cpv_focus_sd=r.cpv_focus_sd,
+                       pixel_um=r.pixel_um,
+                       contrast_min_T=r.contrast_min_T, contrast_robust_T=r.contrast_robust_T,
+                       contrast_min_raw=r.contrast_min_raw, contrast_max_delta=r.contrast_max_delta,
+                       contrast_area_px=r.contrast_area_px, contrast_level_T=r.contrast_level_T,
+                       acq_IThreshold=r.acq_IThreshold, acq_ROIMinSize=r.acq_ROIMinSize,
+                       acq_peak_difference=r.acq_peak_difference, acq_qualified_pixels=r.acq_qualified_pixels,
+                       acq_largest_component_px=r.acq_largest_component_px,
+                       cpv_focus=r.cpv_focus, cpv_focus_sd=r.cpv_focus_sd,
                        cpv_fwhm_px=r.cpv_fwhm_px, cpv_distinct=r.cpv_distinct, cpv_cutoff_pct=r.cpv_cutoff_pct,
                        cutoff_pct=r.cutoff_pct)
             if ref is not None and math.isfinite(r.stage_x) and math.isfinite(r.stage_y):

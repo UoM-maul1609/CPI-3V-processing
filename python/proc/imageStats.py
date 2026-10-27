@@ -28,6 +28,34 @@ try:
 except ImportError:
     from .areaRatio import contour_area_ratio
 
+try:
+    from interiorLight import interior_light_metrics, INTERIOR_FIELD_NAMES, MAT_FIELD_NAMES
+except ImportError:  # imported as proc.imageStats
+    from .interiorLight import interior_light_metrics, INTERIOR_FIELD_NAMES, MAT_FIELD_NAMES
+
+
+def _save_interior_metrics(dat, roi_index, image, background, boundary, options):
+    """Record per-ROI optical-interior measurements without changing sizing.
+
+    Uses the same border normalisation and denoising as edge segmentation,
+    but never modifies the ROI or its contour. Invalid inputs remain NaN.
+    """
+    if boundary is None or len(boundary) < 3:
+        return
+    try:
+        from edgeDetect import transmittance
+    except ImportError:
+        from .edgeDetect import transmittance
+    try:
+        T = transmittance(np.asarray(image), np.asarray(background), options)
+        values = interior_light_metrics(T, boundary)
+    except (ValueError, IndexError, FloatingPointError, TypeError):
+        return
+    for name in INTERIOR_FIELD_NAMES:
+        if name in values:
+            dat[MAT_FIELD_NAMES.get(name, name)][roi_index, 0] = values[name]
+
+
 def _feret_dimensions(boundary, pixel_um):
     """Explicit max/min Feret geometry, separately from inertia ellipse axes."""
     from scipy.spatial import ConvexHull, distance, QhullError
@@ -133,6 +161,10 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=Non
         "orientation": np.zeros((nroi, 1), dtype=float),
         "centroid": np.zeros((nroi, 2), dtype=float),
     }
+
+    # Optical-interior diagnostics use the SAME filled contour as the size estimate.
+    for name in INTERIOR_FIELD_NAMES:
+        dat[MAT_FIELD_NAMES.get(name, name)] = np.full((nroi, 1), np.nan)
 
     if options.shadow_circle_padding is not None:
         dat["shadow_deq"] = np.full((nroi, 1), np.nan)
@@ -281,6 +313,7 @@ def imageStats(ROI_N, BG, cpiv1, b_flag, position, desc, globalLock, options=Non
             dat["orientation"][roi_index] = region.orientation
             dat["foc"][roi_index] = calculate_focus(contour, arr, b_flag)
             dat["local_illum_bg"][roi_index] = local_illumination(image, background, contour)
+            _save_interior_metrics(dat, roi_index, image, background, contour, options)
             if options.shadow_circle_padding is not None:
                 try:
                     measurement = measure_shadow_circle(
@@ -400,10 +433,19 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
         "len_ellipse": nan(nroi, 1), "wid_ellipse": nan(nroi, 1),
         "len_feret": nan(nroi, 1), "wid_feret": nan(nroi, 1), "perimeter": nan(nroi, 1), "deq": nan(nroi, 1),
         "T_min": nan(nroi, 1), "T_centre": nan(nroi, 1), "T_border": nan(nroi, 1), "edge_level_used": nan(nroi, 1),
+        "contrast_min_T": nan(nroi, 1), "contrast_robust_T": nan(nroi, 1),
+        "contrast_min_raw": nan(nroi, 1), "contrast_max_delta": nan(nroi, 1),
+        "contrast_area_px": nan(nroi, 1), "contrast_level_T": nan(nroi, 1),
+        "acq_IThreshold": nan(nroi, 1), "acq_ROIMinSize": nan(nroi, 1),
+        "acq_peak_difference": nan(nroi, 1), "acq_qualified_pixels": nan(nroi, 1),
+        "acq_largest_component_px": nan(nroi, 1),
         "n_boundary": np.zeros((nroi, 1)), "edge_touch": np.zeros((nroi, 1)), "outline_radial": np.zeros((nroi, 1)),
         "cutoff_pct": nan(nroi, 1),
         "bg_source": np.zeros((nroi, 1)), "bg_dt_s": nan(nroi, 1),
     }
+    for name in INTERIOR_FIELD_NAMES:
+        dat[MAT_FIELD_NAMES.get(name, name)] = nan(nroi, 1)
+
     if options.shadow_circle_padding is not None:
         dat["shadow_deq"] = nan(nroi, 1)
         dat["shadow_area_px"] = nan(nroi, 1)
@@ -497,8 +539,66 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
                         dat["shadow_extrapolated"][roi_index] = int(measurement["roi_extrapolated"])
                 except (ValueError, IndexError, FloatingPointError):
                     pass
+            # Acquisition threshold is a RAW background-minus-image difference
+            # (CPI-230 manual §4.2.3). Do this independently of Python edge success.
+            try:
+                from scipy import ndimage as _ndi
+                threshold_vector = ROI_N['IThreshold'][0, 0]
+                acq_level = float(np.asarray(threshold_vector).ravel()[roi_index])
+                if np.isfinite(acq_level) and acq_level > 0:
+                    dat['acq_IThreshold'][roi_index] = acq_level
+                    raw_delta = np.asarray(background, float) - np.asarray(image, float)
+                    dat['acq_peak_difference'][roi_index] = float(np.nanmax(raw_delta))
+                    above = np.isfinite(raw_delta) & (raw_delta > acq_level)
+                    dat['acq_qualified_pixels'][roi_index] = int(np.count_nonzero(above))
+                    # 3x3 neighbourhood: at least three neighbours in addition
+                    # to the centre, and not a purely horizontal/vertical line.
+                    kernel = np.ones((3, 3), dtype=int)
+                    kernel[1, 1] = 0
+                    adjacent = _ndi.convolve(above.astype(np.uint8), kernel, mode='constant')
+                    qualified = above & (adjacent >= 3)
+                    components, count = _ndi.label(qualified, structure=np.ones((3, 3), dtype=int))
+                    sizes = np.bincount(components.ravel())[1:]
+                    dat['acq_largest_component_px'][roi_index] = int(sizes.max()) if sizes.size else 0
+                    if 'ROIMinSize' in ROI_N.dtype.names:
+                        dat['acq_ROIMinSize'][roi_index] = float(np.asarray(ROI_N['ROIMinSize'][0, 0]).ravel()[roi_index])
+            except (KeyError, ValueError, IndexError, TypeError, AttributeError):
+                pass
             if res is None:
                 continue
+            # Save contrast observables during processing: the fit never reloads ROIs.
+            # Use precisely the transmission image used by the edge detector.
+            try:
+                from edgeDetect import transmittance as _proc_transmittance
+            except ImportError:
+                from .edgeDetect import transmittance as _proc_transmittance
+            try:
+                from scipy import ndimage as _ndi
+                from skimage.draw import polygon as _polygon
+                trans = _proc_transmittance(image, background, options)
+                boundary = np.asarray(res["boundary"], dtype=float)
+                rr, cc = _polygon(boundary[:, 0], boundary[:, 1], trans.shape)
+                mask = np.zeros(trans.shape, dtype=bool)
+                mask[rr, cc] = True
+                mask &= np.isfinite(trans)
+                if mask.any():
+                    dat["contrast_min_T"][roi_index] = float(np.min(trans[mask]))
+                    robust = _ndi.median_filter(trans, size=3, mode="nearest")
+                    dat["contrast_robust_T"][roi_index] = float(np.min(robust[mask]))
+                    dat["contrast_min_raw"][roi_index] = float(np.min(image[mask]))
+                    dat["contrast_max_delta"][roi_index] = float(np.max((background-image)[mask]))
+                    level = (float(options.edge_level) if options.edge_mode == "fixed"
+                             else 1.0 - float(options.min_contrast))
+                    dat["contrast_level_T"][roi_index] = level
+                    qualifying = (trans < level) & np.isfinite(trans)
+                    components, n_components = _ndi.label(qualifying)
+                    overlap = np.bincount(components[mask], minlength=n_components+1)
+                    if len(overlap) > 1:
+                        overlap[0] = 0
+                        chosen = int(np.argmax(overlap))
+                        dat["contrast_area_px"][roi_index] = int(np.sum(components == chosen)) if chosen else 0
+            except (ValueError, IndexError, FloatingPointError):
+                pass
             for key in ("len", "wid", "area", "round", "orientation", "len_ellipse", "wid_ellipse", "len_feret", "wid_feret", "perimeter", "deq",
                         "T_min", "T_centre", "T_border", "n_boundary", "edge_touch", "edge_level_used",
                         "outline_radial", "cutoff_pct"):
@@ -507,6 +607,7 @@ def _image_stats_transmittance(ROI_N, BG, cpiv1, b_flag, position, desc, options
                 res["boundary"], res["area"], options.pixel_um)
             dat["centroid"][roi_index, :] = res["centroid"]
             dat["local_illum_bg"][roi_index] = local_illumination(image, background, res["boundary"])
+            _save_interior_metrics(dat, roi_index, image, background, res["boundary"], options)
             foc[roi_index]["focus"] = res["focus"]
             foc[roi_index]["focus_T"] = res["focus_T"]
             if b_flag:

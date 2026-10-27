@@ -130,7 +130,7 @@ def mult_job(path1, filename1, dt, process_sweep1_if_exist, cpiv1):
 
     print("Finding house keeping...")
     if cpiv1:
-        house = np.flatnonzero(ushort == int("0xa1d7", 0))
+        house = np.flatnonzero(np.isin(ushort, (0xA1D6, 0xA2D6, 0xA1D7, 0xA1D8)))
     else:
         house = np.flatnonzero(ushort == int("0x484B", 0))
     print("done")

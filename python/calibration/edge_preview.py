@@ -35,16 +35,23 @@ METHODS = (
     ("relative/radial", "Relative shadow · radial outline"),
     ("relative/edge", "Relative shadow · steepest gradient"),
     ("relative/contour", "Relative shadow · raw contour"),
+    ("relative/union", "Relative shadow · raw-contour union (experimental)"),
     ("fixed/radial", "Absolute transmittance · radial outline"),
     ("fixed/edge", "Absolute transmittance · steepest gradient"),
     ("fixed/contour", "Absolute transmittance · raw contour"),
+    ("fixed/union", "Absolute transmittance · raw-contour union (experimental)"),
+    ("scaled_counts/radial", "Scaled BG difference · radial outline"),
+    ("scaled_counts/edge", "Scaled BG difference · steepest gradient"),
+    ("scaled_counts/contour", "Scaled BG difference · raw contour"),
+    ("scaled_counts/union", "Scaled BG difference · raw-contour union (experimental)"),
 )
 
 
 SHADOW_METHOD = ("shadow/circle", "Signed shadow integral · fitted circle (experimental)")
 
 def preview_options(method: str, level: float = .55, denoise: int = 1,
-                    smooth: float = 0., *, pixel_um: float = 2.3, cpiview: bool = False) -> EdgeOptions:
+                    smooth: float = 0., *, pixel_um: float = 2.3, cpiview: bool = False,
+                    inset_px: float = 0., union_gap_px: float = 6., union_require_weak_shadow: bool = True, union_min_area_px: int = 10, inset_preserve_necks: bool = False, local_close_radius_px: float = 0., local_close_max_added_pct: float = 3.) -> EdgeOptions:
     """Return real production processing options with the requested edge definition."""
     if method not in dict(METHODS):
         raise ValueError(f"Unknown edge preview algorithm: {method}")
@@ -53,14 +60,24 @@ def preview_options(method: str, level: float = .55, denoise: int = 1,
     mode, outline = method.split("/")
     options = EdgeOptions(method="transmittance", pixel_um=float(pixel_um),
                           edge_mode=mode, outline=outline,
-                          edge_fraction=float(level), edge_level=float(level),
+                          edge_fraction=float(level) if mode == "relative" else .55,
+                          edge_level=float(level) if mode == "fixed" else .5,
+                          count_threshold=float(level) if mode == "scaled_counts" else 41.,
                           denoise=int(denoise), smooth_sigma=float(smooth),
+                          outline_inset_px=max(0., float(inset_px)),
+                          union_max_separation_px=max(0., float(union_gap_px)),
+                          union_min_component_area_px=int(union_min_area_px),
+                          union_require_weak_shadow=bool(union_require_weak_shadow),
+                          inset_preserve_necks=bool(inset_preserve_necks),
+                          local_close_radius_px=float(local_close_radius_px),
+                          local_close_max_added_fraction=float(local_close_max_added_pct) / 100.,
                           bg_check=False, boundary_tol_px=.35, max_boundary_points=500, cpiview=bool(cpiview))
     return options
 
 
 def command_flags(method: str, level: float = .55, denoise: int = 1,
-                  smooth: float = 0., cpiview: bool = False) -> str:
+                  smooth: float = 0., cpiview: bool = False, inset_px: float = 0.,
+                  union_gap_px: float = 6., union_require_weak_shadow: bool = True, union_min_area_px: int = 10, inset_preserve_necks: bool = False, local_close_radius_px: float = 0., local_close_max_added_pct: float = 3.) -> str:
     """Actual batchProcess.py CLI flags corresponding to the visible trial controls.
 
     The preview uses stored backgrounds and disables background replacement;
@@ -73,8 +90,20 @@ def command_flags(method: str, level: float = .55, denoise: int = 1,
     mode, outline = method.split("/")
     args = ["--edge-method", "transmittance", "--edge-mode", mode,
             "--outline", outline,
-            "--edge-fraction" if mode == "relative" else "--edge-level", f"{level:g}",
+            "--edge-fraction" if mode == "relative" else ("--count-threshold" if mode == "scaled_counts" else "--edge-level"), f"{level:g}",
             "--denoise", str(int(denoise)), "--smooth-sigma", f"{smooth:g}"]
+    if float(inset_px) > 0:
+        args += ["--outline-inset-px", f"{float(inset_px):g}"]
+    if outline == "union":
+        if inset_preserve_necks:
+            args += ["--inset-preserve-necks"]
+        if local_close_radius_px > 0:
+            args += ["--local-close-radius-px", f"{float(local_close_radius_px):g}",
+                     "--local-close-max-added-pct", f"{float(local_close_max_added_pct):g}"]
+        args += ["--union-max-separation-px", f"{float(union_gap_px):g}",
+                 "--union-min-component-area-px", str(int(union_min_area_px))]
+        if not union_require_weak_shadow:
+            args += ["--union-distance-only"]
     if cpiview:
         args.append("--cpiview")
     return " ".join(shlex.quote(arg) for arg in args)
@@ -182,8 +211,13 @@ def preview_one(image, background, options: EdgeOptions):
     if result is None:
         return None
     out = {key: result[key] for key in (
-        "len", "wid", "deq", "round", "focus", "focus_T", "T_min",
-        "edge_level_used", "cutoff_pct", "edge_touch", "boundary", "T_border", "T_centre")}
+        "len", "wid", "deq", "round", "area", "focus", "focus_T", "T_min",
+        "len_feret", "wid_feret", "len_ellipse", "wid_ellipse",
+        "edge_level_used", "cutoff_pct", "edge_touch", "boundary", "T_border", "T_centre",
+        "T_peak", "T_min_raw", "T_excess_sum", "T_deficit_sum", "T_signed_sum")}
+    for key in ("union_components_found", "union_components_considered", "union_components_joined", "union_max_gap_used_px", "union_component_details", "union_require_weak_shadow", "union_selected_components", "union_connector_pixels", "union_components_in_final_outline", "union_final_fragment_pixels", "union_final_retention_ok", "union_original_contours", "union_connection_xy"):
+        if key in result:
+            out[key] = result[key]
     if options.cpiview:
         # Match imageStats.py: use the measured ROI polygon to choose the CPIview
         # component, then run the *separate*, native CPIview focus implementation.

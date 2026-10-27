@@ -57,7 +57,7 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
                + H['TimeISW'].astype(np.uint64) * np.uint64(16**4)
                + H['TimeLSW'].astype(np.uint64))}
         Rdgs=H['Readings1']
-        #HOUSE['deadtime']=Rdgs[:,66]*0.000341333
+        # Retain the legacy 3V-CPI dead time used by existing processing.
         HOUSE['deadtime']=Rdgs[:,57] /256
     else:
         # housekeeping packet times

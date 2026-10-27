@@ -1,85 +1,108 @@
+"""Decode CPI housekeeping blocks with bounds-checked, version-specific layouts.
+
+The version 20/25/30 layouts are documented by CPIView's HKverXX structs.
+Scanner candidates can include markers within image pixels, so the declared
+record size, version, and alignment must be checked before decoding.
+"""
+import warnings
 import numpy as np
-import struct
+
+
 def _u32_from_words(high, low):
-    """Combine two 16-bit words without NumPy scalar overflow."""
     return (int(high) << 16) | int(low)
 
 
-def convertDataToHouseSA(bytes1,ushort,order,house,cpiv1):
-    # https://stackoverflow.com/questions/3648442/how-to-define-a-structure-like-in-c
-    #https://stackoverflow.com/questions/5824530/python-struct-arrays
-    #https://docs.scipy.org/doc/numpy-1.9.3/user/basics.rec.html
-    # structured array with dictionary argument
-    """  
-    BlockNum     # ushort
-    ulItemSize   # ulong
-    Readings1   # (70,1)ushort
-    TimeMSW   # ushort
-    TimeISW   # ushort
-    TimeLSW   # ushort
-    Readings   # (8,1)ushort
-    order       
-    """
-    
+def convertDataToHouseSA(bytes1, ushort, order, house, cpiv1):
     if cpiv1:
-        H=np.zeros(len(house), 
-            dtype=[('BlockNum', 'uint16'),
-                    ('ulItemSize', 'uint32'),
-                    ('usVersion', 'uint16'),
-                    ('ulXtraData', 'uint32'),
-                    ('bNewData', 'uint16'),
-                    ('usChkSumFlag', 'uint16'),
-                    ('TopReadings', '(3,1)uint16'),
-                    ('Time','uint32'),
-                    ('Readings','(40,1)uint16'),
-                    ('order', 'uint32') ])
-                    
-        for i in range(len(house)):
-            if (_u32_from_words(ushort[house[i]+2], ushort[house[i]+1]) == 106):
-                H['BlockNum'][i]=ushort[house[i]+0]
-                H['ulItemSize'][i] = _u32_from_words(ushort[house[i]+2], ushort[house[i]+1])
-                H['usVersion'][i]=ushort[house[i]+3]
-                H['ulXtraData'][i] = _u32_from_words(ushort[house[i]+5], ushort[house[i]+4])
-                H['bNewData'][i]=ushort[house[i]+6]
-                H['usChkSumFlag'][i]=ushort[house[i]+7]
-                H['TopReadings'][i]=np.reshape(ushort[house[i]+8:house[i]+8+3],(3,1))
-                H['Time'][i] = _u32_from_words(ushort[house[i]+12], ushort[house[i]+11])
-                H['Readings'][i]=np.reshape(ushort[house[i]+13:house[i]+13+40],(40,1))
-                H['order'][i]=order[house[i]]
-    
-        ver=H['ulItemSize']
-        ind,=np.where(ver==106)
-        H=H[ind]
+        # CPIView HKver20 has an 11-word header and 38 readings (98 bytes).
+        # HKver25 has 13 header words and 40 readings (106 bytes).
+        # HKver30 has 13 header words and 46 readings (118 bytes).
+        layouts = {20: (98, 11, 38), 25: (106, 13, 40), 30: (118, 13, 46)}
+        dtype = [
+            ('BlockNum', 'uint16'), ('ulItemSize', 'uint32'),
+            ('usVersion', 'uint16'), ('ulXtraData', 'uint32'),
+            ('bNewData', 'uint16'), ('usChkSumFlag', 'uint16'),
+            ('TopReadings', '(3,1)uint16'), ('Time', 'uint32'),
+            ('Readings', '(46,1)uint16'), ('nReadings', 'uint16'),
+            ('order', 'uint32'),
+        ]
+        records = []
+        rejected = 0
+        # ROIDataDriver concatenates normal and byte-shifted word arrays.
+        # Do not let a purported housekeeping record cross their boundary.
+        half = len(ushort) // 2
+        for candidate in house:
+            pos = int(candidate)
+            boundary = half if pos < half else len(ushort)
+            if pos + 4 > boundary:
+                rejected += 1
+                continue
+            marker = int(ushort[pos])
+            if marker not in (0xA1D6, 0xA2D6, 0xA1D7, 0xA1D8):
+                rejected += 1
+                continue
+            ver = int(ushort[pos + 3])
+            layout = layouts.get(ver)
+            if layout is None:
+                rejected += 1
+                continue
+            item_size, header_words, nreadings = layout
+            if pos + header_words + nreadings > boundary:
+                rejected += 1
+                continue
+            # CPIView ItemSize is a 32-bit byte length for versions 20, 25, 30.
+            declared_size = _u32_from_words(ushort[pos + 2], ushort[pos + 1])
+            if declared_size != item_size:
+                rejected += 1
+                continue
+            rec = np.zeros((), dtype=dtype)
+            rec['BlockNum'] = marker
+            rec['ulItemSize'] = declared_size
+            rec['usVersion'] = ver
+            if ver == 20:
+                rec['bNewData'] = ushort[pos + 4]
+                rec['usChkSumFlag'] = ushort[pos + 5]
+                rec['TopReadings'] = ushort[pos + 6:pos + 9].reshape(3, 1)
+                rec['Time'] = _u32_from_words(ushort[pos + 10], ushort[pos + 9])
+            else:
+                rec['ulXtraData'] = _u32_from_words(ushort[pos + 5], ushort[pos + 4])
+                rec['bNewData'] = ushort[pos + 6]
+                rec['usChkSumFlag'] = ushort[pos + 7]
+                rec['TopReadings'] = ushort[pos + 8:pos + 11].reshape(3, 1)
+                rec['Time'] = _u32_from_words(ushort[pos + 12], ushort[pos + 11])
+            rec['Readings'][:nreadings] = ushort[pos + header_words:pos + header_words + nreadings].reshape(nreadings, 1)
+            rec['nReadings'] = nreadings
+            rec['order'] = order[pos]
+            records.append(rec)
+        if rejected:
+            warnings.warn(
+                f"CPIv1 housekeeping: skipped {rejected} invalid/incomplete marker "
+                f"candidate(s); retained {len(records)} valid record(s)",
+                RuntimeWarning, stacklevel=2,
+            )
+        return np.array(records, dtype=dtype)
 
-    else:
-        H=np.zeros(len(house), 
-            dtype=[('BlockNum', 'uint16'),
-                    ('ulItemSize', 'uint16'),
-                    ('Readings1', '(70,1)uint16'),
-                    ('TimeMSW', 'uint16'),
-                    ('TimeISW', 'uint16'),
-                    ('TimeLSW', 'uint16'),
-                    ('Readings', '(8,1)int16'),
-                    ('order', 'uint32') ])
-    
-    
-        for i in range(len(house)):
-            if (ushort[house[i]+1] == 83):
-                H['BlockNum'][i]=ushort[house[i]+0]
-                H['ulItemSize'][i]=ushort[house[i]+1]
-                H['Readings1'][i]=np.reshape(ushort[house[i]+2:house[i]+2+70],(70,1))
-                H['TimeMSW'][i]=ushort[house[i]+72]
-                H['TimeISW'][i]=ushort[house[i]+73]
-                H['TimeLSW'][i]=ushort[house[i]+74]
-                H['Readings'][i]=np.reshape(ushort[house[i]+75:house[i]+75+8],(8,1))   
-                H['order'][i]=order[house[i]]
-        
-        ver=H['ulItemSize']
-        ind,=np.where(ver==83)
-        H=H[ind]
-    
-    
-
-    return (H)
-
-
+    dtype = [
+        ('BlockNum', 'uint16'), ('ulItemSize', 'uint16'),
+        ('Readings1', '(70,1)uint16'), ('TimeMSW', 'uint16'),
+        ('TimeISW', 'uint16'), ('TimeLSW', 'uint16'),
+        ('Readings', '(8,1)int16'), ('order', 'uint32'),
+    ]
+    recs = []
+    half = len(ushort) // 2
+    for candidate in house:
+        pos = int(candidate)
+        boundary = half if pos < half else len(ushort)
+        if pos + 83 > boundary or int(ushort[pos + 1]) != 83:
+            continue
+        row = np.zeros((), dtype=dtype)
+        row['BlockNum'] = ushort[pos]
+        row['ulItemSize'] = ushort[pos + 1]
+        row['Readings1'] = ushort[pos + 2:pos + 72].reshape(70, 1)
+        row['TimeMSW'] = ushort[pos + 72]
+        row['TimeISW'] = ushort[pos + 73]
+        row['TimeLSW'] = ushort[pos + 74]
+        row['Readings'] = ushort[pos + 75:pos + 83].reshape(8, 1)
+        row['order'] = order[pos]
+        recs.append(row)
+    return np.array(recs, dtype=dtype)

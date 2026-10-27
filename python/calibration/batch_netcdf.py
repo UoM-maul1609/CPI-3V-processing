@@ -1,7 +1,9 @@
 """Lossless, read-only export of reviewed CPI batches to a ragged NetCDF file.
 
 Images are NOT resampled or processed: `roi_pixels` and `background_pixels` are
-flattened C-order arrays, with one start/count/shape per particle. The original
+flattened C-order arrays, with one start/count/shape per particle. Stored
+`foc.boundaries` are exported exactly as ordered camera-X/Y vertex coordinates
+using independent `boundary_start` and `boundary_count` ragged indices. The original
 ROI indexing is [camera X, camera Y]. Positions are the stage values in mm;
 true length comes from the current label library, not image segmentation.
 
@@ -74,6 +76,60 @@ def _mat_roi_image(entry, field, description):
     if value is None:
         raise ValueError(f'Missing {description}: expected struct field {field}')
     return _image(value, description=description)
+
+
+def _effective_background(used, assigned, roi_index, shape, source):
+    """Return the SAVED processing background, preferring sparse BG_USED.
+
+    BG_USED is a cell array indexed by ROI; an empty cell means original BG.
+    Do not reselect backgrounds or silently replace malformed nonempty BG_USED.
+    """
+    if roi_index < len(used):
+        entry = used[roi_index]
+        # MATLAB cell content can be a numeric image or a struct with BG.
+        candidate = _mat_struct_field(entry, 'BG')
+        if candidate is None:
+            candidate = entry
+        arr = np.asarray(candidate)
+        while arr.dtype.kind == 'O' and arr.size == 1:
+            arr = np.asarray(arr.flat[0])
+        if arr.size:
+            bg = _image(arr, description=f'{source} BG_USED ROI {roi_index}')
+            if bg.shape != shape:
+                raise ValueError(f'{source} BG_USED ROI {roi_index}: background shape {bg.shape} != ROI {shape}')
+            return bg, 2
+    if roi_index < len(assigned):
+        try:
+            bg = _mat_roi_image(assigned[roi_index], 'BG', f'{source} BG ROI {roi_index}')
+            if bg.shape == shape:
+                return bg, 1
+        except ValueError:
+            pass
+    return None, 0
+
+
+def _saved_boundary(entry, *, source, roi_index):
+    """Get SAVED processed contour, never derive a new one from ROI pixels.
+
+    A missing boundary is represented by None; corrupted nonempty contours are
+    rejected rather than silently changing the scientific measurement.
+    """
+    field = _mat_struct_field(entry, 'boundaries')
+    if field is None:
+        return None
+    value = np.asarray(field)
+    while value.dtype.kind == 'O' and value.size == 1:
+        value = np.asarray(value.flat[0])
+    if value.size == 0:
+        return None
+    try:
+        points = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f'Invalid saved boundary for {source} ROI {roi_index}: {exc}') from exc
+    if points.ndim != 2 or points.shape[1] != 2 or not np.isfinite(points).all():
+        raise ValueError(f'Invalid saved boundary for {source} ROI {roi_index}: '
+                         f'expected finite Nx2 vertices, found shape {points.shape}')
+    return points
 
 
 def _finite(value):
@@ -203,25 +259,31 @@ def export_batch_netcdf(output_path, root, records, batch_names, memberships, *,
     with tempfile.TemporaryDirectory(prefix='cpi_nc_') as scratch:
         raw_path = Path(scratch) / 'roi.bin'
         bg_path = Path(scratch) / 'background.bin'
-        pixel_starts, pixel_counts, nx, ny, has_bg = [], [], [], [], []
+        contour_path = Path(scratch) / 'boundary_xy.bin'
+        pixel_starts, pixel_counts, nx, ny, has_bg, bg_sources = [], [], [], [], [], []
+        contour_starts, contour_counts, has_contour = [], [], []
         sources = defaultdict(list)
         for row, r in enumerate(records):
             sources[r.source_file].append((row, r))
         total = len(records)
         done = 0
-        with raw_path.open('wb') as raw_out, bg_path.open('wb') as bg_out:
+        with raw_path.open('wb') as raw_out, bg_path.open('wb') as bg_out, \
+                contour_path.open('wb') as contour_out:
             for source, group in sources.items():
                 if cancelled and cancelled():
                     raise ExportCancelled()
                 # Do NOT simplify_cells/squeeze_me: scipy otherwise collapses 1xN
                 # and Nx1 camera images into vectors and destroys their shape.
-                loaded = loadmat(str(root / source), variable_names=['ROI_N', 'BG'],
+                loaded = loadmat(str(root / source), variable_names=['ROI_N', 'BG', 'BG_USED', 'dat'],
                                  struct_as_record=True, squeeze_me=False)
                 roi = loaded.get('ROI_N')
                 images = _mat_struct_entries(_mat_struct_field(roi, 'IMAGE'))
                 if not images:
                     raise ValueError(f'Missing ROI_N.IMAGE in {source}')
                 bgs = _mat_struct_entries(loaded.get('BG'))
+                bg_used = _mat_struct_entries(loaded.get('BG_USED'))
+                dat = loaded.get('dat')
+                saved_contours = _mat_struct_entries(_mat_struct_field(dat, 'foc'))
                 for row, record in group:
                     if cancelled and cancelled():
                         raise ExportCancelled()
@@ -229,14 +291,15 @@ def export_batch_netcdf(output_path, root, records, batch_names, memberships, *,
                     if i < 0 or i >= len(images):
                         raise ValueError(f'Missing ROI {i} in {source}')
                     img = _mat_roi_image(images[i], 'IM', f'{source} ROI {i}')
-                    bg = None
-                    if i < len(bgs):
-                        try:
-                            candidate = _mat_roi_image(bgs[i], 'BG', f'{source} background {i}')
-                            if candidate.shape == img.shape:
-                                bg = candidate
-                        except ValueError:
-                            pass  # Missing/empty/incompatible background is recorded, not fabricated.
+                    bg, bg_source = _effective_background(bg_used, bgs, i, img.shape, source)
+                    bg_sources.append(bg_source)
+                    boundary = (_saved_boundary(saved_contours[i], source=source, roi_index=i)
+                                if i < len(saved_contours) else None)
+                    contour_starts.append(contour_out.tell() // 16)
+                    contour_counts.append(0 if boundary is None else len(boundary))
+                    has_contour.append(int(boundary is not None))
+                    if boundary is not None:
+                        contour_out.write(np.ascontiguousarray(boundary, dtype='<f8').tobytes())
                     pixel_starts.append(raw_out.tell() // 2)
                     pixel_counts.append(img.size)
                     nx.append(img.shape[0]); ny.append(img.shape[1]); has_bg.append(int(bg is not None))
@@ -246,9 +309,12 @@ def export_batch_netcdf(output_path, root, records, batch_names, memberships, *,
                     done += 1
                     if progress and (done % 20 == 0 or done == total):
                         progress(done, total)
-                del loaded, images, bgs
+                del loaded, images, bgs, bg_used, dat, saved_contours
 
         n_pixels = sum(pixel_counts)
+        n_vertices = sum(contour_counts)
+        if n_vertices >= 2**31:
+            raise ValueError("This batch exceeds the 32-bit contour-vertex offset limit")
         if n_pixels >= 2**31:
             raise ValueError('This batch exceeds the 32-bit sample-offset limit; split the selection')
         if n_pixels <= 0:
@@ -275,20 +341,37 @@ def export_batch_netcdf(output_path, root, records, batch_names, memberships, *,
                 nc.history = 'Exported ' + datetime.now(timezone.utc).isoformat(timespec='seconds')
                 nc.batch_names_json = json.dumps(list(batch_names), ensure_ascii=True)
                 nc.image_axis_order = '[camera X, camera Y], C order; zero-based offsets into roi_pixels'
-                nc.background_note = 'Unmodified saved ROI background (no division, scaling or edge detection)'
+                nc.background_note = ('Background used by saved particle processing: BG_USED when present, otherwise BG. '
+                                      'Unmodified pixels, no recalculation. background_source: 0 missing, 1 BG, 2 BG_USED.')
                 nc.missing_background_value = -1
                 nc.reference_note = 'NaN when no unambiguous saved object-plane reference exists'
                 nc.label_area_note = 'Independent SEM/optical reference projected area from label library; missing as NaN'
                 nc.shadow_note = ('Shadow diameters and CPI contour area ratios are SAVED processing '
                                   'measurements; NaN if absent or invalid. No reprocessing on export.')
                 nc.shape_corrected_shadow_formula = 'shadow_diameter_um / sqrt(cpi_contour_area_ratio)'
+                nc.interior_diagnostics_note = (
+                    'Exploratory optical bright-region metrics inside a two-pixel-eroded filled '
+                    'particle contour; bright regions are NOT necessarily geometrical holes. '
+                    'Transmittance uses image/background with the configured border-normalisation and '
+                    'denoising settings. Bright threshold per particle: '
+                    'T >= 1 - 0.55*(1 - percentile_2(T_interior)). '
+                    'Enclosed bright components exclude components touching the eroded-mask rim. '
+                    'Missing processing results are NaN; no recalculation on export.')
                 nc.createDimension('particle', total)
                 nc.createDimension('sample', n_pixels)
+                nc.createDimension('boundary_vertex', max(1, n_vertices))
+                nc.boundary_note = ('Unmodified ordered SAVED dat.foc[].boundaries vertices in camera-X/Y '
+                                    'coordinates (pixels). These are not a resegmented ROI mask. '
+                                    'boundary_present=0 and boundary_count=0 mean unavailable. '
+                                    'If all are missing the vertex dimension contains one unused padding value.')
                 # These offsets and two dimensions reconstruct each original 2D image.
                 for key, values in (
                     ('pixel_start', pixel_starts), ('pixel_count', pixel_counts),
                     ('roi_nx', nx), ('roi_ny', ny), ('background_present', has_bg),
-                    ('roi_index', [r.roi_index for r in records])):
+                    ('background_source', bg_sources),
+                    ('roi_index', [r.roi_index for r in records]),
+                    ('boundary_start', contour_starts), ('boundary_count', contour_counts),
+                    ('boundary_present', has_contour)):
                     _create_numeric(nc, key, ('particle',), values)
                 _create_numeric(nc, 'time_matlab', ('particle',), [r.time_matlab for r in records],
                                 description='Acquisition time as MATLAB datenum')
@@ -321,6 +404,22 @@ def export_batch_netcdf(output_path, root, records, batch_names, memberships, *,
                         [getattr(r, 'shadow_radius_px', np.nan) for r in records], 'pixel'),
                     'shape_corrected_shadow_diameter_um': (
                         [_shape_shadow(r) for r in records], 'micrometre'),
+                    'interior_bright_fraction': (
+                        [getattr(r, 'interior_bright_fraction', np.nan) for r in records], '1'),
+                    'interior_bright_threshold': (
+                        [getattr(r, 'interior_bright_threshold', np.nan) for r in records], '1'),
+                    'interior_enclosed_bright_fraction': (
+                        [getattr(r, 'interior_enclosed_bright_fraction', np.nan) for r in records], '1'),
+                    'interior_near_background_fraction': (
+                        [getattr(r, 'interior_near_background_fraction', np.nan) for r in records], '1'),
+                    'interior_above_one_fraction': (
+                        [getattr(r, 'interior_above_one_fraction', np.nan) for r in records], '1'),
+                    'interior_mean_transmittance': (
+                        [getattr(r, 'interior_mean_T', np.nan) for r in records], '1'),
+                    'interior_effective_deficit': (
+                        [getattr(r, 'interior_effective_deficit', np.nan) for r in records], '1'),
+                    'interior_pixel_count': (
+                        [getattr(r, 'interior_pixel_count', np.nan) for r in records], 'pixel'),
                     'x_best_mm': ([positions.get(r.particle_id, {}).get('x_best', np.nan) for r in records], 'mm'),
                     'z_best_mm': ([positions.get(r.particle_id, {}).get('z_best', np.nan) for r in records], 'mm'),
                     'distance_from_object_plane_mm': (
@@ -349,6 +448,28 @@ def export_batch_netcdf(output_path, root, records, batch_names, memberships, *,
                 }
                 for key, values in strings.items():
                     _put_strings(nc, key, values)
+                # Ordered contour vertices, saved by image processing.  Preserve
+                # floating-point coordinates without rounding/rasterising.
+                for coordinate, axis in (('boundary_x_px', 0), ('boundary_y_px', 1)):
+                    if netcdf4:
+                        v = nc.createVariable(coordinate, 'f8', ('boundary_vertex',),
+                                              zlib=True, complevel=4)
+                    else:
+                        v = nc.createVariable(coordinate, 'f8', ('boundary_vertex',))
+                    v.units = 'camera pixel'
+                    v.long_name = f'Saved contour vertex camera {"X" if axis == 0 else "Y"} coordinate'
+                    if n_vertices == 0:
+                        v[0] = np.nan
+                    else:
+                        contour = np.memmap(contour_path, dtype='<f8', mode='r', shape=(n_vertices, 2))
+                        try:
+                            for start in range(0, n_vertices, 131072):
+                                stop = min(n_vertices, start + 131072)
+                                if cancelled and cancelled():
+                                    raise ExportCancelled()
+                                v[start:stop] = contour[start:stop, axis]
+                        finally:
+                            del contour
                 # Chunked writes: avoid allocating two large in-memory images.
                 for name, source in (('roi_pixels', raw_path), ('background_pixels', bg_path)):
                     if netcdf4:

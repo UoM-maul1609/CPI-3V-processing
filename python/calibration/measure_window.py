@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import math
 import os
+import json
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -505,6 +506,41 @@ class MeasureWindow(QMainWindow):
         entry = ImageEntry(str(path), "image file", 0, tuple(arr.shape))
         self._show(entry, arr, None)
 
+    def _background_use_flags(self, bg_path):
+        """Map the saved processing selection onto full backgrounds by timestamp.
+
+        Return None if no saved selection exists (usage is then unknown).
+        All frames remain visible regardless of this annotation.
+        """
+        selection = Path(bg_path).parent / "background_selection.json"
+        if not selection.is_file():
+            return None
+        try:
+            record = json.loads(selection.read_text(encoding="utf-8"))
+            frames = record.get("frames", [])
+            src = self._source(str(bg_path))
+            times = np.asarray(src.times, dtype=float).ravel()
+            stored_times = np.asarray([f["time_matlab"] for f in frames], dtype=float)
+            stored_flags = np.asarray([bool(f["use"]) for f in frames], dtype=bool)
+            if len(stored_times) == 0:
+                return np.ones(len(times), dtype=bool)
+            used = np.ones(len(times), dtype=bool)
+            tol = 0.5 / 86400.0
+            for i, t in enumerate(times):
+                if not np.isfinite(t):
+                    continue
+                if i < len(stored_times) and abs(stored_times[i] - t) <= tol:
+                    used[i] = stored_flags[i]
+                else:
+                    j = int(np.argmin(np.abs(stored_times - t)))
+                    if abs(stored_times[j] - t) <= tol:
+                        used[i] = stored_flags[j]
+            return used
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+            # Avoid silently claiming that excluded frames were used.
+            self.statusBar().showMessage(f"Could not read background selection: {exc}", 10000)
+            return None
+
     def _fill_list(self):
         self.image_list.blockSignals(True)
         self.image_list.clear()
@@ -533,6 +569,10 @@ class MeasureWindow(QMainWindow):
             QMessageBox.warning(self, "Measure images", f"Cannot read {path}:\n{exc}")
             entries = []
         self._entries = entries
+        self._background_flags = {}
+        for e in entries:
+            if e.kind == "background" and e.source not in self._background_flags:
+                self._background_flags[e.source] = self._background_use_flags(e.source)
         for e in entries:
             if e.kind == "frame":
                 n_roi = len(self._source(e.source).frames()[e.index][1])
@@ -541,9 +581,24 @@ class MeasureWindow(QMainWindow):
                 label = f"{'BG' if e.kind == 'background' else 'ROI'} {e.index}   " \
                         f"{e.shape[1] if len(e.shape) > 1 else '?'}×{e.shape[0] if e.shape else '?'}   " \
                         f"{e.time[11:19] if e.time else ''}"
+            flag = self._background_flag(e)
+            if flag is False:
+                label += "   [NOT USED IN PROCESSING]"
+            elif flag is True:
+                label += "   [USED IN PROCESSING]"
+            elif e.kind == "background":
+                label += "   [SELECTION UNKNOWN]"
             if self.measurements.get(e.key):
                 label += f"   📏{len(self.measurements[e.key])}"
-            self.image_list.addItem(QListWidgetItem(label))
+            item = QListWidgetItem(label)
+            if flag is False:
+                item.setForeground(QColor("#a56b50"))
+                item.setToolTip("Excluded by background_selection.json; retained here for inspection and measurement.")
+            elif flag is True:
+                item.setToolTip("Enabled in background_selection.json for processing.")
+            elif e.kind == "background":
+                item.setToolTip("No background_selection.json found or selection could not be read.")
+            self.image_list.addItem(item)
         if not entries:
             self.image_list.addItem(QListWidgetItem({"full": "(no full frames in this file — try 'All ROIs' or "
                                                              "'Backgrounds')",
@@ -551,6 +606,14 @@ class MeasureWindow(QMainWindow):
                                                      "bg": "(no full_backgrounds.mat in this folder)",
                                                      "frames": "(no particle ROIs)"}.get(mode, "")))
         self.image_list.blockSignals(False)
+
+    def _background_flag(self, entry):
+        if entry.kind != "background":
+            return None
+        flags = getattr(self, "_background_flags", {}).get(entry.source)
+        if flags is None or entry.index >= len(flags):
+            return None
+        return bool(flags[entry.index])
 
     def _list_changed(self, row):
         if 0 <= row < len(self._entries):
@@ -628,7 +691,11 @@ class MeasureWindow(QMainWindow):
         self.measurements.setdefault(entry.key, [])
         self.selected = None
         h, w = self.array.shape[:2]
-        self.title.setText(f"<b>{entry.title()}</b> · {w} × {h} px")
+        flag = self._background_flag(entry)
+        usage = (" · <b style='color:#a56b50'>NOT USED IN PROCESSING</b>" if flag is False
+                 else " · USED IN PROCESSING" if flag is True
+                 else " · selection unknown" if entry.kind == "background" else "")
+        self.title.setText(f"<b>{entry.title()}</b> · {w} × {h} px{usage}")
         self._redraw_image(keep_view=False)
         self._rebuild_graphics()
         self._draw_boundary()

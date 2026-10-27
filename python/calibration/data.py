@@ -147,12 +147,32 @@ class ParticleRecord:
     focus_T: float = float("nan")      # focus on transmittance (new edge method)
     deq_um: float = float("nan")
     shadow_deq_um: float = float("nan")  # signed-shadow circle equivalent diameter from processing
+    contrast_min_T: float = float("nan")
+    contrast_robust_T: float = float("nan")
+    contrast_min_raw: float = float("nan")
+    contrast_max_delta: float = float("nan")
+    contrast_area_px: float = float("nan")
+    contrast_level_T: float = float("nan")
+    acq_IThreshold: float = float("nan")
+    acq_ROIMinSize: float = float("nan")
+    acq_peak_difference: float = float("nan")
+    acq_qualified_pixels: float = float("nan")
+    acq_largest_component_px: float = float("nan")
     area_ratio_circle: float = float("nan")
     len_feret_um: float = float("nan")
     wid_feret_um: float = float("nan")
     len_ellipse_um: float = float("nan")
     wid_ellipse_um: float = float("nan")
     shadow_radius_px: float = float("nan")  # circle aperture, not the physical edge
+    # Optical interior; not actual geometric holes. NaN means not processed/invalid.
+    interior_bright_fraction: float = float("nan")
+    interior_bright_threshold: float = float("nan")
+    interior_near_background_fraction: float = float("nan")
+    interior_above_one_fraction: float = float("nan")
+    interior_enclosed_bright_fraction: float = float("nan")
+    interior_mean_T: float = float("nan")
+    interior_effective_deficit: float = float("nan")
+    interior_pixel_count: float = float("nan")
        # equivalent-area diameter (new edge method)
     edge_touch: int = -1               # 1 = particle reaches the ROI border (size is a lower limit); -1 unknown
     processing: str = ""               # short label of the edge method that produced len/focus
@@ -506,8 +526,27 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
     len_ellipses = _vector(dat.get("len_ellipse"), n)
     wid_ellipses = _vector(dat.get("wid_ellipse"), n)
     shadow_deqs = _vector(dat.get("shadow_deq"), n)
+    contrast_fields = {key: _vector(dat.get(key), n) for key in (
+        'contrast_min_T', 'contrast_robust_T', 'contrast_min_raw',
+        'contrast_max_delta', 'contrast_area_px', 'contrast_level_T',
+        'acq_IThreshold', 'acq_ROIMinSize', 'acq_peak_difference',
+        'acq_qualified_pixels', 'acq_largest_component_px',
+    )}
     shadow_radii = _vector(dat.get("shadow_radius_px"), n)
     area_ratios = _vector(dat.get("area_ratio_circle"), n)
+    # Older processed MATs lack these fields; _vector preserves NaN.
+    # MAT v5 has a 31-character field-name limit. Expand shortened stored
+    # names into descriptive ParticleRecord/NetCDF fields.
+    mat_optical_names = {
+        "interior_near_background_fraction": "interior_near_bg_fraction",
+        "interior_enclosed_bright_fraction": "interior_enclosed_fraction",
+    }
+    optical_interior = {key: _vector(dat.get(mat_optical_names.get(key, key)), n)
+        for key in (
+            "interior_bright_fraction", "interior_bright_threshold",
+            "interior_near_background_fraction", "interior_above_one_fraction",
+            "interior_enclosed_bright_fraction", "interior_mean_T",
+            "interior_effective_deficit", "interior_pixel_count")}
     cutoffs = _vector(dat.get("cutoff_pct"), n)
     cpv = {k: _vector(dat.get(k), n) for k in ("cpv_focus", "cpv_focus_sd", "cpv_fwhm_px", "cpv_distinct",
                                                "cpv_cutoff_pct")}
@@ -540,6 +579,8 @@ def scan_processed_file(filename: os.PathLike, root: Optional[os.PathLike] = Non
                 len_ellipse_um=float(len_ellipses[i]), wid_ellipse_um=float(wid_ellipses[i]),
                 deq_um=float(deqs[i]), shadow_deq_um=float(shadow_deqs[i]),
                 shadow_radius_px=float(shadow_radii[i]), area_ratio_circle=float(area_ratios[i]),
+                **{key: float(values[i]) for key, values in contrast_fields.items()},
+                **{key: float(values[i]) for key, values in optical_interior.items()},
                 cpv_focus=float(cpv["cpv_focus"][i]), cpv_focus_sd=float(cpv["cpv_focus_sd"][i]),
                 cpv_fwhm_px=float(cpv["cpv_fwhm_px"][i]), cpv_distinct=float(cpv["cpv_distinct"][i]),
                 cpv_cutoff_pct=float(cpv["cpv_cutoff_pct"][i]),
@@ -787,11 +828,43 @@ class ParticleStore:
         if self._source != source_file or self._data is None:
             self._data = sio.loadmat(
                 str(self.root / source_file),
-                variable_names=["ROI_N", "BG", "dat"],
+                variable_names=["ROI_N", "BG", "BG_USED", "dat"],
                 simplify_cells=True,
             )
             self._source = source_file
         return self._data
+
+    def _background_for_roi(self, data: dict, roi_index: int, image_shape: tuple) -> Optional[np.ndarray]:
+        """The actual processing background, if saved; otherwise the assigned crop.
+
+        imageStatsDriver writes BG_USED only when imageStats replaced BG after
+        checking for the particle in its own background. BG_USED is a sparse
+        object array indexed by ROI (empty entries mean original BG was used).
+        Never infer a replacement or rerun background selection in the GUI.
+        """
+        effective = data.get("BG_USED")
+        if effective is not None:
+            if isinstance(effective, np.ndarray):
+                entries = list(effective.reshape(-1))
+            elif isinstance(effective, (list, tuple)):
+                entries = list(effective)
+            else:
+                entries = [effective]
+            if roi_index < len(entries):
+                value = entries[roi_index]
+                if isinstance(value, dict):
+                    value = value.get("BG", None)
+                if value is not None:
+                    candidate = np.asarray(value)
+                    if candidate.shape == image_shape and candidate.size and np.issubdtype(candidate.dtype, np.number):
+                        return candidate
+
+        backgrounds = _struct_list(data.get("BG"), roi_index + 1)
+        if roi_index < len(backgrounds) and "BG" in backgrounds[roi_index]:
+            candidate = np.asarray(backgrounds[roi_index]["BG"])
+            if candidate.shape == image_shape:
+                return candidate
+        return None
 
     def particle(self, record: ParticleRecord, subtract_background: bool = False) -> Tuple[np.ndarray, Optional[np.ndarray]]:
         data = self._load_source(record.source_file)
@@ -801,12 +874,10 @@ class ParticleStore:
             raise IndexError("Particle image {} not present in {}".format(record.roi_index, record.source_file))
         image = np.asarray(images[record.roi_index]["IM"])
 
-        if subtract_background and "BG" in data and isinstance(data["BG"], (list, tuple, np.ndarray, dict)):
-            backgrounds = _struct_list(data["BG"], record.roi_index + 1)
-            if record.roi_index < len(backgrounds) and "BG" in backgrounds[record.roi_index]:
-                bg = np.asarray(backgrounds[record.roi_index]["BG"])
-                if bg.shape == image.shape:
-                    image = image.astype(np.int16) - bg.astype(np.int16)
+        if subtract_background:
+            bg = self._background_for_roi(data, record.roi_index, image.shape)
+            if bg is not None:
+                image = image.astype(np.float64) - bg.astype(np.float64)
 
         boundary = None
         dat = data.get("dat")
@@ -817,6 +888,18 @@ class ParticleStore:
                 if candidate.ndim == 2 and candidate.shape[1] == 2 and np.isfinite(candidate).any():
                     boundary = candidate
         return image, boundary
+
+    def particle_image_pair(self, record):
+        """Return raw ROI, actual processing background where saved, and contour.
+
+        BG_USED contains background replacement/fitting selected by imageStats.
+        BG alone is the original time-assigned background and can contain the
+        analogue itself. No background is recomputed in the viewer.
+        """
+        image, boundary = self.particle(record, subtract_background=False)
+        data = self._load_source(record.source_file)
+        background = self._background_for_roi(data, record.roi_index, image.shape)
+        return image, background, boundary
 
     def clear(self) -> None:
         self._source = None

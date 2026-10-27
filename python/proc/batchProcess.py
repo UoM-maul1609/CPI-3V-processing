@@ -57,6 +57,9 @@ edge_options = {
     "edge_level": 0.5,          # fixed mode: transmittance at the edge
     "edge_fraction": 0.55,      # relative mode: fraction of the shadow depth
     "outline": "radial",      # smooth radial boundary; shape / morphology remains separate
+    "union_min_component_area_px": 10,
+    "union_max_separation_px": 6.0,  # component gap for raw-contour union in px
+    "outline_inset_px": 0.0,  # optional inward offset after outline detection
     "denoise": 1,
     "shadow_circle_padding": 8.0,  # additional shadow-equivalent diameter by default
     "boundary_tol_px": 0.25,
@@ -81,14 +84,30 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--edge-method", choices=("legacy", "transmittance"),
                         help="edge method (default: transmittance; use legacy to reproduce older processing)")
+    parser.add_argument("--count-threshold", type=float, help="scaled background minus image threshold, 8-bit counts (default 41)")
     parser.add_argument("--edge-level", type=float, help="transmittance at the edge (fixed mode)")
-    parser.add_argument("--edge-mode", choices=("fixed", "relative"),
+    parser.add_argument("--edge-mode", choices=("fixed", "relative", "scaled_counts"),
                         help="fixed transmittance, or a fraction of each particle's own shadow depth")
     parser.add_argument("--edge-fraction", type=float, help="fraction of the shadow depth (relative mode)")
-    parser.add_argument("--outline", choices=("radial", "edge", "contour"),
+    parser.add_argument("--outline", choices=("radial", "edge", "contour", "union"),
                         help="radial: smoothed threshold outline for roughly round particles (default, most "
                              "consistent sizes); edge: outline at the steepest brightness rise, as drawn by hand; "
-                             "contour: raw threshold outline")
+                             "contour: raw threshold outline; union: raw-contour union of components supported by one weak shadow")
+    parser.add_argument("--union-min-component-area-px", type=int,
+                        help="minimum area in pixels for each additional raw-contour union fragment (default 10)")
+    parser.add_argument("--union-distance-only", action="store_true",
+                        help="union fragments based only on gap distance (no weak-shadow path requirement)")
+    parser.add_argument("--union-max-separation-px", type=float,
+                        help="maximum edge-to-edge gap in pixels between components for raw-contour union (default 6)")
+    parser.add_argument("--inset-preserve-necks", action="store_true",
+                        help="in union outline mode, preserve thin connections during inset (experimental)")
+    parser.add_argument("--local-close-radius-px", type=float,
+                        help="union only: experimental post-inset local closing disk radius in pixels; 0 disables")
+    parser.add_argument("--local-close-max-added-pct", type=float,
+                        help="union only: maximum area added by local closing as percent of post-inset silhouette (default 3)")
+    parser.add_argument("--outline-inset-px", type=float,
+                        help="optional inward offset applied after the outline is detected (pixels); "
+                             "useful when a higher threshold follows shape well but oversizes near focus")
     parser.add_argument("--pixel-um", type=float,
                         help="pixel size in µm used to convert lengths/areas (default 2.3, the nominal value). "
                              "Recorded in every file (dat.proc_options) and read by the workbench fit and the "
@@ -274,10 +293,38 @@ if __name__ == "__main__":
         edge["edge_level"] = args.edge_level
     if args.edge_mode:
         edge["edge_mode"] = args.edge_mode
+    if args.count_threshold is not None:
+        if not 0 < args.count_threshold < 255:
+            raise SystemExit("--count-threshold must be between 0 and 255")
+        edge["count_threshold"] = args.count_threshold
     if args.edge_fraction is not None:
         edge["edge_fraction"] = args.edge_fraction
     if args.outline:
         edge["outline"] = args.outline
+    if args.union_min_component_area_px is not None:
+        if not 1 <= args.union_min_component_area_px <= 10000:
+            raise SystemExit("--union-min-component-area-px must be between 1 and 10000")
+        edge["union_min_component_area_px"] = args.union_min_component_area_px
+    if args.union_distance_only:
+        edge["union_require_weak_shadow"] = False
+    if args.union_max_separation_px is not None:
+        if not 0 <= args.union_max_separation_px <= 50:
+            raise SystemExit("--union-max-separation-px must be between 0 and 50 pixels")
+        edge["union_max_separation_px"] = args.union_max_separation_px
+    if args.inset_preserve_necks:
+        edge["inset_preserve_necks"] = True
+    if args.local_close_radius_px is not None:
+        if not 0 <= args.local_close_radius_px <= 10:
+            raise SystemExit("--local-close-radius-px must be between 0 and 10")
+        edge["local_close_radius_px"] = args.local_close_radius_px
+    if args.local_close_max_added_pct is not None:
+        if not 0 <= args.local_close_max_added_pct <= 25:
+            raise SystemExit("--local-close-max-added-pct must be between 0 and 25")
+        edge["local_close_max_added_fraction"] = args.local_close_max_added_pct / 100.
+    if args.outline_inset_px is not None:
+        if not 0 <= args.outline_inset_px <= 20:
+            raise SystemExit("--outline-inset-px must be between 0 and 20 pixels")
+        edge["outline_inset_px"] = args.outline_inset_px
     if args.no_shadow_circle and args.shadow_circle_padding is not None:
         raise SystemExit("Use either --no-shadow-circle or --shadow-circle-padding, not both")
     if args.no_shadow_circle:

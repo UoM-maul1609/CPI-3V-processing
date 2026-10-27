@@ -1541,3 +1541,7 @@ annotated PNG exports). Edge Lab shadow integration is a **size-only** trial:
 raw `focus` and `focus_T` remain those of the original processed particles for
 **all** trials, including particles without a valid shadow integral. CPIview
 focus is an optional separate experimental metric. MAT files are unchanged.
+
+## Shared graticule microscope images
+
+The **Labels → Shared microscope / graticule images…** button opens a multi-object editor. Each image has one shared X/Y graticule calibration and multiple independent outlines, each optionally linked to an existing label. You may export an annotated PNG or object-level CSV, or explicitly confirm copying a selected object’s measurements into the reference label. Linked annotations alone never overwrite labels.json. See `UPDATE_NOTES_2026-10-24_shared_graticule.md`.

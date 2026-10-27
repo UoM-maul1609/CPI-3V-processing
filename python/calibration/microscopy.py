@@ -137,11 +137,13 @@ def measure(annotation: dict) -> dict:
         'cpi_minor_axis_width_px': width_px,
         'cpi_minor_axis_width_um': width_px * um_per_px if width_px and um_per_px else None,
         'area_px2': area if area > 0 else None,
+        'equivalent_area_diameter_px': 2 * math.sqrt(area / math.pi) if area > 0 else None,
         'enclosing_circle_area_px2': circle_area if circle_area > 0 else None,
         'area_over_circle': ratio,
         'um_per_px': um_per_px,
         'max_dimension_um': diameter * um_per_px if diameter > 0 and um_per_px else None,
         'area_um2': area * um_per_px**2 if area > 0 and um_per_px else None,
+        'equivalent_area_diameter_um': 2 * math.sqrt(area / math.pi) * um_per_px if area > 0 and um_per_px else None,
         'enclosing_circle_area_um2': circle_area * um_per_px**2 if circle_area > 0 and um_per_px else None,
     }
 
@@ -291,11 +293,29 @@ class MicroscopyStore:
                 return
         raise KeyError('Unknown microscopy image')
 
-    def delete(self, image_id):
-        # Only metadata is removed; originals copied into the attachment folder
-        # are intentionally retained for recovery.
+    def delete(self, image_id, *, remove_file=False):
+        """Remove an indexed image; optionally delete its local imported copy.
+
+        Never delete the user's source image, only the copy placed under
+        the microscopy library. Index changes are saved before unlinking.
+        """
+        matches = [e for e in self.entries if e['id'] == image_id]
+        if not matches:
+            raise KeyError('Unknown microscopy image')
+        copied_path = self.image_path(matches[0]) if remove_file else None
         self.entries = [e for e in self.entries if e['id'] != image_id]
-        self.save()
+        try:
+            self.save()
+        except Exception:
+            self.entries.append(matches[0])
+            raise
+        if copied_path is not None:
+            # The copied file is unique per import. Do not follow links or
+            # remove other resources even if an index was edited manually.
+            if copied_path.exists():
+                if copied_path.is_symlink() or not copied_path.is_file():
+                    raise ValueError('Refusing to delete a non-regular microscopy file')
+                copied_path.unlink()
 
     def save(self):
         self.root.mkdir(parents=True, exist_ok=True)
@@ -308,3 +328,150 @@ class MicroscopyStore:
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+
+
+# Shared graticule images contain several independent particles. The calibration
+# belongs to the photograph, never to any one particle or reference label.
+def physical_scales(image):
+    """Return (µm/column pixel, µm/row pixel), or None when uncalibrated.
+
+    One scale line can calibrate both directions; the optional second graticule
+    direction provides an independent scale for non-square pixels.
+    """
+    values = []
+    for suffix in ('', '_y'):
+        line = image.get('scale_line' + suffix)
+        length = image.get('scale_um' + suffix)
+        try:
+            distance = float(np.linalg.norm(np.asarray(line[1], float) - np.asarray(line[0], float)))
+            length = float(length)
+            values.append(length / distance if distance > 0 and length > 0 and math.isfinite(length) else None)
+        except (TypeError, IndexError, ValueError):
+            values.append(None)
+    sx, sy = values
+    if sx is None and sy is None:
+        return None
+    return (sx if sx is not None else sy, sy if sy is not None else sx)
+
+
+def graticule_transform(image):
+    """2x2 pixel-to-micrometre transform, including an oblique 2-way graticule.
+
+    Two known vectors (pixel displacement between grid marks) identify the
+    physical axes; one known line assumes isotropic pixels. A nearly parallel
+    pair cannot define a 2D transformation and is deliberately rejected.
+    """
+    scales = physical_scales(image)
+    if scales is None:
+        return None
+    line1, line2 = image.get('scale_line'), image.get('scale_line_y')
+    length1, length2 = image.get('scale_um'), image.get('scale_um_y')
+    if line1 and line2 and length1 and length2:
+        v1 = np.diff(np.asarray(line1, dtype=float), axis=0).reshape(2)
+        v2 = np.diff(np.asarray(line2, dtype=float), axis=0).reshape(2)
+        basis = np.column_stack([v1, v2])
+        if abs(np.linalg.det(basis)) < 0.01 * np.linalg.norm(v1) * np.linalg.norm(v2):
+            raise ValueError('The X/Y graticule reference lines are nearly parallel.')
+        return np.diag([float(length1), float(length2)]) @ np.linalg.inv(basis)
+    s = scales[0] if line1 else scales[1]
+    return np.eye(2) * s
+
+
+def measure_shared_object(image, obj):
+    """Use the same drawn boundary for all physical measures; never change labels.
+
+    Polygon-area and Feret calculations are performed in calibrated coordinates
+    so separate horizontal/vertical graticule scales are handled correctly.
+    The ellipse width uses continuous filled-polygon second moments.
+    """
+    result = measure({k: v for k,v in obj.items() if k not in ('scale_line', 'scale_um')})
+    scales = physical_scales(image)
+    result['scale_x_um_per_px'] = scales[0] if scales else None
+    result['scale_y_um_per_px'] = scales[1] if scales else None
+    transform = graticule_transform(image)
+    if transform is None or not result.get('max_dimension_px'):
+        return result
+    pts = _boundary_points(obj) @ transform.T
+    if len(pts) < 3:
+        return result
+    from scipy.spatial.distance import pdist
+    hull = cv2.convexHull(pts.astype(np.float32)).reshape(-1, 2)
+    result['max_dimension_um'] = float(pdist(hull).max()) if len(hull) >= 2 else None
+    result['area_um2'] = polygon_area(pts)
+    result['equivalent_area_diameter_um'] = (2 * math.sqrt(result['area_um2'] / math.pi)
+                                             if result['area_um2'] > 0 else None)
+    circle = obj.get('enclosing_circle')
+    if circle and len(circle) == 3 and circle[2] > 0:
+        result['enclosing_circle_area_um2'] = math.pi * float(circle[2])**2 * abs(float(np.linalg.det(transform)))
+    edges = np.roll(hull, -1, axis=0) - hull
+    norms = np.linalg.norm(edges, axis=1)
+    good = norms > 1e-8
+    if good.any():
+        normals = np.column_stack((-edges[good,1],edges[good,0])) / norms[good,None]
+        result['feret_min_width_um'] = float(np.min(np.ptp(hull @ normals.T, axis=0)))
+    if obj.get('mode') == 'circle':
+        # Under unequal x/y scales a source-pixel circle becomes an ellipse.
+        r = float(obj['boundary_circle'][2])
+        result['cpi_minor_axis_width_um'] = 2*r*float(np.linalg.svd(transform, compute_uv=False).min())
+    else:
+        shifted = (pts - pts.mean(axis=0)).astype(np.float32)
+        moments = cv2.moments(shifted)
+        m00 = float(moments['m00'])
+        if m00 > 1e-12:
+            cov = np.array([[moments['mu20'],moments['mu11']],
+                            [moments['mu11'],moments['mu02']]],float) / m00
+            result['cpi_minor_axis_width_um'] = 4*math.sqrt(max(0.0, float(np.linalg.eigvalsh(cov)[0])))
+    return result
+
+
+class SharedMicroscopyStore(MicroscopyStore):
+    """One source image, one/two graticule scales, any number of named outlines.
+
+    Uses a distinct index so existing single-label microscopy annotations and
+    publication-panel image selectors remain backward-compatible.
+    """
+    def __init__(self, label_library_path):
+        super().__init__(label_library_path)
+        self.index_path = self.root / 'shared_images.json'
+        if self.index_path.exists():
+            self.entries = list(json.loads(self.index_path.read_text(encoding='utf-8')).get('shared_images', []))
+        else:
+            self.entries = []
+
+    def import_image(self, path):
+        entry = super().import_image(path, '')
+        entry.update(objects=[], scale_line_y=None, scale_um_y=None)
+        self.save()
+        return entry
+
+    @staticmethod
+    def _persistent(entry):
+        import copy
+        stored = copy.deepcopy(entry)
+        for obj in stored.get('objects', []):
+            for key in ('scale_line', 'scale_um', 'scale_line_y', 'scale_um_y'):
+                obj.pop(key, None)
+        return stored
+
+    def save(self):
+        self.root.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix='.shared_microscopy.', suffix='.tmp', dir=self.root)
+        os.close(fd)
+        try:
+            data = {'format_version': 1,
+                    'shared_images': [self._persistent(e) for e in self.entries]}
+            Path(tmp).write_text(json.dumps(data, indent=2), encoding='utf-8')
+            os.replace(tmp, self.index_path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def update(self, entry):
+        for obj in entry.get('objects', []):
+            obj['measurements'] = measure_shared_object(entry, obj)
+        for i, old in enumerate(self.entries):
+            if old['id'] == entry['id']:
+                self.entries[i] = entry
+                self.save()
+                return
+        raise KeyError('Unknown shared microscopy image')

@@ -57,7 +57,7 @@ import numpy as np
 from scipy import ndimage
 from skimage import draw, measure
 
-EDGE_CODE_VERSION = "2026.10.21.fixed-contrast"
+EDGE_CODE_VERSION = "2026.10.26.union-subpixel-guard"
 
 
 @dataclass
@@ -69,6 +69,7 @@ class EdgeOptions:
                                        # "relative": edge at T = 1 - edge_fraction*(1 - T_min), i.e. a fixed
                                        # fraction of the particle's own shadow depth (keeps faint, small,
                                        # defocused particles detectable and measured consistently)
+    count_threshold: float = 41.0    # scaled-background minus ROI, raw 8-bit intensity counts
     edge_level: float = 0.5            # T at the edge, fixed mode (0.25 = coherent in-focus edge; calibrate)
     edge_fraction: float = 0.55        # fraction of the shadow depth at the edge, relative mode (210302 beads: sizes
                                        # grow away from focus on both sides; as consistent as 0.65)
@@ -83,6 +84,9 @@ class EdgeOptions:
     merge_parts: bool = True           # join edge-level parts of one shadow split by a bright axial streak (columns)
     merge_min_px: int = 10             # ... parts smaller than this are ignored
     merge_min_fraction: float = 0.05   # ... or smaller than this fraction of the largest part
+    union_min_component_area_px: int = 10  # absolute minimum area for an additional union fragment
+    union_require_weak_shadow: bool = True  # require a connecting path through a common faint shadow
+    union_max_separation_px: float = 6.0  # max edge-to-edge separation of threshold components in raw-contour union
     merge_max_gap: float = 0.3         # ... and gaps wider than this fraction of the particle's extent are not bridged
     join_faint: float = 0.5            # column walls: connected at T < 1 - join_faint * min_contrast ...
     join_min_aspect: float = 3.0       # ... each at least this elongated
@@ -96,7 +100,15 @@ class EdgeOptions:
                                        # (compact particles; falls back to "contour" for shapes it cannot follow);
                                        # "edge": round particles outlined at the steepest rise of T (where a person
                                        # draws the edge), kept continuous; others as "contour";
-                                       # "contour": the raw iso-transmittance contour
+                                       # "contour": the raw iso-transmittance contour;
+                                       # "union": join threshold-dark components belonging to the same
+                                       # weak-shadow connected region; preserves genuine concavities
+    inset_preserve_necks: bool = False  # union: protect narrow connectors during inset (experimental)
+    local_close_radius_px: float = 0.0  # optional post-inset local binary closing radius; 0 disables
+    local_close_max_added_fraction: float = 0.03  # maximum total added area relative to post-inset mask
+    outline_inset_px: float = 0.0      # optional inward offset applied AFTER the outline is found; useful when
+                                       # a higher transmittance threshold follows the correct shape but sits
+                                       # systematically too far outside the geometric edge.
     outline_smooth_px: float = 5.0     # radial outline: running median over about this much arc
     radial_min_roundness: float = 0.6  # radial outline only if area / (pi/4 Lmax^2) of the raw contour is at least this
                                        # (beads ~0.9, hexagonal plates ~0.85; columns, needles, rosettes keep the contour)
@@ -243,6 +255,29 @@ def transmittance(image: np.ndarray, background: np.ndarray, options: EdgeOption
     if options.smooth_sigma > 0:
         T = ndimage.gaussian_filter(T, options.smooth_sigma)
     return T
+
+
+def transmission_integrals(image: np.ndarray, background: np.ndarray,
+                           *, border_normalise: bool = True) -> dict:
+    """Full-ROI *pixel sums* of raw background-corrected transmission.
+
+    T = I/B, optionally scaled to make median ROI-border T=1, WITHOUT
+    smoothing, clipping or segmentation. All four values use the same ROI.
+    They are not contour areas or physical shadow areas.
+    """
+    opts = EdgeOptions(denoise=0, smooth_sigma=0.0,
+                       border_normalise=border_normalise)
+    T = transmittance(np.asarray(image), np.asarray(background), opts)
+    finite = T[np.isfinite(T)]
+    if finite.size == 0:
+        return dict(T_peak=float('nan'), T_min_raw=float('nan'),
+                    T_excess_sum=float('nan'), T_deficit_sum=float('nan'),
+                    T_signed_sum=float('nan'))
+    above = float(np.maximum(finite - 1.0, 0.0).sum())
+    below = float(np.maximum(1.0 - finite, 0.0).sum())
+    return dict(T_peak=float(finite.max()), T_min_raw=float(finite.min()),
+                T_excess_sum=above, T_deficit_sum=below,
+                T_signed_sum=below - above)
 
 
 def _pick_component(labels: np.ndarray, n: int, weight: np.ndarray) -> int:
@@ -465,10 +500,141 @@ def steepest_rise_outline(T: np.ndarray, footprint: np.ndarray, step: float = 0.
 def _elongation(mask: np.ndarray) -> float:
     from skimage.measure import regionprops
     p = regionprops(mask.astype(np.uint8))[0]
-    major = getattr(p, "axis_major_length", None) or p.major_axis_length
-    #minor = getattr(p, "axis_minor_length", None) or p.minor_axis_length
-    minor = p.minor_axis_length
+    major = p.axis_major_length
+    minor = p.axis_minor_length
     return float(major / max(minor, 1e-6))
+
+
+def _inset_polygon(poly: np.ndarray, region: np.ndarray, inset_px: float):
+    """Inset the FINAL measured contour (not the preliminary threshold mask).
+
+    Rasterise the selected outline, take its inside Euclidean distance field and
+    extract a subpixel iso-distance contour. This handles concavities and differs
+    from merely reducing the reported length by 2*inset_px. An excessively large
+    inset yields an explicit failed measurement rather than an invented contour.
+    """
+    inset_px = float(inset_px)
+    if not np.isfinite(inset_px) or inset_px < 0:
+        raise ValueError("outline_inset_px must be finite and non-negative")
+    if inset_px == 0:
+        return poly, region
+    mask = np.zeros(region.shape, dtype=bool)
+    rr, cc = draw.polygon(poly[:, 0], poly[:, 1], shape=mask.shape)
+    mask[rr, cc] = True
+    if not mask.any():
+        return None, None
+    distance = ndimage.distance_transform_edt(mask)
+    if distance.max() <= inset_px:
+        return None, None
+    # Pixel-centre signed distance places the 0-level near the original
+    # boundary; half-pixel compensation limits systematic rasterising bias.
+    outside = ndimage.distance_transform_edt(~mask)
+    signed = np.where(mask, distance - 0.5, 0.5 - outside)
+    padded = np.pad(signed, 1, constant_values=-10000.)
+    contours = measure.find_contours(padded, inset_px)
+    if not contours:
+        return None, None
+    candidates = [c - 1.0 for c in contours if len(c) >= 4]
+    if not candidates:
+        return None, None
+    newpoly = max(candidates, key=polygon_area)
+    if len(newpoly) > 1 and np.allclose(newpoly[0], newpoly[-1]):
+        newpoly = newpoly[:-1]
+    newregion = np.zeros(mask.shape, dtype=bool)
+    rr, cc = draw.polygon(newpoly[:, 0], newpoly[:, 1], shape=mask.shape)
+    newregion[rr, cc] = True
+    if newregion.sum() < 3:
+        return None, None
+    return newpoly, newregion
+
+
+def _inset_preserving_necks(poly: np.ndarray, region: np.ndarray, inset_px: float):
+    """Inset while retaining the original connected shape's thin branches.
+
+    Thin one-pixel connections are protected by the (8-connected) medial
+    skeleton plus an ~one-pixel radius 4-connected corridor. This is deliberately
+    a *local exception* to the requested inset, not a uniform offset: a narrow
+    neck may be inset less than requested. Original pixels are never added from
+    outside the pre-inset polygon. Return a single contour or fail explicitly.
+    """
+    from skimage.morphology import skeletonize
+    mask = np.zeros(region.shape, dtype=bool)
+    rr, cc = draw.polygon(poly[:, 0], poly[:, 1], shape=mask.shape)
+    mask[rr, cc] = True
+    if not mask.any():
+        return None, None, 0
+    # Preserve connectivity of the pre-inset silhouette, but avoid altering
+    # regions where the ordinary inset already retains the entire particle.
+    normal_poly, normal_mask = _inset_polygon(poly, region, inset_px)
+    if normal_mask is None:
+        normal_mask = np.zeros_like(mask)
+    # Eight-connectivity is used consistently for topology. Also safeguard
+    # appendages whose tips would otherwise vanish despite one connected island.
+    skeleton = skeletonize(mask)
+    # Every protected pixel lies within the original silhouette. The cross
+    # dilation supports diagonal links without an artificial line outside it.
+    protected = ndimage.binary_dilation(skeleton, structure=ndimage.generate_binary_structure(2, 1)) & mask
+    combined = normal_mask | protected
+    # The protected skeleton should connect the original mask. If a mask has
+    # disconnected islands already, do not invent bridges in this step.
+    n_initial = ndimage.label(mask, structure=np.ones((3, 3), bool))[1]
+    n_final = ndimage.label(combined, structure=np.ones((3, 3), bool))[1]
+    if n_initial != 1 or n_final != 1:
+        return None, None, 0
+    added = int(np.count_nonzero(protected & ~normal_mask))
+    # Trace the exterior of the pixel mask; unlike the ordinary offset, this
+    # must encompass the protected narrow neck and therefore is not a strict
+    # constant-distance isocontour there.
+    lines = measure.find_contours(np.pad(combined.astype(float), 1), .5)
+    if not lines:
+        return None, None, added
+    newpoly = max(lines, key=polygon_area) - 1.0
+    if len(newpoly) > 1 and np.allclose(newpoly[0], newpoly[-1]):
+        newpoly = newpoly[:-1]
+    return newpoly, combined, added
+
+
+def _local_post_close(poly: np.ndarray, shape, radius: float, max_added_fraction: float):
+    """Conservative local closing AFTER inset, never a global hull.
+
+    A disk closing proposes narrow bay/slot repairs; each added connected
+    patch must fit the remaining total area budget. Preserve the original
+    mask everywhere, and do not expand beyond the original mask's convex hull.
+    Returns (contour, final_mask, added_pixels, proposals_rejected).
+    """
+    original = np.zeros(shape, bool)
+    rr, cc = draw.polygon(poly[:, 0], poly[:, 1], shape=shape)
+    original[rr, cc] = True
+    if radius <= 0 or not original.any():
+        return poly, original, 0, 0
+    from skimage.morphology import convex_hull_image
+    r = max(1, int(math.ceil(radius)))
+    yy, xx = np.mgrid[-r:r + 1, -r:r + 1]
+    disk = xx * xx + yy * yy <= radius * radius + 1.e-6
+    pad = r + 2
+    expanded = ndimage.binary_closing(np.pad(original, pad), structure=disk)[pad:-pad, pad:-pad]
+    candidate = expanded & convex_hull_image(original) & ~original
+    parts, n = ndimage.label(candidate, structure=np.ones((3, 3), bool))
+    budget = int(math.floor(original.sum() * max_added_fraction))
+    used, rejected = 0, 0
+    out = original.copy()
+    for k in sorted(range(1, n + 1), key=lambda k: np.count_nonzero(parts == k)):
+        part = parts == k
+        count = int(part.sum())
+        if count <= budget - used:
+            out |= part
+            used += count
+        else:
+            rejected += 1
+    if not used:
+        return poly, original, 0, rejected
+    contours = measure.find_contours(np.pad(out.astype(float), 1), .5)
+    if not contours:
+        return poly, original, 0, rejected
+    contour = max(contours, key=polygon_area) - 1
+    if len(contour) > 1 and np.allclose(contour[0], contour[-1]):
+        contour = contour[:-1]
+    return contour, out, used, rejected
 
 
 def cutoff_percent(region: np.ndarray) -> float:
@@ -538,8 +704,8 @@ def _join_column_walls(T, labels, main, options):
 
     def shape(mask):
         p = regionprops(mask.astype(np.uint8))[0]
-        major = getattr(p, "axis_major_length", None) or p.major_axis_length
-        minor = getattr(p, "axis_minor_length", None) or p.minor_axis_length
+        major = p.axis_major_length
+        minor = p.axis_minor_length
         return p, major, max(minor, 1e-6)
 
     pm, Lm, Wm = shape(main)
@@ -598,9 +764,137 @@ def _merge_shadow_parts(labels, overlap, best, main, options):
     return region, (int(math.ceil(needed / 2.0)) + 1 if needed > 0 else 0)
 
 
+def _union_shadow_components(labels, main, best, level_field, T, options):
+    """Join selected threshold fragments using explicit absolute area and gap limits.
+
+    Gap is Euclidean distance between pixel centres, recomputed after each join.
+    A join is either an 8-connected weak-shadow route or a direct digital line.
+    Neither option uses a convex hull, closing, or filling concavities.
+    """
+    from scipy.spatial import cKDTree
+    from skimage.graph import route_through_array
+    from skimage.draw import line
+
+    region = labels == best
+    connection_mask = np.zeros_like(region)
+    sizes = np.bincount(labels.ravel())
+    gap_limit = float(options.union_max_separation_px)
+    if not np.isfinite(gap_limit) or not 0 <= gap_limit <= 50:
+        raise ValueError("union_max_separation_px must be between 0 and 50")
+    min_area = int(options.union_min_component_area_px)
+    if not 1 <= min_area <= 10000:
+        raise ValueError("union_min_component_area_px must be between 1 and 10000")
+    require_shadow = bool(options.union_require_weak_shadow)
+    support_level = 1.0 - max(0.02, 0.25 * options.min_contrast)
+    support = T < support_level
+    foot_labels, _ = ndimage.label(support, structure=np.ones((3, 3), bool))
+    ids = foot_labels[main]
+    ids = ids[ids > 0]
+    parent = foot_labels == int(np.bincount(ids).argmax()) if ids.size else np.zeros_like(region)
+
+    detail = {}
+    for k in range(1, len(sizes)):
+        if k == best or sizes[k] == 0:
+            continue
+        part = labels == k
+        fraction = float(np.count_nonzero(part & parent)) / float(sizes[k])
+        detail[k] = {"component": int(k), "area_px": int(sizes[k]),
+                     "weak_shadow_overlap": round(fraction, 3), "gap_px": None,
+                     "status": "pending"}
+    diagnostics = dict(union_components_found=int(np.count_nonzero(sizes[1:])),
+                       union_components_joined=0, union_components_considered=0,
+                       union_max_gap_used_px=0.0, union_require_weak_shadow=require_shadow)
+    pending = set(detail)
+    while pending:
+        points_a = np.column_stack(np.nonzero(region))
+        tree = cKDTree(points_a)
+        neighbours = []
+        for k in pending:
+            points_b = np.column_stack(np.nonzero(labels == k))
+            dists, nearest = tree.query(points_b, k=1)
+            j = int(np.argmin(dists))
+            gap = float(dists[j])
+            detail[k]["gap_px"] = round(gap, 2)
+            neighbours.append((gap, k, tuple(points_a[nearest[j]]), tuple(points_b[j])))
+        changed = False
+        for gap, k, a, b in sorted(neighbours):
+            entry = detail[k]
+            if entry["area_px"] < options.union_min_component_area_px:
+                entry["status"] = "too small"
+                continue
+            if gap > gap_limit:
+                entry["status"] = "gap too large"
+                continue
+            if require_shadow and entry["weak_shadow_overlap"] < .8:
+                entry["status"] = "outside main weak shadow"
+                continue
+            rr, cc = line(int(a[0]), int(a[1]), int(b[0]), int(b[1]))
+            if require_shadow:
+                pad = max(2, int(np.ceil(gap_limit)))
+                r0 = max(0, min(a[0], b[0]) - pad)
+                c0 = max(0, min(a[1], b[1]) - pad)
+                r1 = min(parent.shape[0], max(a[0], b[0]) + pad + 1)
+                c1 = min(parent.shape[1], max(a[1], b[1]) + pad + 1)
+                costs = np.where(parent[r0:r1, c0:c1], 1.0, np.inf)
+                try:
+                    path, _ = route_through_array(costs, (a[0]-r0, a[1]-c0),
+                                                  (b[0]-r0, b[1]-c0),
+                                                  fully_connected=True, geometric=True)
+                    if len(path)-1 > max(1., 2.*gap_limit) or not np.isfinite(costs[tuple(np.array(path).T)]).all():
+                        entry["status"] = "no short weak-shadow route"
+                        continue
+                    rr = np.array([r0+point[0] for point in path], dtype=int)
+                    cc = np.array([c0+point[1] for point in path], dtype=int)
+                except (ValueError, IndexError):
+                    entry["status"] = "no weak-shadow route"
+                    continue
+            connection_mask[rr, cc] = True
+            region[rr, cc] = True
+            region |= labels == k
+            entry["status"] = "joined"
+            pending.remove(k)
+            diagnostics["union_components_joined"] += 1
+            diagnostics["union_max_gap_used_px"] = max(diagnostics["union_max_gap_used_px"], gap)
+            changed = True
+            break
+        if not changed:
+            break
+    # Re-evaluate each rejection against the final union; all candidates receive a reason.
+    diagnostics["union_components_considered"] = sum(x["area_px"] >= options.union_min_component_area_px
+                                                  and (not require_shadow or x["weak_shadow_overlap"] >= .8)
+                                                  for x in detail.values())
+    diagnostics["union_component_details"] = sorted(detail.values(), key=lambda x: x["component"])
+    diagnostics["_union_connections"] = connection_mask
+    diagnostics["_union_selected_labels"] = tuple([int(best)] + [int(k) for k, v in detail.items() if v["status"] == "joined"])
+    return region, diagnostics
+
+
 def measure_transmittance(image: np.ndarray, background: np.ndarray, options: EdgeOptions) -> Optional[dict]:
     """Geometry, focus and boundary of the main particle in one ROI, or None if there is none."""
     T = transmittance(image, background, options)
+    # Count-threshold mode: scale the background using exactly the same border
+    # clear-field estimate as transmittance(), then compare on the raw 8-bit
+    # intensity scale. Never cast signed differences to uint8.
+    count_mode = options.edge_mode == "scaled_counts"
+    if count_mode:
+        bg_float = np.maximum(np.asarray(background, dtype=float), 1.0)
+        ratio = np.asarray(image, dtype=float) / bg_float
+        if options.border_normalise and min(ratio.shape) > 4:
+            border = np.concatenate([ratio[0], ratio[-1], ratio[1:-1, 0], ratio[1:-1, -1]])
+            scale = float(np.median(border))
+            if not np.isfinite(scale) or scale <= 0.2:
+                scale = 1.0
+        else:
+            scale = 1.0
+        # Pseudo-transmission has its isophote at 1 - threshold/255.
+        # This preserves the existing contour and radial outline machinery.
+        level_field = 1.0 - (scale * bg_float - np.asarray(image, dtype=float)) / 255.0
+        for _ in range(max(0, int(options.denoise))):
+            level_field = ndimage.median_filter(level_field, size=3, mode="nearest")
+        if options.smooth_sigma > 0:
+            level_field = ndimage.gaussian_filter(level_field, options.smooth_sigma)
+    else:
+        level_field = T
     # Detect the particle independently of the chosen sizing isophote. In
     # particular, a faint bead (T_min = 0.65) must not be rejected because
     # the old fixed-mode core test required ten pixels below T = 0.45.
@@ -616,13 +910,15 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
     component_labels, nvalid = ndimage.label(valid)  # preserve disconnected candidates
     chosen = _pick_component(component_labels, nvalid, np.clip(1.0 - T, 0.0, None))
     main = component_labels == chosen
-    if options.merge_parts and nvalid > 1:
+    if options.merge_parts and options.outline != "union" and nvalid > 1:
         main = _join_column_walls(T, component_labels, main, options)
     if options.edge_mode == "relative":
         t_min = float(np.sort(T[main])[:3].mean())
         edge_level = 1.0 - options.edge_fraction * (1.0 - t_min)
     elif options.edge_mode == "fixed":
         edge_level = float(options.edge_level)
+    elif count_mode:
+        edge_level = 1.0 - float(options.count_threshold) / 255.0
     else:
         raise ValueError(f"Unknown transmittance edge mode: {options.edge_mode}")
     # A threshold above the normalised ambient baseline is not a valid shadow
@@ -632,7 +928,7 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
     # A particle detected at T < 1-min_contrast may have no contour at the
     # requested level (e.g. an extremely faint particle at T=0.7). The
     # subsequent overlap test deliberately refuses unrelated dark neighbours.
-    dark = T < edge_level
+    dark = level_field < edge_level
     labels, n = ndimage.label(dark)
     if n == 0:
         return None
@@ -640,15 +936,19 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
     if main is not None:
         # the part(s) of the chosen particle's shadow that are darker than its edge level
         overlap = np.bincount(labels[main].ravel(), minlength=n + 1)[1:]
-        best = int(np.argmax(overlap)) + 1 if overlap.any() else _pick_component(labels, n, np.clip(edge_level - T, 0, None))
+        best = int(np.argmax(overlap)) + 1 if overlap.any() else _pick_component(labels, n, np.clip(edge_level - level_field, 0, None))
         if not overlap.any():
             return None
         region = labels == best
-        if options.merge_parts and overlap.any():
+        if options.merge_parts and options.outline != "union" and overlap.any():
             region, bridge_px = _merge_shadow_parts(labels, overlap, best, main, options)
     else:
-        best = _pick_component(labels, n, np.clip(edge_level - T, 0, None))
+        best = _pick_component(labels, n, np.clip(edge_level - level_field, 0, None))
         region = labels == best
+    union_diagnostics = {}
+    if options.outline == "union":
+        region, union_diagnostics = _union_shadow_components(labels, main, best, level_field, T, options)
+        bridge_px = 0
     if bridge_px > 0:
         # Transparent columns focus light into a bright streak along their axis, splitting the
         # shadow at the edge level into parallel bars.  Join them -- only over pixels of this
@@ -663,7 +963,7 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
         closed = ndimage.binary_closing(np.pad(region, r + 1), structure=disk)[crop, crop]
         region = region | (closed & footprint)
         main = main | footprint
-    if options.close_px > 0 and main is not None:
+    if options.close_px > 0 and main is not None and options.outline != "union":
         # A bright diffraction spot in the middle of a bead can open a notch to the outside,
         # which fill_holes cannot close.  Bridge it with a small closing, but only over pixels
         # that are still part of this particle's shadow (T < 1 - min_contrast, holes filled):
@@ -674,9 +974,9 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
         padded = ndimage.binary_closing(padded, structure=(xx ** 2 + yy ** 2) <= r * r)
         closed = padded[r + 1:-(r + 1), r + 1:-(r + 1)]
         region = region | (closed & ndimage.binary_fill_holes(main))
-    if options.fill_holes:
+    if options.fill_holes and options.outline != "union":
         region = ndimage.binary_fill_holes(region)
-    if options.fill_bays > 0 and main is not None and region.sum() >= 20:
+    if options.fill_bays > 0 and main is not None and region.sum() >= 20 and options.outline != "union":
         # Transparent particles (split-and-merged shadows, or elongated columns): fill concavities
         # that are nearly enclosed, or that lie inside the particle's own (weak) shadow.
         elongated = _elongation(region) >= options.fill_bays_min_aspect
@@ -690,10 +990,40 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
     # filled holes dark, so the iso-line follows the real outer edge sub-pixel.
     grown = ndimage.binary_dilation(region, iterations=2)
     bright = max(1.0, edge_level + 0.5)
-    field_ = np.where(grown, T, bright)
-    field_ = np.where(region & ~(T < edge_level), np.minimum(field_, edge_level - 0.05), field_)
+    field_ = np.where(grown, level_field, bright)
+    field_ = np.where(region & ~(level_field < edge_level), np.minimum(field_, edge_level - 0.05), field_)
     padded = np.pad(field_, 1, mode="constant", constant_values=bright)
-    contours = measure.find_contours(padded, edge_level)
+    if options.outline == "union":
+        # Preserve the ORIGINAL subpixel threshold isophote on each fragment.
+        # Only the new, shortest-path connecting corridor is synthetic. Give it
+        # sufficient width to survive an optional later inset; otherwise a
+        # one-pixel bridge disappears and the measured polygon drops fragments.
+        corridor = union_diagnostics.pop("_union_connections")
+        selected = union_diagnostics.pop("_union_selected_labels")
+        radius = max(1, int(math.ceil(options.outline_inset_px + 1.5)))
+        if corridor.any():
+            y, x = np.mgrid[-radius:radius+1, -radius:radius+1]
+            corridor = ndimage.binary_dilation(corridor, structure=(x*x+y*y <= radius*radius))
+        # The original threshold field remains unmodified everywhere except
+        # the artificial connector, whose interior is assigned a dark value.
+        field_union = padded.copy()
+        core = region & ~corridor
+        field_union[1:-1, 1:-1][corridor] = np.minimum(
+            field_union[1:-1, 1:-1][corridor], edge_level - 0.1)
+        contours = measure.find_contours(field_union, edge_level)
+        union_diagnostics["union_connector_pixels"] = int(corridor.sum())
+        union_diagnostics["union_selected_components"] = len(selected)
+        union_diagnostics["union_connection_xy"] = np.column_stack(np.nonzero(corridor)).astype(int).tolist()
+        union_selected_masks = [labels == k for k in selected]
+        union_diagnostics["union_original_contours"] = [
+            (curve - 1.0).tolist()
+            for k in selected
+            for curve in measure.find_contours(
+                np.pad((labels == k).astype(float), 1), 0.5)
+            if len(curve) >= 4
+        ]
+    else:
+        contours = measure.find_contours(padded, edge_level)
     if not contours:
         return None
     poly = max(contours, key=lambda c: polygon_area(c)) - 1.0      # undo padding; (row, col)
@@ -703,22 +1033,59 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
     if options.outline == "edge" and main is not None:
         footprint = ndimage.binary_fill_holes(main)
         if _mask_roundness(footprint) >= options.radial_min_roundness:
-            radial = steepest_rise_outline(T, footprint)
+            radial = steepest_rise_outline(level_field, footprint)
             if radial is not None:
                 poly = radial
     if options.outline == "radial":
         # only for compact particles: on thin arms or needle tips the smoothing would trim a pixel or two
         footprint = ndimage.binary_fill_holes(main) if main is not None else None
         if footprint is not None and _mask_roundness(footprint) >= options.radial_min_roundness:
-            radial = radial_outline(T, footprint, edge_level, options.outline_smooth_px,
+            radial = radial_outline(level_field, footprint, edge_level, options.outline_smooth_px,
                                     edge_fraction=(options.edge_fraction if options.edge_mode == "relative" else None),
                                     max_level=1.0 - options.min_contrast / 2, check=region)
         if radial is None and _roundness(poly) >= options.radial_min_roundness:
-            radial = radial_outline(T, region, edge_level, options.outline_smooth_px)
+            radial = radial_outline(level_field, region, edge_level, options.outline_smooth_px)
         if radial is not None:
             poly = radial
+    if options.outline == "union":
+        # An inset may shrink fine fragments to nothing. Explicitly report
+        # final retention instead of silently claiming the union succeeded.
+        union_diagnostics["union_components_in_final_outline"] = 0
+    if options.outline_inset_px > 0:
+        if options.outline == "union" and options.inset_preserve_necks:
+            poly, inset_mask, protected_px = _inset_preserving_necks(poly, region, options.outline_inset_px)
+            union_diagnostics["union_inset_protected_pixels"] = protected_px
+        else:
+            poly, inset_mask = _inset_polygon(poly, region, options.outline_inset_px)
+        if poly is None or inset_mask is None:
+            return None
+        region = inset_mask
     if len(poly) < 4:
         return None
+    if options.outline == "union" and options.local_close_radius_px > 0:
+        if not 0 <= options.local_close_radius_px <= 10:
+            raise ValueError("local_close_radius_px must be between 0 and 10")
+        if not 0 <= options.local_close_max_added_fraction <= .25:
+            raise ValueError("local_close_max_added_fraction must be between 0 and 0.25")
+        poly, region, added, rejected = _local_post_close(
+            poly, region.shape, options.local_close_radius_px,
+            options.local_close_max_added_fraction)
+        union_diagnostics["local_close_added_px"] = int(added)
+        union_diagnostics["local_close_rejected_patches"] = int(rejected)
+        union_diagnostics["local_close_added_pct"] = 100. * added / max(1., region.sum() - added)
+    if options.outline == "union":
+        # Verify representation in the actual final measured polygon, not just
+        # in the intermediary joined segmentation. Mark failures unambiguously.
+        final_mask = np.zeros(region.shape, dtype=bool)
+        rr, cc = draw.polygon(poly[:, 0], poly[:, 1], shape=final_mask.shape)
+        final_mask[rr, cc] = True
+        # A fragment is retained if its eroded interior contributes pixels;
+        # single-pixel tips may disappear legitimately under an inset.
+        overlap = [int(np.count_nonzero(final_mask & m)) for m in union_selected_masks]
+        retained = sum(a > 0 for a in overlap)
+        union_diagnostics["union_components_in_final_outline"] = int(retained)
+        union_diagnostics["union_final_fragment_pixels"] = overlap
+        union_diagnostics["union_final_retention_ok"] = retained == len(union_selected_masks)
     px = options.pixel_um
     length_px, width_px, angle = feret(poly)
     area_px = polygon_area(poly)
@@ -726,8 +1093,8 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
     rows, cols = np.nonzero(region)
     # ellipse major axis of the same region (for comparison with legacy)
     props = measure.regionprops(region.astype(np.uint8))[0]
-    major = getattr(props, "axis_major_length", None) or props.major_axis_length
-    minor = getattr(props, "axis_minor_length", None) or props.minor_axis_length
+    major = props.axis_major_length
+    minor = props.axis_minor_length
     centroid = poly.mean(axis=0)
     centre_T = float(ndimage.map_coordinates(T, [[centroid[0]], [centroid[1]]], order=1, mode="nearest")[0])
     diff = image.astype(np.int16) - background.astype(np.int16)
@@ -748,8 +1115,9 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
         "centroid": centroid,
         "focus": edge_gradient_focus(diff, poly, options.focus_points),
         "focus_T": edge_gradient_focus(T, poly, options.focus_points),
+        **transmission_integrals(image, background, border_normalise=options.border_normalise),
         "T_min": float(T[region].min()),
-        "edge_level_used": float(edge_level),
+        "edge_level_used": float(options.count_threshold if count_mode else edge_level),
         "T_centre": centre_T,
         "T_border": float(np.median(np.concatenate([T[0], T[-1], T[:, 0], T[:, -1]]))),
         # 1 if the particle reaches the ROI border: it may be cut off, so its size is a lower limit
@@ -757,5 +1125,6 @@ def measure_transmittance(image: np.ndarray, background: np.ndarray, options: Ed
         "cutoff_pct": cutoff_percent(region),
         "boundary": boundary,
         "n_boundary": int(len(boundary) - 1),
+        **union_diagnostics,
         "outline_radial": int(radial is not None),
     }
