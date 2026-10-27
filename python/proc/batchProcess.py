@@ -119,6 +119,15 @@ def _parse_args() -> argparse.Namespace:
                         help="leave particles with more than this %% of their outline on the ROI edge "
                              "(dat.cutoff_pct) out of the concentration time series, e.g. 6 as CPIview's spectra; "
                              "their statistics stay in the files")
+    parser.add_argument("--export-only", action="store_true",
+                        help="export ROI PNGs/catalogue from existing MAT files; skip all CPI processing")
+    parser.add_argument("--export-png", action="store_true", help="export individual full-ROI PNG files")
+    parser.add_argument("--png-dir", help="output root for the PNG image archive")
+    parser.add_argument("--project", help="campaign name, otherwise input folder name")
+    parser.add_argument("--flight-csv", help="CSV with flight/date associations")
+    parser.add_argument("--min-size-um", type=float, default=0., help="minimum measured length for PNG export (µm)")
+    parser.add_argument("--min-focus", type=float, help="minimum existing CPI particle focus value for PNG export")
+    parser.add_argument("--overwrite-png", action="store_true", help="regenerate PNGs that already exist")
     parser.add_argument("--only-stats", action="store_true",
                         help="only redo particle statistics on already-converted MAT files "
                              "(run it on a copy of a processed directory to compare edge methods)")
@@ -283,6 +292,15 @@ def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = F
 
 if __name__ == "__main__":
     args = _parse_args()
+    if args.export_only and not args.export_png:
+        raise SystemExit("--export-only requires --export-png")
+    if args.export_png and not args.png_dir:
+        raise SystemExit("--export-png requires --png-dir")
+    if args.export_only:
+        from exportParticles import export
+        export(args.path, args.png_dir, args.project, args.flight_csv,
+               args.min_size_um, args.min_focus, overwrite=args.overwrite_png)
+        sys.exit(0)
     edge = {}
     if args.edge_method:
         edge["method"] = args.edge_method
@@ -325,3 +343,8 @@ if __name__ == "__main__":
     run_jobs(args.path, args.cores, edge=edge, only_stats=args.only_stats, cpi_v1=True if args.cpiv1 else None,
              images=False if args.no_images else None, timeseries=False if args.no_timeseries else None,
              backgrounds=args.backgrounds, max_cutoff=args.max_cutoff)
+
+    if args.export_png and not args.only_stats:
+        from exportParticles import export
+        export(args.path, args.png_dir, args.project, args.flight_csv,
+               args.min_size_um, args.min_focus, overwrite=args.overwrite_png)
