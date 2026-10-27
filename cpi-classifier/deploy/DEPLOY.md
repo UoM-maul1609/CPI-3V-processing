@@ -259,6 +259,34 @@ host.
 
 The local firewall, if it's on (`sudo ufw status`), doesn't affect the tunnel.
 
+## 9b. Letting people on campus in (no tunnel)
+
+Once PHP is patched (Ubuntu Pro, step 0), you can let people on the campus
+network use it directly, while everyone else stays shut out:
+
+1. **Listen on the network again.** In `/etc/apache2/ports.conf`, put back
+   `Listen 80`.
+2. **Campus only.** In `/etc/apache2/conf-available/cpi-classifier.conf`,
+   replace both `Require all granted` lines with:
+   ```
+   Require ip 130.88.0.0/16 10.0.0.0/8 127.0.0.1 ::1
+   ```
+   The default Ubuntu page at `/` stays visible, which is harmless.
+3. **Restart and check:**
+   ```bash
+   sudo apache2ctl configtest && sudo systemctl restart apache2
+   sudo ss -tlnp | grep apache2         # *:80
+   ```
+4. **Test from another campus computer:** open `http://<server name or IP>/cpi/`.
+   - **Nothing at all (times out):** the network blocks port 80 even inside
+     campus. Ask IT to allow it internally, or use the tunnel meanwhile.
+   - **"Forbidden":** that computer's address isn't in the list. Find it with
+     `sudo tail -5 /var/log/apache2/error.log` (look for `client denied ... <address>`),
+     then add its range to the `Require ip` lines.
+5. **Passwords:** without HTTPS they cross the network unencrypted. That's
+   acceptable on campus for a short while, but ask IT for a certificate (step 13)
+   before relying on it.
+
 ## 10. First run
 
 1. **Administrator account:** open the page, click *Set up the administrator

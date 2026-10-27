@@ -449,15 +449,23 @@ print(json.dumps(r))') . ' 2>&1'));
         out(['flights' => $list]);
 
     case 'admin_flight_hidden':
+        // archive (hidden = true) or restore flights: {id} or {ids: [...]}, hidden.
+        // Archived flights stay on disk with their classifications, but aren't offered anywhere.
         $b = require_post();
-        $id = safe_id((string)($b['id'] ?? ''));
-        $mf = data_dir() . "/flights/$id/meta.json";
-        $m = read_json_file($mf);
-        if (!$m) fail(404, 'No exported flight with that id');
-        $m['hidden'] = !empty($b['hidden']);
-        write_json_file($mf, $m);
+        $ids = isset($b['ids']) ? (array)$b['ids'] : [(string)($b['id'] ?? '')];
+        $done = [];
+        foreach ($ids as $raw) {
+            $id = safe_id((string)$raw);
+            $mf = data_dir() . "/flights/$id/meta.json";
+            $m = read_json_file($mf);
+            if (!$m) fail(404, "No imported flight called $id");
+            $m['hidden'] = !empty($b['hidden']);
+            write_json_file($mf, $m);
+            $done[] = $id;
+        }
+        if (!$done) fail(400, 'Which flights?');
         rebuild_manifest();
-        out(['id' => $id, 'hidden' => $m['hidden']]);
+        out(['ids' => $done, 'hidden' => !empty($b['hidden'])]);
 
     case 'admin_flight_delete':
         // removes the exported images and data; keeps the saved settings and everyone's classifications
@@ -580,11 +588,21 @@ print(json.dumps(r))') . ' 2>&1'));
                     $col = (string)($c['color'] ?? '#888888');
                     if (!preg_match('/^#[0-9a-fA-F]{6}$/', $col)) $col = '#888888';
                     $item['color'] = $col;
+                    if (!empty($c['plural'])) $item['plural'] = mb_substr(trim((string)$c['plural']), 0, 40);
+                    // secondary classification: what this class can be "made of"
+                    if (!empty($c['of']) && is_array($c['of']))
+                        $item['of'] = array_values(array_unique(array_filter(array_map('strval', $c['of']), fn($x) => preg_match('/^[a-z0-9_]{1,40}$/', $x))));
                 }
                 $clean[$kind][] = $item;
             }
         }
         if (count($clean['classes']) < 2) fail(400, 'Keep at least two classes');
+        foreach ($clean['classes'] as &$cc) {
+            if (!isset($cc['of'])) continue;
+            $cc['of'] = array_values(array_filter($cc['of'], fn($x) => isset($ids[$x]) || in_array($x, ['mixed', 'unknown'], true)));
+            if (!$cc['of']) unset($cc['of']);
+        }
+        unset($cc);
         $clean['version'] = 'custom-' . gmdate('YmdHi');
         $f = scheme_override_file();
         if (!$f) fail(500, "Set 'work_dir' in config.php so edited classes can be saved");

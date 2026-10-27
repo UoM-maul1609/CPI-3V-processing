@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS labels (
   created_at     DATETIME     NOT NULL,
   updated_at     DATETIME     NOT NULL,
   session_id     INT UNSIGNED NULL,               -- set when the label came from an uploaded session file
+  made_of        VARCHAR(32)  NULL,               -- secondary class: what it is made of (e.g. aggregate of plates)
   UNIQUE KEY uq_user_pid (user_id, pid),
   KEY ix_pid (pid),
   KEY ix_flight (flight_id),
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS label_log (
   pid        VARCHAR(200) NOT NULL,
   label      VARCHAR(64)  NULL,
   flags      VARCHAR(255) NULL,
+  made_of    VARCHAR(32)  NULL,
   created_at DATETIME     NOT NULL,
   KEY ix_log_user (user_id),
   KEY ix_log_pid (pid)

@@ -76,6 +76,7 @@ function ensure_schema(): void {
         ['users', 'disabled', 'INTEGER NOT NULL DEFAULT 0'], ['users', 'expertise', 'VARCHAR(60) NULL'],
         ['users', 'affiliation', 'VARCHAR(120) NULL'], ['users', 'is_external', 'INTEGER NOT NULL DEFAULT 0'],
         ['labels', 'session_id', 'INTEGER NULL'],
+        ['labels', 'made_of', 'VARCHAR(32) NULL'], ['label_log', 'made_of', 'VARCHAR(32) NULL'],
     ];
     foreach ($cols as [$table, $col, $type]) {
         try { db()->query("SELECT $col FROM $table LIMIT 1"); }
@@ -158,6 +159,19 @@ function require_post(): array {
     $body = json_decode(file_get_contents('php://input') ?: '{}', true);
     if (!is_array($body)) fail(400, 'Invalid JSON');
     return $body;
+}
+
+/** What a class can be "made of" (secondary classification): class id => [allowed values]. */
+function made_of_map(array $sch): array {
+    $m = [];
+    foreach ($sch['classes'] ?? [] as $c) if (!empty($c['of']) && is_array($c['of'])) $m[$c['id']] = array_map('strval', $c['of']);
+    return $m;
+}
+/** A valid made_of value for this label, or null. */
+function clean_made_of(array $map, string $label, $v): ?string {
+    if ($v === null || $v === '') return null;
+    $v = (string)$v;
+    return isset($map[$label]) && in_array($v, $map[$label], true) ? $v : null;
 }
 
 /** The classes and flags: the admin's edited copy if there is one, else config/scheme.json. */

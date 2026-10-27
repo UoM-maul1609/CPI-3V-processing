@@ -27,7 +27,7 @@ function h(tag, attrs = {}, ...kids) {
     else if (k === 'html') el.innerHTML = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
-  for (const c of kids.flat()) if (c !== null && c !== undefined && c !== false) el.append(c.nodeType ? c : String(c));
+  for (const c of kids.flat(Infinity)) if (c !== null && c !== undefined && c !== false) el.append(c.nodeType ? c : String(c));
   return el;
 }
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -55,8 +55,9 @@ function mulberry32(a) {
 const DEFAULTS = {
   flights: null,            // selected flight ids (null = not chosen yet)
   view: 'grid',             // grid | single
-  scale: 'true',            // true | fit
-  zoom: 1.2,                // screen px per µm ×2.5 (true scale) — see pxPerUm()
+  scale: 'true',            // true | auto (largest fills) | fit
+  zoom: 1.2,
+  bigTile: 360,             // "Largest fills": screen size of the largest particle in the grid                // screen px per µm ×2.5 (true scale) — see pxPerUm()
   tile: 130,                // tile size in fit mode
   outline: false,
   cmap: 'gray',             // live colour map (grey exports only)
@@ -134,6 +135,7 @@ function renderUserBox() {
   const btn = h('button', { class: 'userchip', 'aria-haspopup': 'menu', 'aria-expanded': 'false', title: 'Your account',
     onclick: (e) => { e.stopPropagation(); toggleUserMenu(btn); } },
     h('span', { class: 'avatar' }, initials), h('span', { class: 'uname' }, u.display_name), h('span', { class: 'caret', 'aria-hidden': 'true' }, '▾'));
+  if (practiceForced) box.append(h('button', { class: 'pill demo', title: 'Practice mode: classifications go to a file, not the database. Click to go back to saving.', onclick: () => setPracticeForced(false) }, 'Practice mode'));
   box.append(btn);
 }
 let userMenu = null;
@@ -144,6 +146,8 @@ function toggleUserMenu(anchor) {
     h('div', { class: 'um-head' }, h('b', {}, u.display_name), h('span', { class: 'muted small' }, u.username + (u.is_admin ? ', administrator' : '')),
       u.expertise ? h('span', { class: 'muted small' }, u.expertise) : null),
     h('button', { class: 'um-item', role: 'menuitem', onclick: () => { userMenu.remove(); openProfile(); } }, 'Your details'),
+    h('button', { class: 'um-item', role: 'menuitem', title: practiceForced ? 'Your classifications are saved to the database again' : 'Classify without saving to the database; save your work to a file instead',
+      onclick: () => { userMenu.remove(); setPracticeForced(!practiceForced); } }, practiceForced ? 'Back to saving in the database' : 'Practice mode (save to a file only)'),
     h('button', { class: 'um-item', role: 'menuitem', onclick: () => { userMenu.remove(); openChangePassword(false); } }, 'Change password'),
     u.is_admin ? h('a', { class: 'um-item', role: 'menuitem', href: '#/admin', onclick: () => userMenu.remove() }, 'Admin: people, classes and flights') : null,
     h('button', { class: 'um-item', role: 'menuitem', onclick: signOut }, 'Sign out'));
@@ -154,8 +158,19 @@ function toggleUserMenu(anchor) {
   anchor.setAttribute('aria-expanded', 'true');
 }
 document.addEventListener('click', () => { if (userMenu?.isConnected) userMenu.remove(); });
+async function setPracticeForced(on) {
+  await api.flush();
+  practiceForced = on; lsSet('cpi.practiceForced', on);
+  undoStack.length = 0; redoStack.length = 0;
+  await refreshLabels();
+  renderUserBox();
+  route();
+  if (on) toast('Practice mode: nothing you classify goes into the database. Use “Save to a file” to keep it.', 4500);
+  else { toast('Back to saving in the database'); offerPracticeKeep(); }
+}
 async function signOut() {
   userMenu?.remove();
+  practiceForced = false; lsSet('cpi.practiceForced', false);
   await api.flush();
   await api.logout().catch(() => {});
   server.user = null;
@@ -170,13 +185,14 @@ async function signOut() {
 // Without an account (or on a demonstration site) people can still classify:
 // the labels stay in this browser only and never reach the database.
 const PKEY = 'cpi.practice';
+let practiceForced = lsGet('cpi.practiceForced', false);   // signed in, but chose practice mode
 const practice = {
-  get on() { return !server.user; },
+  get on() { return !server.user || practiceForced; },
   load() { return lsGet(PKEY, {}); },
   save(items) {
     const st = this.load();
     const now = Math.round(Date.now() / 1000);
-    for (const it of items) { if (it.label) st[it.pid] = [it.label, (it.flags || []).join(','), now]; else delete st[it.pid]; }
+    for (const it of items) { if (it.label) st[it.pid] = it.made_of ? [it.label, (it.flags || []).join(','), now, it.made_of] : [it.label, (it.flags || []).join(','), now]; else delete st[it.pid]; }
     lsSet(PKEY, st);
     const m = practiceMeta.load();
     if (!m.started) { m.started = now; practiceMeta.save(m); }
@@ -223,7 +239,7 @@ function offerPracticeKeep() {
       h('button', { class: 'btn ghost', onclick: () => { practice.clear(); d.close(); toast('Practice classifications thrown away'); } }, 'Throw them away'),
       h('button', { class: 'btn primary', autofocus: true, onclick: async () => {
         const st = practice.load();
-        const items = Object.entries(st).map(([pid, [label, flags]]) => ({ pid, label, flags: flags ? flags.split(',') : [] }));
+        const items = Object.entries(st).map(([pid, [label, flags, , madeOf]]) => ({ pid, label, flags: flags ? flags.split(',') : [], made_of: madeOf || null }));
         api.queueSave(items, scheme.version);
         await api.flush();
         practice.clear();
@@ -346,11 +362,11 @@ async function refreshLabels() {
   labels.counts = new Map(Object.entries(d.counts || {}));
   if (practice.on) {
     labels.mine = new Map();
-    for (const [pid, [label, flags]] of Object.entries(practice.load())) {
-      if (D.index.has(pid)) setMine(pid, { label, flags: flags ? flags.split(',') : [] });
+    for (const [pid, [label, flags, , madeOf]] of Object.entries(practice.load())) {
+      if (D.index.has(pid)) setMine(pid, mkLabel(label, flags ? flags.split(',') : [], madeOf));
     }
   } else {
-    labels.mine = new Map(Object.entries(d.mine || {}).map(([pid, [label, flags]]) => [pid, { label, flags: flags ? flags.split(',') : [] }]));
+    labels.mine = new Map(Object.entries(d.mine || {}).map(([pid, [label, flags, madeOf]]) => [pid, mkLabel(label, flags ? flags.split(',') : [], madeOf)]));
   }
 }
 function setMine(pid, val) {
@@ -390,10 +406,20 @@ function groupByProject(flights) {
   for (const f of sorted) { const k = f.campaign || ''; if (!m.has(k)) m.set(k, []); m.get(k).push(f); }
   return m;
 }
-/** Flights offered to people: hidden ones only to administrators. */
+/** Instrument families, for choosing examples. */
+const INSTRUMENTS = ['CPI v1.0', 'CPI v1.5', 'CPI v2.0', '3V-CPI'];
+function instrumentKey(f) {
+  const name = `${f.instrument?.name || ''} ${f.instrument?.version || ''}`;
+  if (/3\s*v/i.test(name)) return '3V-CPI';
+  const m = /(\d+(?:\.\d+)?)/.exec(f.instrument?.version || '');
+  if (!m) return 'CPI (version not given)';
+  const v = parseFloat(m[1]);
+  return v >= 2 ? 'CPI v2.0' : v >= 1.5 ? 'CPI v1.5' : 'CPI v1.0';
+}
+/** Flights offered on the site: archived (hidden) flights are left out for everyone. */
 function visibleFlights() {
   if (!manifest) return [];
-  return manifest.flights.filter((f) => !f.hidden || server.user?.is_admin);
+  return manifest.flights.filter((f) => !f.hidden);
 }
 async function route() {
   const name = (location.hash.replace(/^#\/?/, '').split(/[?/]/)[0]) || 'classify';
@@ -510,13 +536,16 @@ function buildSidebar() {
     h('option', { value: 'todo' }, 'Not yet classified by me'),
     h('option', { value: 'all' }, 'All particles'),
     h('option', { value: 'none' }, 'Not classified by anyone'),
+    h('option', { value: 'any' }, 'Classified by anyone (see what people said)'),
     h('option', { value: 'disagree' }, 'People disagree'),
     h('option', { value: 'mine' }, 'Classified by me (review)'),
-    h('optgroup', { label: 'I classified as…' }, scheme.classes.map((c) => h('option', { value: 'cls:' + c.id }, c.name))));
+    h('optgroup', { label: 'I classified as…' }, scheme.classes.map((c) => [h('option', { value: 'cls:' + c.id }, c.name),
+      (c.of || []).map((v) => h('option', { value: `cls:${c.id}:${v}` }, `\u00a0\u00a0\u00a0${c.name} of ${ofInfo(v).plural}`))])),
+    piles.list().length ? h('optgroup', { label: 'In my pile…' }, piles.list().map((p) => h('option', { value: 'pile:' + p.id }, p.name))) : null);
   showSel.value = S.show;
-  const orderSel = h('select', { 'aria-label': 'Order', onchange: (e) => { S.order = e.target.value; savePrefs(); recompute(); } },
+  const orderSel = h('select', { 'aria-label': 'Order', onchange: (e) => { S.order = e.target.value; savePrefs(); recompute(); updateSizeBinsPanel(); } },
     h('option', { value: 'random' }, 'Random'),
-    h('option', { value: 'stratified' }, 'Random, mixed sizes'),
+    h('option', { value: 'stratified', title: 'The same number from each size bin, so large particles aren’t swamped by small ones' }, 'Balanced by size'),
     h('option', { value: 'time' }, 'Chronological'),
     h('option', { value: 'flight' }, 'By flight, then time'),
     h('option', { value: 'size-desc' }, 'Largest first'),
@@ -529,6 +558,7 @@ function buildSidebar() {
       showSel,
       h('div', { style: { display: 'flex', gap: '6px' } }, orderSel,
         h('button', { class: 'btn small', title: 'New random sample', onclick: () => { S.seed = (Math.random() * 1e9) | 0; savePrefs(); if (!S.order.startsWith('random') && S.order !== 'stratified') { S.order = 'random'; orderSel.value = 'random'; } recompute(); } }, 'Shuffle')),
+      sizeBinsBox(),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.hideEdge, onchange: (e) => { S.hideEdge = e.target.checked; savePrefs(); recompute(); } }), 'Hide particles cut off at the edge'))));
 
   // filters
@@ -597,6 +627,22 @@ function parseClock(s, refUnix) {
 
 // ---------------------------------------------------------------- toolbar
 function pxPerUm() { return S.zoom / 2.5; }
+const sameScale = (m) => m === 'true' || m === 'auto';   // every particle at one µm-per-pixel
+/** Largest image extent (µm) among the particles currently selected, for "Largest fills". */
+let extCache = { order: null, w: 0, h: 0 };
+function maxExtentUm() {
+  if (extCache.order === order) return extCache;
+  let w = 1, hh = 1;
+  for (const g of order) { const px = D.pixel(g); const a = D.col.w[g] * px, b = D.col.h[g] * px; if (a > w) w = a; if (b > hh) hh = b; }
+  extCache = { order, w, h: hh };
+  return extCache;
+}
+/** Screen pixels per µm in the grid for the current scale mode. */
+function gridPxPerUm() {
+  if (S.scale !== 'auto') return pxPerUm();
+  const e = maxExtentUm();
+  return S.bigTile / Math.max(e.w, e.h);
+}
 
 function buildToolbar() {
   const seg = (items, cur, onPick) => {
@@ -610,10 +656,12 @@ function buildToolbar() {
   tb.append(
     h('button', { class: 'btn small mobile-only', onclick: () => classifyEl.classList.toggle('show-side') }, 'Filters'),
     seg([['grid', 'Grid', 'Many particles at once (V)'], ['single', 'One at a time', 'One large particle at a time (V)']], S.view, (v) => { S.view = v; savePrefs(); renderStage(); }),
-    seg([['true', 'True scale', 'Every particle at the same µm per screen pixel, so sizes compare'], ['fit', 'Fit', 'Each particle scaled to fill its tile']], S.scale, (v) => { S.scale = v; savePrefs(); updateZoomUi(); renderStage(); }),
+    seg([['true', 'True scale', 'Every particle at the same µm per screen pixel, so sizes compare. The slider sets the zoom.'],
+      ['auto', 'Largest fills', 'Every particle at the same scale, chosen so the largest one shown fills the space; smaller ones are proportionally smaller'],
+      ['fit', 'Fit', 'Each particle scaled to fill its tile']], S.scale, (v) => { S.scale = v; savePrefs(); updateZoomUi(); renderStage(); }),
     h('label', { class: 'inline', title: 'Zoom' }, h('svg', { class: 'zoomicon', viewBox: '0 0 24 24', 'aria-hidden': 'true', html: '<path d="M10 3a7 7 0 0 1 5.6 11.2l5.1 5.1-1.4 1.4-5.1-5.1A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm-1 2h2v2h2v2h-2v2H9v-2H7V9h2V7z"/>' }),
       h('input', { type: 'range', id: 'zoom', min: '0.4', max: '5', step: '0.1', 'aria-label': 'Zoom', oninput: (e) => {
-        if (S.scale === 'true') S.zoom = +e.target.value; else S.tile = +e.target.value;
+        if (S.scale === 'true') S.zoom = +e.target.value; else if (S.scale === 'auto') S.bigTile = +e.target.value; else S.tile = +e.target.value;
         savePrefs(); updateZoomUi(); renderStage(true);
       } })),
     h('div', { class: 'scalebar', id: 'scalebar' }),
@@ -630,11 +678,14 @@ function buildToolbar() {
 }
 function updateZoomUi() {
   const z = $('#zoom'); if (!z) return;
+  const zl = z.closest('label');
+  if (zl) { zl.hidden = S.view === 'single' && S.scale !== 'true'; zl.title = S.scale === 'auto' ? 'Size of the largest particle' : 'Zoom'; }
   if (S.scale === 'true') { z.min = '0.4'; z.max = '5'; z.step = '0.1'; z.value = S.zoom; }
+  else if (S.scale === 'auto') { z.min = '120'; z.max = '900'; z.step = '10'; z.value = S.bigTile; }
   else { z.min = '70'; z.max = '260'; z.step = '5'; z.value = S.tile; }
   const sb = $('#scalebar');
-  if (S.scale !== 'true' || S.view !== 'grid') { sb.innerHTML = ''; return; }
-  const k = pxPerUm();
+  if (!sameScale(S.scale) || S.view !== 'grid' || !D) { sb.innerHTML = ''; return; }
+  const k = gridPxPerUm();
   const L = [10, 20, 50, 100, 200, 500, 1000, 2000].find((l) => l * k >= 45) || 2000;
   sb.innerHTML = `<i style="width:${(L * k).toFixed(1)}px"></i><span>${L} µm</span>`;
 }
@@ -726,7 +777,7 @@ function openKeys() {
       h('div', {}, h('h4', {}, 'Classify'),
         h('div', { class: 'keys' },
           scheme.classes.map((c) => row([c.key.toUpperCase()], c.name)).flat(),
-          row(['Del'], 'Remove your label'))),
+          row(['Del'], 'Remove your label'), row(['Shift', '4'], 'Aggregate etc. made of plates (that habit’s key)'))),
       h('div', {}, h('h4', {}, 'Flags'),
         h('div', { class: 'keys' }, scheme.flags.map((f) => row([f.key.toUpperCase()], f.name)).flat()),
         h('h4', {}, 'Move and select'),
@@ -772,8 +823,10 @@ function buildPalette() {
     h('span', { class: 'undoredo' },
       h('button', { class: 'btn ghost small', id: 'undoBtn', title: 'Undo (Z or Ctrl/⌘ Z)', onclick: undo, disabled: true }, '↶ Undo'),
       h('button', { class: 'btn ghost small', id: 'redoBtn', title: 'Redo (Y, Shift Z or Ctrl/⌘ Shift Z)', onclick: redo, disabled: true }, 'Redo ↷')));
-  pal.append(cls, fl, st);
-  queueMicrotask(() => { updateSaveState(); updateBinCounts(); });
+  const pl = h('div', { class: 'palette-piles', id: 'piles', role: 'group', 'aria-label': 'Look-alike piles' });
+  const ofb = h('div', { class: 'ofbar', id: 'ofbar', role: 'group', 'aria-label': 'What is it made of?', hidden: true });
+  pal.append(ofb, cls, pl, fl, st);
+  queueMicrotask(() => { updateSaveState(); updateBinCounts(); renderPiles(); });
   return pal;
 }
 function updateSaveState() {
@@ -786,7 +839,8 @@ function updateSaveState() {
     el.append(h('span', { title: 'Classifications made now stay in this browser and are not saved to the database.' }, server.demo ? 'Demonstration: not saved' : 'Practice mode'));
     if (practice.count()) el.append( h('button', { class: 'linkbtn', title: 'Save your practice classifications to a file you keep', onclick: openDownload },
         un ? `Save ${fmtInt(un)} to a file` : 'Saved to a file ✓'));
-    if (!server.demo && server.reachable !== false) el.append(h('button', { class: 'linkbtn', onclick: () => openAuth() }, 'Sign in'));
+    if (server.user) el.append(h('button', { class: 'linkbtn', title: 'Leave practice mode', onclick: () => setPracticeForced(false) }, 'Back to saving'));
+    else if (!server.demo && server.reachable !== false) el.append(h('button', { class: 'linkbtn', onclick: () => openAuth() }, 'Sign in'));
     $('#undoBtn') && ($('#undoBtn').disabled = !undoStack.length);
     $('#redoBtn') && ($('#redoBtn').disabled = !redoStack.length);
     return;
@@ -824,6 +878,7 @@ function refreshPaletteState() {
 
 // ---------------------------------------------------------------- filtering
 function recompute() {
+  closeOfBar();
   if (!D) { order = []; renderStage(); updateCount(0); return; }
   const n = D.n;
   const col = D.col;
@@ -833,7 +888,9 @@ function recompute() {
   const vals = dims.map((d) => col[d.field]);
   const bins = dims.map((d) => d.rh);
   const show = S.show;
-  const showCls = show.startsWith('cls:') ? show.slice(4) : null;
+  const [showCls, showOf] = show.startsWith('cls:') ? show.slice(4).split(':') : [null, null];
+  const showPile = show.startsWith('pile:') ? new Set(piles.get(show.slice(5))?.pids || []) : null;
+  if (show.startsWith('pile:') && !showPile) { S.show = 'todo'; return recompute(); }
   const out = [];
   for (let g = 0; g < n; g++) {
     if (S.hideEdge && edge && edge[g] > 0) continue;
@@ -842,8 +899,10 @@ function recompute() {
       const m = labels.mine.get(pid);
       if (show === 'todo' && m) continue;
       if (show === 'mine' && !m) continue;
-      if (showCls && (!m || m.label !== showCls)) continue;
+      if (showCls && (!m || m.label !== showCls || (showOf && m.made_of !== showOf))) continue;
+      if (showPile && !showPile.has(pid)) continue;
       if (show === 'none' && labels.counts.has(pid)) continue;
+      if (show === 'any' && !labels.counts.has(pid)) continue;
       if (show === 'disagree') { const c = labels.counts.get(pid); if (!c || Object.keys(c).length < 2) continue; }
     }
     let fails = 0, last = -1;
@@ -879,17 +938,78 @@ function sortOrder(arr) {
       return arr.sort((a, b) => v.get(a) - v.get(b));
     }
     case 'stratified': {
-      // round-robin across logarithmic size bins, so small and large particles both turn up
+      // Even across size bins: take one particle from each bin in turn (random within a bin),
+      // so large particles turn up as often as small ones until a bin runs out.
       shuffle(arr);
-      const groups = new Map();
-      for (const g of arr) { const s = size[g]; const k = Number.isFinite(s) && s > 0 ? Math.floor(Math.log(s) / Math.log(1.5)) : -999; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(g); }
-      const lists = [...groups.values()];
+      const edges = sizeBinEdges();
+      const lists = Array.from({ length: edges.length + 1 }, () => []);
+      for (const g of arr) {
+        const v = size[g];
+        if (!Number.isFinite(v)) continue;
+        let k = 0; while (k < edges.length && v >= edges[k]) k++;
+        lists[k].push(g);
+      }
+      binCounts = lists.map((l) => l.length);
+      queueMicrotask(updateSizeBinsPanel);
       const res = [];
-      for (let i = 0; res.length < arr.length; i++) for (const l of lists) if (i < l.length) res.push(l[i]);
+      for (let i = 0; res.length < arr.length; i++) {
+        let any = false;
+        for (const l of lists) if (i < l.length) { res.push(l[i]); any = true; }
+        if (!any) break;
+      }
       return res;
     }
     default: return shuffle(arr);
   }
+}
+
+// ---- size bins for "Even across size bins"
+let binCounts = [];
+const DEFAULT_BINS = [50, 100, 200, 400, 800];
+function sizeBinEdges() {
+  const e = Array.isArray(S.sizeBins) && S.sizeBins.length ? S.sizeBins : DEFAULT_BINS;
+  return [...new Set(e.map(Number).filter((x) => Number.isFinite(x) && x > 0))].sort((a, b) => a - b);
+}
+function parseBins(txt) {
+  return [...new Set(String(txt).split(/[\s,;]+/).map(Number).filter((x) => Number.isFinite(x) && x > 0))].sort((a, b) => a - b);
+}
+function binLabel(edges, k) {
+  if (k === 0) return `< ${edges[0]}`;
+  if (k === edges.length) return `≥ ${edges[k - 1]}`;
+  return `${edges[k - 1]}–${edges[k]}`;
+}
+function sizeBinsBox() {
+  const input = h('input', { type: 'text', inputmode: 'decimal', value: sizeBinEdges().join(', '), 'aria-label': 'Size bin edges in µm',
+    onchange: () => { const e = parseBins(input.value); if (!e.length) { input.value = sizeBinEdges().join(', '); return; } S.sizeBins = e; input.value = e.join(', '); savePrefs(); recompute(); } });
+  const preset = (label, edges) => h('button', { class: 'linkbtn', type: 'button', onclick: () => { S.sizeBins = edges; input.value = edges.join(', '); savePrefs(); recompute(); } }, label);
+  const box = h('div', { class: 'sizebins', id: 'sizeBins', hidden: S.order !== 'stratified' },
+    h('label', { class: 'fld' }, h('span', {}, 'Bin edges, µm ', h('small', { class: 'muted' }, 'by ', h('span', { id: 'sizeBinsField' }, 'size'))), input),
+    h('div', { class: 'binpresets muted small' }, 'Quick: ', preset('×2 from 50', [50, 100, 200, 400, 800]), ' · ', preset('every 100', [100, 200, 300, 400, 500, 600]), ' · ', preset('×1.5 from 40', [40, 60, 90, 135, 200, 300, 450, 675])),
+    h('div', { id: 'sizeBinsTable', class: 'bintable' }),
+    h('p', { id: 'sizeBinsNote', class: 'muted small' }));
+  return box;
+}
+function updateSizeBinsPanel() {
+  const box = $('#sizeBins'); if (!box) return;
+  box.hidden = S.order !== 'stratified';
+  if (box.hidden) return;
+  const edges = sizeBinEdges();
+  const tb = $('#sizeBinsTable');
+  const max = Math.max(1, ...binCounts);
+  const mFld = D?.fields[S.sizeField];
+  $('#sizeBinsField').textContent = (mFld?.label || 'size').toLowerCase();
+  tb.innerHTML = '';
+  edges.concat([Infinity]).forEach((_, k) => {
+    const n = binCounts[k] || 0;
+    tb.append(h('div', { class: 'binrow' + (n ? '' : ' binzero') },
+      h('span', { class: 'num' }, binLabel(edges, k)),
+      h('span', { class: 'bintrack' }, h('i', { style: { width: (100 * Math.sqrt(n / max)).toFixed(1) + '%' } })),
+      h('span', { class: 'num' }, fmtInt(n))));
+  });
+  const used = binCounts.filter((n) => n > 0);
+  $('#sizeBinsNote').textContent = used.length > 1
+    ? `Taken in turn from the ${used.length} bins with particles, so each gets about the same number until the smallest (${fmtInt(Math.min(...used))}) runs out.`
+    : 'Only one bin has particles: change the bins or the filters.';
 }
 
 function updateCount(n) {
@@ -966,7 +1086,8 @@ function renderGrid(st, count) {
   shown = 0;
   appendTiles(Math.min(count, order.length));
   io?.disconnect();
-  io = new IntersectionObserver((ents) => { if (ents.some((e) => e.isIntersecting)) appendTiles(S.page); }, { root: st, rootMargin: '600px' });
+  // root: the viewport, so it works whether the image area or the whole page scrolls
+  io = new IntersectionObserver((ents) => { if (ents.some((e) => e.isIntersecting)) appendTiles(S.page); }, { rootMargin: '800px' });
   io.observe(more);
 }
 function appendTiles(k) {
@@ -983,6 +1104,11 @@ function appendTiles(k) {
   else more.append(h('span', {}, `All ${fmtInt(order.length)} shown. `),
     S.show === 'todo' ? h('button', { class: 'btn small', onclick: recompute, style: { marginLeft: '8px' } }, 'Load the next unclassified set') : '');
   if (S.outline) drawOutlines();
+  // keep going while the end of the list is still on screen (small tiles on a big screen)
+  if (shown < order.length) requestAnimationFrame(() => {
+    const m = $('#more');
+    if (m && m.isConnected && m.getBoundingClientRect().top < window.innerHeight + 800) appendTiles(S.page);
+  });
 }
 function tileEl(pos, maxW) {
   const g = order[pos];
@@ -992,10 +1118,10 @@ function tileEl(pos, maxW) {
   else { img.addEventListener('load', () => img.classList.add('ok'), { once: true }); img.addEventListener('error', () => img.classList.add('ok', 'err'), { once: true }); }
   const pic = h('div', { class: 'pic' }, img);
   const t = h('div', { class: 'tile', role: 'option', 'data-pos': pos, 'data-g': g });
-  if (S.scale === 'true') {
-    let s = D.pixel(g) * pxPerUm();
+  if (sameScale(S.scale)) {
+    let s = D.pixel(g) * gridPxPerUm();
     let dw = w * s, dh = hh * s;
-    const lim = Math.min(maxW / dw, 520 / dh, 1);
+    const lim = Math.min(maxW / dw, (S.scale === 'auto' ? 2000 : 520) / dh, 1);
     if (lim < 1) { dw *= lim; dh *= lim; s *= lim; t.append(h('span', { class: 'shrunk', title: 'Too big to show at true scale; shrunk to fit' }, `×${lim.toFixed(2)}`)); }
     img.width = Math.max(1, Math.round(dw)); img.height = Math.max(1, Math.round(dh));
     if (s >= 1.5) img.classList.add('px');
@@ -1007,7 +1133,7 @@ function tileEl(pos, maxW) {
   if (lines.length) t.append(h('span', { class: 'cap num' }, lines.map((l) => h('span', {}, l.map((it) => h('b', {}, it))))));
   if (S.overlays.includes('scalebar')) {
     const place = () => tileScaleBar(pic, img, g);
-    if (S.scale === 'true') place(); else img.addEventListener('load', place, { once: true });
+    if (sameScale(S.scale)) place(); else img.addEventListener('load', place, { once: true });
   }
   decorateTile(t);
   t.draggable = true;
@@ -1028,7 +1154,7 @@ function tileEl(pos, maxW) {
 }
 /** A small scale bar in the corner of a tile, sized for how big the image is drawn. */
 function tileScaleBar(pic, img, g) {
-  const shownW = img.width && S.scale === 'true' ? img.width : img.clientWidth;
+  const shownW = img.width && sameScale(S.scale) ? img.width : img.clientWidth;
   if (!shownW) return;
   const pxPerUm = shownW / D.col.w[g] / D.pixel(g);
   const L = niceBar(pxPerUm, 18, Math.max(24, shownW * 0.45));
@@ -1038,7 +1164,9 @@ function tileScaleBar(pic, img, g) {
 function decorateTile(t) {
   const pos = +t.dataset.pos, g = +t.dataset.g;
   const pid = D.pid(g);
-  t.querySelectorAll('.tag, .tagname, .votes').forEach((e) => e.remove());
+  t.querySelectorAll('.tag, .tagname, .votes, .pilemark').forEach((e) => e.remove());
+  const pp = piles.of(pid);
+  if (pp) t.append(h('span', { class: 'pilemark', style: { '--pc': pp.color }, title: `In pile ${pp.name}` }, pp.short));
   const m = labels.mine.get(pid);
   t.classList.toggle('done', !!m && S.show === 'todo');
   t.classList.toggle('sel', selection.has(pos));
@@ -1047,10 +1175,17 @@ function decorateTile(t) {
   if (m) {
     const c = classById.get(m.label);
     t.append(h('span', { class: 'tag', style: { background: c?.color || '#888' } }),
-      h('span', { class: 'tagname' }, (c?.name || m.label) + (m.flags.length ? ' +' + m.flags.length : '')));
+      h('span', { class: 'tagname' }, labelText(m, true) + (m.flags.length ? ' +' + m.flags.length : '')));
   }
   const n = totalVotes(pid) - (m ? 1 : 0);
-  if (n > 0) t.append(h('span', { class: 'votes', title: `${n} classification${n === 1 ? '' : 's'} by other people` }, `${n} other${n === 1 ? '' : 's'}`));
+  if (!m && n > 0) {
+    // not classified by you: show what other people said (the most common class)
+    const cnt = Object.entries(labels.counts.get(pid) || {}).sort((a, b) => b[1] - a[1]);
+    const top = classById.get(cnt[0][0]);
+    const detail = cnt.map(([l, k]) => `${classById.get(l)?.name || l} ×${k}`).join(', ');
+    t.append(h('span', { class: 'tag others', style: { borderColor: top?.color || '#888' } }),
+      h('span', { class: 'tagname others', title: `Other people: ${detail}` }, `${top?.name || cnt[0][0]}${cnt.length > 1 ? ' ?' : ''} · ${n}`));
+  } else if (n > 0) t.append(h('span', { class: 'votes', title: `${n} classification${n === 1 ? '' : 's'} by other people` }, `${n} other${n === 1 ? '' : 's'}`));
   t.title = m ? `You: ${classById.get(m.label)?.name || m.label}` : '';
 }
 function tileAt(pos) { return $(`.tile[data-pos="${pos}"]`, $('#grid') || document); }
@@ -1173,16 +1308,29 @@ function renderSingle(st) {
       c ? h('span', { class: 'tag', style: { background: c.color } }) : null);
     strip.append(t);
   }
-  // biggest integer-ish zoom that fits the space
   const W = (st.clientWidth || 800) - 150, Hh = (st.clientHeight || 600) - 215;
   const w = D.col.w[g], hh = D.col.h[g];
-  let s = Math.min(W / w, Hh / hh, 8);
-  if (s > 1) s = Math.max(1, Math.floor(s * 2) / 2);
+  let s, note = null;
+  if (S.scale === 'auto') {
+    // the same scale for every particle: the largest one selected fills the space
+    const e = maxExtentUm();
+    s = Math.min(W / e.w, Hh / e.h) * D.pixel(g);
+  } else if (S.scale === 'true') {
+    s = pxPerUm() * D.pixel(g);
+  } else {
+    // biggest integer-ish zoom that fits the space
+    s = Math.min(W / w, Hh / hh, 8);
+    if (s > 1) s = Math.max(1, Math.floor(s * 2) / 2);
+  }
+  if (S.scale !== 'fit') {
+    const lim = Math.min(W / (w * s), Hh / (hh * s), 1);
+    if (lim < 1) { s *= lim; note = h('span', { class: 'shrunk', title: 'Too big to show at this scale; shrunk to fit' }, `×${lim.toFixed(2)}`); }
+  }
   const img = h('img', { src: D.img(g), alt: `Particle ${D.pid(g)}`, width: Math.round(w * s), height: Math.round(hh * s) });
   img.draggable = true;
   img.addEventListener('dragstart', (e) => startDrag(e, [focusPos]));
   img.addEventListener('dragend', endDrag);
-  const pic = h('div', { class: 'single-pic' }, img);
+  const pic = h('div', { class: 'single-pic' + (s >= 1.5 ? ' px' : '') }, img, note);
   const k = s / D.pixel(g);
   const L = [10, 20, 50, 100, 200, 500, 1000].find((l) => l * k >= 50) || 1000;
   const m = labels.mine.get(D.pid(g));
@@ -1197,7 +1345,7 @@ function renderSingle(st) {
         h('button', { class: 'btn ghost small', onclick: () => downloadOne(g, exportCtx), title: 'Download this image' }, 'Download'))),
     h('button', { class: 'single-nav next', 'aria-label': 'Next particle', onclick: () => moveFocus(focusPos + 1), disabled: focusPos >= order.length - 1 }, '›'),
     h('div', { class: 'single-mylabel' },
-      c ? [h('span', { class: 'dot', style: { background: c.color } }), `You said ${c.name}` + (m.flags.length ? ` (${m.flags.map((f) => scheme.flags.find((x) => x.id === f)?.name || f).join(', ')})` : '')]
+      c ? [h('span', { class: 'dot', style: { background: c.color } }), `You said ${labelText(m)}` + (m.flags.length ? ` (${m.flags.map((f) => scheme.flags.find((x) => x.id === f)?.name || f).join(', ')})` : '')]
         : h('span', { class: 'muted' }, 'Press a class key, or drag the image to a class'),
       c ? h('button', { class: 'btn ghost small', onclick: () => removeLabel([focusPos]) }, 'Remove') : null));
   st.append(h('div', { class: 'single' }, strip, main));
@@ -1253,7 +1401,7 @@ function renderInspector(g) {
     const m = labels.mine.get(pid);
     const c = m && classById.get(m.label);
     yours = h('div', { class: 'yours' + (c ? '' : ' none') },
-      c ? [h('span', { class: 'dot', style: { background: c.color } }), h('span', { class: 'yours-txt' }, 'You: ', h('b', {}, c.name),
+      c ? [h('span', { class: 'dot', style: { background: c.color } }), h('span', { class: 'yours-txt' }, 'You: ', h('b', {}, labelText(m)),
             m.flags.length ? ' + ' + m.flags.map((f) => scheme.flags.find((x) => x.id === f)?.name || f).join(', ') : '')]
         : h('span', { class: 'yours-txt muted' }, 'Not classified by you'),
       h('button', { class: 'btn small', onclick: () => openFixer(pid) }, c ? 'Change' : 'Classify'));
@@ -1273,9 +1421,11 @@ function targets() {
   if (S.view === 'grid' && selection.size) return [...selection].sort((a, b) => a - b);
   return order.length ? [focusPos] : [];
 }
-const snap = (v) => (v ? { label: v.label, flags: v.flags.slice() } : null);
+const snap = (v) => (v ? mkLabel(v.label, v.flags.slice(), v.made_of) : null);
+/** A label value: {label, flags, made_of?} (made_of only when set, so values compare cleanly). */
+function mkLabel(label, flags, madeOf) { const v = { label, flags: flags || [] }; if (madeOf) v.made_of = madeOf; return v; }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const itemFor = (pid, v) => (v ? { pid, label: v.label, flags: v.flags } : { pid, label: null });
+const itemFor = (pid, v) => (v ? { pid, label: v.label, flags: v.flags, made_of: v.made_of || null } : { pid, label: null });
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 
 function needUser() {
@@ -1343,13 +1493,27 @@ function classify(clsId, pos = targets()) {
   const changes = pos.map((p) => {
     const pid = D.pid(order[p]);
     const prev = labels.mine.get(pid);
-    return { pid, before: snap(prev), after: { label: clsId, flags: armed.size ? [...armed] : (prev ? prev.flags.slice() : []) } };
+    return { pid, before: snap(prev), after: mkLabel(clsId, armed.size ? [...armed] : (prev ? prev.flags.slice() : []), prev && prev.label === clsId ? prev.made_of : null) };
   });
   const changed = changes.filter((x) => x.before && x.before.label !== clsId).length;
   bumpSession(changes.filter((x) => !x.before).length);
   commit(changes, `${plural(pos.length, 'particle')} → ${c.name}`);
   armed.clear();
   hitBin(clsId);
+  if (c.of && c.of.length) {
+    // ask what it's made of before moving on
+    for (const p of pos) { const t = tileAt(p); if (t) { t.style.setProperty('--flash', c.color); t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash'); } }
+    redecorate(pos);
+    if (S.view === 'single') renderStage();
+    askMadeOf(clsId, pos.map((p) => D.pid(order[p])), pos);
+    renderInspector(currentG());
+    updateCount(order.length); refreshPaletteState(); updateSaveState(); updateBinCounts(); refreshHistory();
+    return;
+  }
+  advanceAfter(pos, c, changed);
+}
+/** After classifying: move the focus on (and say what happened). */
+function advanceAfter(pos, c, changed = 0) {
   if (S.view === 'single') {
     if (focusPos < order.length - 1) focusPos++;
     renderStage();
@@ -1366,7 +1530,7 @@ function classify(clsId, pos = targets()) {
     renderInspector(hoverG >= 0 ? hoverG : currentG());
   }
   if (changed) toast(`Changed ${plural(changed, 'particle')} to ${c.name}`);
-  else if (pos.length > 1) toast(`${pos.length} particles → ${c.name}`);
+  else if (pos.length > 1 && !c.of) toast(`${pos.length} particles → ${c.name}`);
   updateCount(order.length);
   refreshPaletteState();
   updateSaveState();
@@ -1401,7 +1565,7 @@ function toggleFlag(flagId) {
     const pid = D.pid(order[p]);
     const m = labels.mine.get(pid);
     const flags = turnOn ? [...new Set([...m.flags, flagId])] : m.flags.filter((f) => f !== flagId);
-    return { pid, before: snap(m), after: { label: m.label, flags } };
+    return { pid, before: snap(m), after: mkLabel(m.label, flags, m.made_of) };
   });
   commit(changes, `${fname} ${turnOn ? 'added to' : 'removed from'} ${plural(changes.length, 'particle')}`);
   toast(`${fname} ${turnOn ? 'added' : 'removed'}`);
@@ -1409,6 +1573,62 @@ function toggleFlag(flagId) {
 }
 
 /** Change one particle by id, wherever it is (fix dialog, history). */
+// ---------------------------------------------------------------- made of (secondary classification)
+const OF_SPECIAL = { mixed: { name: 'Mixed', plural: 'mixed habits', key: 'm', color: '#7a7f87' }, unknown: { name: 'Can’t tell', plural: 'unclear habit', key: 'x', color: '#5c6370' } };
+function ofInfo(v) {
+  if (OF_SPECIAL[v]) return OF_SPECIAL[v];
+  const c = classById.get(v);
+  return c ? { name: c.name, plural: c.plural || (c.name.toLowerCase() + (c.name.endsWith('s') ? '' : 's')), key: c.key, color: c.color } : { name: v, plural: v, key: '', color: '#888' };
+}
+/** "Aggregate of plates", or just the class name. */
+function labelText(m, short = false) {
+  const c = m && classById.get(m.label);
+  if (!c) return m ? m.label : '';
+  if (!m.made_of) return c.name;
+  return short ? `${c.name} · ${ofInfo(m.made_of).plural}` : `${c.name} of ${ofInfo(m.made_of).plural}`;
+}
+let ofAsk = null;   // {cls, pids, pos} while asking what the just-classified particles are made of
+function askMadeOf(clsId, pids, pos) {
+  const c = classById.get(clsId);
+  ofAsk = { cls: clsId, pids, pos };
+  const bar = $('#ofbar'); if (!bar) return;
+  bar.innerHTML = '';
+  bar.style.setProperty('--c', c.color);
+  bar.append(
+    h('span', { class: 'oftitle' }, h('b', {}, `${c.name}${pids.length > 1 ? ` (${pids.length})` : ''} of…`)),
+    ...c.of.map((v) => { const o = ofInfo(v); return h('button', { class: 'ofbtn', style: { '--c': o.color }, title: `${c.name} of ${o.plural}`, onclick: () => answerMadeOf(v) }, o.key ? h('kbd', {}, o.key.toUpperCase()) : null, o.name); }),
+    h('span', { class: 'grow' }),
+    h('button', { class: 'btn ghost small', title: 'Leave it as just ' + c.name + ' (Esc)', onclick: () => answerMadeOf(null) }, 'Skip', h('kbd', {}, 'Esc')));
+  bar.hidden = false;
+}
+function closeOfBar() { ofAsk = null; const bar = $('#ofbar'); if (bar) { bar.hidden = true; bar.innerHTML = ''; } }
+function answerMadeOf(v) {
+  const a = ofAsk; if (!a) return;
+  closeOfBar();
+  if (v) setMadeOf(v, a.pids, false);
+  const c = classById.get(a.cls);
+  const pos = a.pos.filter((p) => p < order.length && D.pid(order[p]) === a.pids[a.pos.indexOf(p)]);
+  advanceAfter(pos.length ? pos : [focusPos], c, 0);
+  if (v) toast(`${plural(a.pids.length, 'particle')} → ${c.name} of ${ofInfo(v).plural}`);
+}
+/** Set what particles are made of (only where their class allows it). */
+function setMadeOf(v, pids, refresh = true) {
+  if (!needUser()) return 0;
+  const changes = [];
+  for (const pid of pids) {
+    const m = labels.mine.get(pid);
+    const c = m && classById.get(m.label);
+    if (!c || !c.of || !c.of.includes(v)) continue;
+    changes.push({ pid, before: snap(m), after: mkLabel(m.label, m.flags.slice(), v) });
+  }
+  if (!changes.length) return 0;
+  const c = classById.get(labels.mine.get(changes[0].pid).label);
+  commit(changes, `${plural(changes.length, 'particle')} → ${c.name} of ${ofInfo(v).plural}`);
+  if (refresh) { afterChange(changes.map((x) => x.pid)); toast(`${plural(changes.length, 'particle')} → ${c.name} of ${ofInfo(v).plural}`); }
+  else { afterChange(changes.map((x) => x.pid)); }
+  return changes.length;
+}
+
 function setLabelForPid(pid, after, desc) {
   if (!needUser()) return;
   if (commit([{ pid, before: snap(labels.mine.get(pid)), after }], desc)) afterChange([pid]);
@@ -1473,6 +1693,134 @@ function updateBinCounts() {
   const hb = $('#historyBtn');
   if (hb) hb.textContent = undoStack.length ? `History (${undoStack.length})` : 'History';
 }
+// ---------------------------------------------------------------- look-alike piles
+// Drag particles that look alike into piles before deciding what they are; then
+// name a pile, look through it, and classify the whole pile at once. Piles are
+// kept in this browser (per person), not in the database.
+const PILE_COLOURS = ['#e8590c', '#2f9e44', '#1971c2', '#c2255c', '#6741d9', '#0c8599', '#e67700', '#5c940d', '#862e9c', '#495057'];
+const piles = {
+  key() { return 'cpi.piles.' + (server.user?.username || 'practice'); },
+  list() { return lsGet(this.key(), []); },
+  save(l) { lsSet(this.key(), l); this._idx = null; },
+  get(id) { return this.list().find((p) => p.id === id); },
+  _idx: null,
+  of(pid) {
+    if (!this._idx || this._idxKey !== this.key()) {
+      this._idx = new Map(); this._idxKey = this.key();
+      for (const p of this.list()) for (const x of p.pids) this._idx.set(x, p);
+    }
+    return this._idx.get(pid);
+  },
+  add(id, pids) {
+    const l = this.list();
+    const set = new Set(pids);
+    for (const p of l) p.pids = p.pids.filter((x) => !set.has(x));   // a particle is in one pile at a time
+    const t = l.find((p) => p.id === id); if (t) t.pids.push(...pids);
+    this.save(l);
+  },
+  create(pids = []) {
+    const l = this.list();
+    const used = new Set(l.map((p) => p.short));
+    const short = 'ABCDEFGHJKLMNPQRSTUVWXYZ'.split('').find((c) => !used.has(c)) || String(l.length + 1);
+    const p = { id: Math.random().toString(36).slice(2, 9), short, name: 'Pile ' + short, color: PILE_COLOURS[l.length % PILE_COLOURS.length], pids: [] };
+    l.push(p); this.save(l);
+    if (pids.length) this.add(p.id, pids);
+    return p;
+  },
+  remove(id) { this.save(this.list().filter((p) => p.id !== id)); },
+  takeOut(pids) { const set = new Set(pids); const l = this.list(); for (const p of l) p.pids = p.pids.filter((x) => !set.has(x)); this.save(l); },
+  rename(id, name) { const l = this.list(); const p = l.find((x) => x.id === id); if (p) p.name = name; this.save(l); },
+};
+function renderPiles() {
+  const box = $('#piles'); if (!box) return;
+  box.innerHTML = '';
+  const inD = (p) => (D ? p.pids.filter((x) => D.index.has(x)) : p.pids);
+  box.append(h('span', { class: 'pilelabel', title: 'Drag particles that look alike onto a pile. Name it, look through it and classify the whole pile later.' }, 'Piles'));
+  for (const p of piles.list()) {
+    const here = inD(p);
+    const thumbs = here.slice(-3).map((pid) => h('img', { src: D.img(D.index.get(pid)), alt: '' }));
+    const b = h('button', { class: 'pile', style: { '--pc': p.color }, title: `${p.name}: ${plural(p.pids.length, 'particle')}. Click to look through it, name it or classify it all. Drag particles here to add them.`, onclick: () => openPile(p.id) },
+      h('span', { class: 'pileshort' }, p.short), h('span', { class: 'pilename' }, p.name), h('span', { class: 'pilethumbs' }, thumbs), h('span', { class: 'cnt' }, fmtInt(p.pids.length)));
+    makeDropTarget(b, (pos) => { addToPile(p.id, pos); });
+    box.append(b);
+  }
+  const nb = h('button', { class: 'pile newpile', title: 'Drag particles here to start a new pile (or click to make an empty one)', onclick: () => { piles.create(); renderPiles(); } }, '+ New pile');
+  makeDropTarget(nb, (pos) => { const p = piles.create(); addToPile(p.id, pos); });
+  box.append(nb);
+  if (!piles.list().length) box.append(h('span', { class: 'pilehint' }, 'Not sure yet? Drag look-alike particles into piles and decide what they are later.'));
+}
+function addToPile(id, pos) {
+  const pids = pos.map((p) => D.pid(order[p]));
+  piles.add(id, pids);
+  const p = piles.get(id);
+  toast(`${plural(pids.length, 'particle')} → ${p.name}`);
+  renderPiles();
+  redecorate(pos);
+  selection.clear(); redecorate([...pos]);
+}
+function openPile(id) {
+  const p0 = piles.get(id); if (!p0) return;
+  const d = h('dialog', { class: 'dlg piledlg' });
+  const draw = () => {
+    const p = piles.get(id);
+    if (!p) { d.close(); return; }
+    const here = D ? p.pids.filter((x) => D.index.has(x)) : [];
+    const name = h('input', { type: 'text', value: p.name, maxlength: 40, 'aria-label': 'Pile name', onchange: (e) => { piles.rename(id, e.target.value.trim() || p.name); renderPiles(); refreshShowSel(); } });
+    const grid = h('div', { class: 'pilegrid' }, here.slice(0, 300).map((pid) => {
+      const g = D.index.get(pid);
+      const m = labels.mine.get(pid);
+      const c = m && classById.get(m.label);
+      return h('div', { class: 'piletile', title: c ? `You: ${c.name}` : '' }, h('img', { src: D.img(g), alt: '', loading: 'lazy' }),
+        c ? h('span', { class: 'tag', style: { background: c.color } }) : null,
+        h('button', { class: 'pileout', title: 'Take it out of this pile', 'aria-label': 'Take out of pile', onclick: () => { piles.takeOut([pid]); renderPiles(); afterChange([pid]); draw(); } }, '×'));
+    }));
+    const others = p.pids.length - here.length;
+    d.innerHTML = '';
+    d.append(h('div', { class: 'dlg-inner' },
+      h('div', { class: 'pilehead' }, h('span', { class: 'pileshort big', style: { '--pc': p.color } }, p.short), name,
+        h('span', { class: 'muted' }, plural(p.pids.length, 'particle') + (others ? ` (${fmtInt(others)} in flights not selected)` : ''))),
+      here.length ? grid : h('p', { class: 'muted' }, 'Empty. Drag particles onto the pile to add them.'),
+      here.length > 300 ? h('p', { class: 'muted small' }, `Showing 300 of ${fmtInt(here.length)}. Use “Show on the page” to see them all.`) : null,
+      h('h4', { class: 'subh' }, `Classify all ${fmtInt(here.length)} as…`),
+      h('div', { class: 'pileclasses' }, scheme.classes.map((c) => h('button', { class: 'cls', style: { '--c': c.color }, disabled: !here.length, onclick: () => classifyPile(id, c.id, d) },
+        h('kbd', {}, c.key.toUpperCase()), h('span', { class: 'nm' }, c.name)))),
+      h('p', { class: 'muted small' }, 'Classifying a pile gives each particle that class (undo with Z) and then empties the pile.'),
+      h('div', { class: 'dlg-actions' },
+        h('button', { class: 'btn ghost danger', onclick: () => { if (!p.pids.length || confirm(`Delete ${p.name}? The particles aren’t affected, just taken out of the pile.`)) { piles.remove(id); renderPiles(); refreshShowSel(); if (S.show === 'pile:' + id) { S.show = 'todo'; savePrefs(); recompute(); } else afterChange(p.pids); d.close(); } } }, 'Delete pile'),
+        h('span', { class: 'grow' }),
+        h('button', { class: 'btn', disabled: !here.length, onclick: () => { S.show = 'pile:' + id; savePrefs(); refreshShowSel(); recompute(); d.close(); toast(`Showing ${p.name}. Classify them one by one, or open the pile again to classify them all.`, 3500); } }, 'Show on the page'),
+        h('button', { class: 'btn primary', onclick: () => d.close() }, 'Done'))));
+  };
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d);
+  draw();
+  d.showModal();
+}
+function classifyPile(id, clsId, d) {
+  if (!needUser()) return;
+  const p = piles.get(id); if (!p) return;
+  const here = p.pids.filter((x) => D.index.has(x));
+  const c = classById.get(clsId);
+  const changes = here.map((pid) => { const prev = labels.mine.get(pid); return { pid, before: snap(prev), after: mkLabel(clsId, prev ? prev.flags.slice() : [], prev && prev.label === clsId ? prev.made_of : null) }; });
+  bumpSession(changes.filter((x) => !x.before).length);
+  if (commit(changes, `${p.name}: ${plural(here.length, 'particle')} → ${c.name}`)) {
+    piles.takeOut(here);
+    if (!piles.get(id).pids.length) piles.remove(id);
+    renderPiles(); refreshShowSel();
+    if (S.show === 'pile:' + id) { S.show = 'todo'; savePrefs(); recompute(); } else afterChange(here);
+    hitBin(clsId);
+    toast(`${plural(here.length, 'particle')} → ${c.name}`);
+  }
+  d.close();
+}
+function refreshShowSel() {
+  const sel = $('#showSel'); if (!sel) return;
+  sel.querySelector('optgroup[label="In my pile…"]')?.remove();
+  const l = piles.list();
+  if (l.length) sel.append(h('optgroup', { label: 'In my pile…' }, l.map((p) => h('option', { value: 'pile:' + p.id }, p.name))));
+  sel.value = S.show;
+}
+
 function reviewBin(clsId) {
   S.show = 'cls:' + clsId; savePrefs();
   const sel = $('#showSel'); if (sel) sel.value = S.show;
@@ -1508,16 +1856,19 @@ function refreshFixer() {
       h('div', {},
         h('h3', {}, 'Change classification'),
         h('div', { class: 'insp-id' }, fixPid),
-        h('p', { class: 'fix-now' }, c ? [h('span', { class: 'dot', style: { background: c.color } }), ' You said ', h('b', {}, c.name)] : h('span', { class: 'muted' }, 'You haven’t classified this one.')))),
+        h('p', { class: 'fix-now' }, c ? [h('span', { class: 'dot', style: { background: c.color } }), ' You said ', h('b', {}, labelText(m))] : h('span', { class: 'muted' }, 'You haven’t classified this one.')))),
     h('div', { class: 'fix-classes' }, scheme.classes.map((k) => h('button', {
       class: 'cls' + (m && m.label === k.id ? ' current' : ''), style: { '--c': k.color },
-      onclick: () => { setLabelForPid(fixPid, { label: k.id, flags: m ? m.flags.slice() : [] }, `1 particle → ${k.name}`); hitBin(k.id); },
+      onclick: () => { setLabelForPid(fixPid, mkLabel(k.id, m ? m.flags.slice() : [], m && m.label === k.id ? m.made_of : null), `1 particle → ${k.name}`); hitBin(k.id); },
     }, h('kbd', {}, k.key.toUpperCase()), h('span', { class: 'nm' }, k.name)))),
+    c && c.of ? h('div', { class: 'fix-of' }, h('span', { class: 'muted small' }, `${c.name} of:`),
+      c.of.map((v) => { const o = ofInfo(v); return h('button', { class: 'ofbtn' + (m.made_of === v ? ' on' : ''), style: { '--c': o.color },
+        onclick: () => setLabelForPid(fixPid, mkLabel(m.label, m.flags.slice(), m.made_of === v ? null : v), m.made_of === v ? `${c.name}: made of cleared` : `1 particle → ${c.name} of ${o.plural}`) }, o.name); })) : null,
     h('div', { class: 'palette-flags fix-flags' }, scheme.flags.map((f) => h('button', {
       class: 'flag', 'aria-pressed': String(!!m && m.flags.includes(f.id)), disabled: !m,
       onclick: () => {
         const on = !m.flags.includes(f.id);
-        setLabelForPid(fixPid, { label: m.label, flags: on ? [...m.flags, f.id] : m.flags.filter((x) => x !== f.id) }, `${f.name} ${on ? 'added' : 'removed'}`);
+        setLabelForPid(fixPid, mkLabel(m.label, on ? [...m.flags, f.id] : m.flags.filter((x) => x !== f.id), m.made_of), `${f.name} ${on ? 'added' : 'removed'}`);
       },
     }, h('kbd', {}, f.key.toUpperCase()), f.name))),
     h('div', { class: 'dlg-actions' },
@@ -1571,7 +1922,7 @@ function onKey(e) {
     if (c && fixPid && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       const m = labels.mine.get(fixPid);
-      setLabelForPid(fixPid, { label: c.id, flags: m ? m.flags.slice() : [] }, `1 particle → ${c.name}`);
+      setLabelForPid(fixPid, mkLabel(c.id, m ? m.flags.slice() : [], m && m.label === c.id ? m.made_of : null), `1 particle → ${c.name}`);
     }
     return;
   }
@@ -1583,6 +1934,30 @@ function onKey(e) {
   if (mod && k.toLowerCase() === 'a' && S.view === 'grid') { e.preventDefault(); for (let p = 0; p < shown; p++) selection.add(p); $$('#grid .tile').forEach(decorateTile); return; }
   if (mod || e.altKey) return;
   const lk = k.toLowerCase();
+  // answering "made of…": that habit's key, M = mixed, X or Enter = can't tell, Esc = skip
+  if (ofAsk) {
+    const of = classById.get(ofAsk.cls).of;
+    const ck = classByKey.get(lk);
+    let v = null;
+    if (ck && of.includes(ck.id)) v = ck.id;
+    else if (lk === 'm' && of.includes('mixed')) v = 'mixed';
+    else if ((lk === 'x' || k === 'Enter') && of.includes('unknown')) v = 'unknown';
+    if (v) { e.preventDefault(); answerMadeOf(v); return; }
+    if (k === 'Escape') { e.preventDefault(); answerMadeOf(null); return; }
+    if (ck) closeOfBar();     // another class: change your mind about this particle
+  }
+  // Shift + a habit's key: "made of" that habit, for particles already classified
+  if (e.shiftKey && /^(Digit|Key)/.test(e.code || '')) {
+    const ch = e.code.replace(/^(Digit|Key)/, '').toLowerCase();
+    const ck = classByKey.get(ch);
+    const v = ck ? ck.id : ch === 'm' ? 'mixed' : ch === 'x' ? 'unknown' : null;
+    if (v) {
+      const pids = targets().map((p) => D.pid(order[p]));
+      if (pids.some((pid) => { const m = labels.mine.get(pid); const c = m && classById.get(m.label); return c && c.of && c.of.includes(v); })) {
+        e.preventDefault(); setMadeOf(v, pids); return;
+      }
+    }
+  }
   if (classByKey.has(lk)) { e.preventDefault(); classify(classByKey.get(lk).id); return; }
   if (flagByKey.has(lk)) { e.preventDefault(); toggleFlag(flagByKey.get(lk).id); return; }
   const grid = S.view === 'grid';
@@ -1772,7 +2147,7 @@ async function viewProgress(root) {
   // flights
   const fbody = h('tbody');
   const byF = new Map(st.by_flight.map((r) => [r.flight_id, r]));
-  for (const f of manifest?.flights || []) {
+  for (const f of visibleFlights()) {
     const r = byF.get(f.id);
     const done = r ? +r.particles : 0;
     fbody.append(h('tr', {}, h('td', {}, f.label || f.id), h('td', { class: 'n' }, fmtInt(done)), h('td', { class: 'n' }, fmtInt(f.n)),
@@ -1812,25 +2187,64 @@ async function viewGuide(root) {
   const inner = h('div', { class: 'page-inner' });
   root.append(inner);
   inner.append(h('h1', {}, 'How to classify'), h('p', { class: 'page-lede' }, scheme.help || ''));
-  // examples: particles with the most agreement for each class, from the flights you have loaded
-  const examples = new Map();
-  if (D) {
-    const best = new Map();
-    for (const [pid, c] of labels.counts) {
-      if (!D.index.has(pid)) continue;
-      const tot = Object.values(c).reduce((a, b) => a + b, 0);
-      for (const [lab, n] of Object.entries(c)) {
-        const score = n * 10 - (tot - n) * 15;
-        if (n / tot < 0.66) continue;
-        if (!best.has(lab)) best.set(lab, []);
-        best.get(lab).push([score, D.index.get(pid)]);
-      }
-    }
-    for (const [lab, arr] of best) examples.set(lab, arr.sort((a, b) => b[0] - a[0]).slice(0, 6).map((x) => x[1]));
+  // examples from everyone's classifications in the database, for the instruments ticked
+  const classesBox = h('div', { class: 'guide-classes' });
+  const instBox = h('div', { class: 'guide-inst' });
+  const exNote = h('span', { class: 'muted small' });
+  let seed = '';
+  const instFlights = new Map();
+  for (const f of visibleFlights()) { const k = instrumentKey(f); if (!instFlights.has(k)) instFlights.set(k, []); instFlights.get(k).push(f.id); }
+  const keysShown = [...new Set([...INSTRUMENTS, ...instFlights.keys()])];
+  if (!Array.isArray(S.guideInst)) S.guideInst = keysShown.filter((k) => instFlights.has(k));
+  for (const k of keysShown) {
+    const n = instFlights.get(k)?.length || 0;
+    instBox.append(h('label', { class: 'check' + (n ? '' : ' dim'), title: n ? `${n} flight${n === 1 ? '' : 's'}` : 'No flights from this instrument yet' },
+      h('input', { type: 'checkbox', checked: S.guideInst.includes(k), disabled: !n, onchange: (e) => {
+        S.guideInst = e.target.checked ? [...new Set([...S.guideInst, k])] : S.guideInst.filter((x) => x !== k); savePrefs(); loadExamples();
+      } }), k, h('small', { class: 'muted' }, n ? ` (${n})` : '')));
   }
-  inner.append(h('h2', {}, 'Classes'), h('div', { class: 'guide-classes' }, scheme.classes.map((c) => h('div', { class: 'guide-cls', style: { '--c': c.color } },
-    h('kbd', { class: '', style: { background: c.color } }, c.key.toUpperCase()), h('b', {}, c.name), h('p', {}, c.desc),
-    examples.get(c.id) ? h('div', { class: 'guide-ex' }, examples.get(c.id).map((g) => h('img', { src: D.img(g), alt: c.name + ' example', loading: 'lazy' }))) : null))));
+  const exUrl = (pid) => { const [fid, stem, idx] = pid.split(':'); return `data/flights/${encodeURIComponent(fid)}/img/${encodeURIComponent(stem)}/${idx}.png`; };
+  async function loadExamples() {
+    const fl = S.guideInst.flatMap((k) => instFlights.get(k) || []);
+    let ex = {};
+    if (fl.length && server.reachable && !server.demo) {
+      exNote.textContent = 'Loading examples…';
+      try { ex = (await api.fetchExamples(fl, 10, seed)).examples || {}; } catch { ex = {}; }
+    }
+    exNote.textContent = fl.length ? 'Examples are particles that most of the people who classified them agree on.' : 'Tick an instrument to see examples.';
+    classesBox.innerHTML = '';
+    for (const c of scheme.classes) {
+      const strip = h('div', { class: 'guide-ex' });
+      const show = (key) => {
+        strip.innerHTML = '';
+        const list = ex[key] || [];
+        if (!list.length) { strip.append(h('span', { class: 'muted small' }, 'No agreed examples yet.')); return; }
+        for (const e of list.slice(0, 8)) {
+          strip.append(h('a', { class: 'exthumb', href: exUrl(e.pid), target: '_blank', rel: 'noopener',
+            title: `${e.made_of ? `${c.name} of ${ofInfo(e.made_of).plural}` : c.name} · ${e.n} of ${e.t} ${e.t === 1 ? 'person' : 'people'} · ${e.pid}` },
+          h('img', { src: exUrl(e.pid), alt: `${c.name} example`, loading: 'lazy', onerror: (ev) => ev.target.closest('.exthumb')?.remove() }),
+          e.made_of && key === c.id ? h('span', { class: 'excap' }, ofInfo(e.made_of).name) : null));
+        }
+      };
+      const chips = (c.of || []).filter((v) => ex[`${c.id}:${v}`]?.length);
+      const chipBox = chips.length ? h('div', { class: 'exchips' },
+        h('button', { class: 'exchip on', onclick: (e) => { pick(e, c.id); } }, 'All'),
+        chips.map((v) => h('button', { class: 'exchip', onclick: (e) => { pick(e, `${c.id}:${v}`); } }, `of ${ofInfo(v).plural}`))) : null;
+      function pick(e, key) { chipBox.querySelectorAll('.exchip').forEach((b) => b.classList.toggle('on', b === e.currentTarget)); show(key); }
+      show(c.id);
+      const total = ex[c.id + '#count'] || 0;
+      classesBox.append(h('div', { class: 'guide-cls', style: { '--c': c.color } },
+        h('kbd', { class: '', style: { background: c.color } }, c.key.toUpperCase()),
+        h('div', {}, h('b', {}, c.name), total ? h('span', { class: 'muted small excount' }, ` ${fmtInt(total)} agreed`) : null),
+        h('p', {}, c.desc),
+        c.of ? h('p', { class: 'muted small' }, 'Made of: ' + c.of.map((v) => ofInfo(v).plural).join(', ')) : null,
+        chipBox, strip));
+    }
+  }
+  inner.append(h('div', { class: 'sec-h' }, h('h2', {}, 'Classes'), h('span', { class: 'grow' }),
+      h('button', { class: 'btn small', title: 'Show different examples', onclick: () => { seed = String(Math.random()).slice(2, 8); loadExamples(); } }, 'Other examples')),
+    h('div', { class: 'guide-instrow' }, h('span', { class: 'muted small' }, 'Examples from:'), instBox), exNote, classesBox);
+  loadExamples();
   inner.append(h('h2', { style: { marginTop: '28px' } }, 'Flags'),
     h('p', { class: 'muted' }, 'Flags add detail to a class. Press a flag key before the class key to include it, or press it after classifying to add or remove it.'),
     h('div', { class: 'guide-classes' }, scheme.flags.map((f) => h('div', { class: 'guide-cls', style: { '--c': 'var(--accent)' } },
@@ -1840,8 +2254,8 @@ async function viewGuide(root) {
     ['Click, Shift-click, ⌘/Ctrl-click', 'Select one, a run, or add to the selection'], ['⌘/Ctrl A', 'Select everything shown'],
     ['Enter / double-click', 'Open one at a time'], ['V', 'Switch grid / one at a time'], ['Esc', 'Clear selection, or back to grid'],
     ['O', 'Show / hide the particle outline'], ['B', 'Boost contrast'], ['M / Shift M', 'Next / previous colour map'],
-    ['Z / ⌘/Ctrl Z', 'Undo'], ['Y / Shift Z / ⌘/Ctrl Shift Z', 'Redo'], ['Delete', 'Remove your label from the selected particles'],
-    ['Drag', 'Drag particles (or a whole selection) onto a class to classify them, or onto Remove label'], ['?', 'This page'],
+    ['Z / ⌘/Ctrl Z', 'Undo'], ['Y / Shift Z / ⌘/Ctrl Shift Z', 'Redo'], ['Delete', 'Remove your label from the selected particles'], ['Shift + class key', 'For an aggregate, fragment or graupel: say what it is made of (e.g. Shift 4 = of plates). M = mixed, X = can’t tell'],
+    ['Drag', 'Drag particles (or a whole selection) onto a class to classify them, onto a pile to sort look-alikes for later, or onto Remove label'], ['?', 'This page'],
   ];
   inner.append(h('h2', { style: { marginTop: '28px' } }, 'Keyboard'),
     h('div', { class: 'card' }, h('div', { class: 'keys' }, keys.map(([k, d]) => [h('span', {}, k.split(/( \/ |, )/).map((p) => /^( \/ |, )$/.test(p) ? p : h('kbd', { class: 'k' }, p))), h('span', {}, d)]))));
@@ -1850,7 +2264,10 @@ async function viewGuide(root) {
       h('li', {}, 'Use True scale when comparing sizes: every particle is drawn at the same µm per screen pixel, with a scale bar in the toolbar.'),
       h('li', {}, 'In the grid, select several particles that look alike and press one key, or drag them onto a class, to classify them together.'),
       h('li', {}, 'Made a mistake? Press another class key on the particle to change it, Delete to remove it, or Z to undo. The number on each class button shows how many you’ve put there; click it to review them.'),
-      h('li', {}, 'Use Random, mixed sizes to see a sample that covers small and large particles evenly.'),
+      h('li', {}, 'Use Balanced by size (the order menu) so large particles turn up as often as small ones: set the size bins and the page takes particles from each bin in turn.'),
+      h('li', {}, 'Largest fills draws every particle at the same scale, with the largest one shown filling the space, so shapes and sizes can be compared at a glance.'),
+      h('li', {}, 'Not sure what something is yet? Drag look-alikes onto a pile (the Piles row, or “+ New pile”). Later, click the pile to look through it, take out any odd ones, and classify the whole pile at once.'),
+      h('li', {}, 'To classify without saving to the database (to try things out, or to send your work to someone), choose Practice mode in the menu under your name, then Save to a file.'),
       h('li', {}, 'If you’re not sure, classify your best guess and add the Unsure flag, or use Can’t tell. Both are useful.')));
 }
 

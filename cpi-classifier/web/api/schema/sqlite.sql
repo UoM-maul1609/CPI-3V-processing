@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS labels (
   created_at     TEXT NOT NULL,
   updated_at     TEXT NOT NULL,
   session_id     INTEGER NULL,
+  made_of        TEXT NULL,
   UNIQUE (user_id, pid)
 );
 CREATE INDEX IF NOT EXISTS ix_pid ON labels(pid);
@@ -39,6 +40,7 @@ CREATE TABLE IF NOT EXISTS label_log (
   pid        TEXT NOT NULL,
   label      TEXT NULL,
   flags      TEXT NULL,
+  made_of    TEXT NULL,
   created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_log_user ON label_log(user_id);

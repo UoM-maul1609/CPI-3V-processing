@@ -190,6 +190,20 @@ async function classesView(inner) {
     box.innerHTML = '';
     const problems = check();
     const preview = h('div', { class: 'palette-classes preview' }, sch.classes.map((c) => h('span', { class: 'cls', style: { '--c': c.color } }, h('kbd', {}, (c.key || '').toUpperCase()), h('span', { class: 'nm' }, c.name || '…'))));
+    // "Made of": which habits people can pick after choosing this class (e.g. aggregate of plates)
+    const ofEditor = (c) => {
+      const opts = [...sch.classes.filter((x) => x.id && x !== c).map((x) => [x.id, x.name]), ['mixed', 'Mixed'], ['unknown', 'Can’t tell']];
+      const chosen = new Set(c.of || []);
+      return h('details', { class: 'ce-of', open: chosen.size > 0 },
+        h('summary', { class: 'muted small' }, chosen.size ? `Made of: ${[...chosen].map((v) => opts.find((o) => o[0] === v)?.[1] || v).join(', ')}` : 'Also ask what it’s made of…'),
+        h('div', { class: 'ce-ofchips' }, opts.map(([id, name]) => h('label', { class: 'check small' },
+          h('input', { type: 'checkbox', checked: chosen.has(id), onchange: (e) => {
+            if (e.target.checked) chosen.add(id); else chosen.delete(id);
+            const order = opts.map((o) => o[0]).filter((x) => chosen.has(x));
+            if (order.length) c.of = order; else delete c.of;
+            render();
+          } }), name))));
+    };
     const row = (kind, c, i) => {
       const list = sch[kind];
       const used = usage.get(c.id) || 0;
@@ -202,7 +216,8 @@ async function classesView(inner) {
         h('input', { class: 'ce-key', value: (c.key || '').toUpperCase(), maxlength: '1', 'aria-label': 'Key', title: 'Keyboard key', onchange: (e) => { c.key = e.target.value.toLowerCase(); render(); } }),
         h('span', { class: 'ce-text' },
           h('input', { class: 'ce-name', value: c.name, placeholder: 'Name', 'aria-label': 'Name', onchange: (e) => { c.name = e.target.value; if (isNew) c.id = ''; render(); } }),
-          h('input', { class: 'ce-desc', value: c.desc || '', placeholder: 'What it looks like (shown as a tip and in the guide)', 'aria-label': 'Description', onchange: (e) => { c.desc = e.target.value; } })),
+          h('input', { class: 'ce-desc', value: c.desc || '', placeholder: 'What it looks like (shown as a tip and in the guide)', 'aria-label': 'Description', onchange: (e) => { c.desc = e.target.value; } }),
+          kind === 'classes' ? ofEditor(c) : null),
         h('span', { class: 'ce-used muted small' }, used ? `${used.toLocaleString()} used` : isNew ? 'new' : 'unused'),
         h('button', { class: 'iconbtn sm danger', 'aria-label': `Remove ${c.name}`, title: 'Remove', onclick: () => {
           if (used && !confirm(`${used} classifications use “${c.name}”. They stay in the database (and in downloads) under the id “${c.id}”, but people can no longer choose it. Remove it?`)) return;
@@ -527,32 +542,76 @@ function renderFlights() {
   const { h, $, fmtInt, display } = C;
   const box = $('#flightsBox'); if (!box) return;
   box.innerHTML = '';
+  const live = state.flights.filter((f) => !f.hidden), archived = state.flights.filter((f) => f.hidden);
   box.append(h('div', { class: 'sec-h' }, h('h2', {}, 'Imported flights'),
-    h('span', { class: 'muted' }, state.flights.length ? `${fmtInt(state.flights.length)} flight${state.flights.length === 1 ? '' : 's'}, ${fmtInt(state.flights.reduce((s, f) => s + f.n, 0))} particles` : '')));
+    h('span', { class: 'muted' }, live.length ? `${fmtInt(live.length)} in use, ${fmtInt(live.reduce((s, f) => s + f.n, 0))} particles` : '')));
   if (!state.flights.length) { box.append(h('p', { class: 'muted' }, 'None yet. Import a folder above.')); return; }
+
+  const setHidden = async (ids, hidden) => {
+    try {
+      await C.api.adminPost('flight_hidden', { ids, hidden });
+      C.toast(hidden ? `Archived ${ids.length === 1 ? ids[0] : ids.length + ' flights'}. Their classifications are kept.` : `Restored ${ids.length === 1 ? ids[0] : ids.length + ' flights'}`);
+      await C.onDataChanged(); loadFlights();
+    } catch (err) { C.toast(err.message, 4000); }
+  };
+  const actions = (f) => h('td', { class: 'actions' },
+    f.has_config ? h('button', { class: 'btn small', onclick: () => {
+      const folder = state.folders.find((x) => x.dir === f.source_dir);
+      if (!folder) { C.toast('Its folder is no longer on the server', 4000); return; }
+      if (folder.catalogue) openProjectForm(folder, f.config_id); else openForm(folder, f.id);
+    } }, 'Change settings') : null,
+    f.hidden ? h('button', { class: 'btn small', onclick: () => setHidden([f.id], false) }, 'Restore')
+      : h('button', { class: 'btn small ghost', title: 'Take it off the Classify and Flights pages. Its images and classifications are kept; Restore brings it back.', onclick: () => setHidden([f.id], true) }, 'Archive'),
+    h('button', { class: 'btn small ghost danger', onclick: () => confirmRemove(f) }, 'Remove'));
+
+  // in use: grouped by project, with tick boxes to archive several at once
+  const picked = new Set();
+  const bulk = h('button', { class: 'btn small', disabled: true, onclick: () => setHidden([...picked], true) }, 'Archive ticked');
+  const syncBulk = () => { bulk.disabled = !picked.size; bulk.textContent = picked.size ? `Archive ${picked.size} ticked` : 'Archive ticked'; };
   const tbody = h('tbody');
-  for (const f of state.flights) {
-    tbody.append(h('tr', { class: f.hidden ? 'is-hidden' : '' },
-      h('td', {}, h('b', {}, f.label), h('div', { class: 'muted small' }, f.id + (f.source_dir ? ` from ${f.source_dir}` : ''))),
-      h('td', {}, f.campaign || h('span', { class: 'muted' }, '–')),
-      h('td', { class: 'n' }, fmtInt(f.n)),
-      h('td', {}, h('span', { class: 'cmchip' }, h('i', { style: { background: display.gradient(f.colormap) } }), display.colormap(f.colormap)?.name || f.colormap)),
-      h('td', { class: 'num nowrap' }, (f.exported_utc || '').slice(0, 10)),
-      h('td', {}, h('label', { class: 'switch', title: 'Hidden flights are not offered to people classifying. Their labels are kept.' },
-        h('input', { type: 'checkbox', checked: !f.hidden, onchange: async (e) => {
-          try { await C.api.adminPost('flight_hidden', { id: f.id, hidden: !e.target.checked }); C.toast(e.target.checked ? `${f.id} is visible` : `${f.id} is hidden`); await C.onDataChanged(); loadFlights(); }
-          catch (err) { C.toast(err.message, 4000); e.target.checked = !e.target.checked; }
-        } }), h('span', {}, f.hidden ? 'Hidden' : 'Shown'))),
-      h('td', { class: 'actions' },
-        f.has_config ? h('button', { class: 'btn small', onclick: () => {
-          const folder = state.folders.find((x) => x.dir === f.source_dir);
-          if (!folder) { C.toast('Its folder is no longer on the server', 4000); return; }
-          if (folder.catalogue) openProjectForm(folder, f.config_id); else openForm(folder, f.id);
-        } }, 'Change settings') : null,
-        h('button', { class: 'btn small ghost danger', onclick: () => confirmRemove(f) }, 'Remove'))));
+  const byProject = new Map();
+  for (const f of live) { const k = f.campaign || ''; if (!byProject.has(k)) byProject.set(k, []); byProject.get(k).push(f); }
+  for (const [proj, list] of [...byProject].sort((a, b) => (a[0] ? 0 : 1) - (b[0] ? 0 : 1) || a[0].localeCompare(b[0]))) {
+    const all = h('input', { type: 'checkbox', 'aria-label': `Tick all of ${proj || 'no project'}`, onchange: (e) => {
+      for (const f of list) { if (e.target.checked) picked.add(f.id); else picked.delete(f.id); }
+      tbody.querySelectorAll(`input[data-proj="${CSS.escape(proj)}"]`).forEach((c) => { c.checked = e.target.checked; });
+      syncBulk();
+    } });
+    tbody.append(h('tr', { class: 'grouprow' }, h('td', {}, all), h('td', { colspan: '6' }, h('b', {}, proj || 'No project'),
+      h('span', { class: 'muted small' }, `  ${list.length} flight${list.length === 1 ? '' : 's'}, ${fmtInt(list.reduce((a, f) => a + f.n, 0))} particles`))));
+    for (const f of list.sort((a, b) => (a.date || '').localeCompare(b.date || '') || a.id.localeCompare(b.id))) {
+      tbody.append(h('tr', {},
+        h('td', {}, h('input', { type: 'checkbox', 'data-proj': proj, 'aria-label': 'Tick ' + f.id, onchange: (e) => { if (e.target.checked) picked.add(f.id); else picked.delete(f.id); syncBulk(); } })),
+        h('td', {}, h('b', {}, f.label), h('div', { class: 'muted small' }, f.id + (f.source_dir ? ` from ${f.source_dir}` : ''))),
+        h('td', { class: 'n' }, fmtInt(f.n)),
+        h('td', {}, h('span', { class: 'cmchip' }, h('i', { style: { background: display.gradient(f.colormap) } }), display.colormap(f.colormap)?.name || f.colormap)),
+        h('td', { class: 'num nowrap' }, (f.exported_utc || '').slice(0, 10)),
+        h('td', {}),
+        actions(f)));
+    }
   }
-  box.append(h('div', { class: 'tablewrap' }, h('table', { class: 'data' },
-    h('thead', {}, h('tr', {}, h('th', {}, 'Flight'), h('th', {}, 'Project'), h('th', { class: 'n' }, 'Particles'), h('th', {}, 'Colour map'), h('th', {}, 'Imported'), h('th', {}, 'On the classify page'), h('th', {}, ''))), tbody)));
+  box.append(
+    h('p', { class: 'muted small', style: { margin: '0 0 8px' } }, 'Flights you don’t want people to classify: tick them and archive them. Archived flights disappear from the Classify, Flights and Progress pages; their images and any classifications are kept, and Restore brings them back.'),
+    h('div', { class: 'tablewrap' }, h('table', { class: 'data flightadmin' },
+      h('thead', {}, h('tr', {}, h('th', {}, ''), h('th', {}, 'Flight'), h('th', { class: 'n' }, 'Particles'), h('th', {}, 'Colour map'), h('th', {}, 'Imported'), h('th', {}), h('th', {}, ''))), tbody)),
+    h('div', { class: 'row', style: { marginTop: '8px' } }, bulk));
+
+  if (archived.length) {
+    const ab = h('tbody');
+    for (const f of archived.sort((a, b) => (a.campaign || '').localeCompare(b.campaign || '') || (a.date || '').localeCompare(b.date || ''))) {
+      ab.append(h('tr', { class: 'is-hidden' },
+        h('td', {}, h('b', {}, f.label), h('div', { class: 'muted small' }, f.id)),
+        h('td', {}, f.campaign || h('span', { class: 'muted' }, '–')),
+        h('td', { class: 'n' }, fmtInt(f.n)),
+        actions(f)));
+    }
+    const restoreAll = h('button', { class: 'btn small', onclick: () => setHidden(archived.map((f) => f.id), false) }, 'Restore all');
+    box.append(h('details', { class: 'archived', open: archived.length <= 5 },
+      h('summary', {}, h('b', {}, `Archived (${archived.length})`), h('span', { class: 'muted small' }, `  ${fmtInt(archived.reduce((s, f) => s + f.n, 0))} particles, not shown for classifying`)),
+      h('div', { class: 'tablewrap' }, h('table', { class: 'data' },
+        h('thead', {}, h('tr', {}, h('th', {}, 'Flight'), h('th', {}, 'Project'), h('th', { class: 'n' }, 'Particles'), h('th', {}, ''))), ab)),
+      archived.length > 1 ? h('div', { class: 'row', style: { marginTop: '8px' } }, restoreAll) : null));
+  }
 }
 function confirmRemove(f) {
   const { h } = C;

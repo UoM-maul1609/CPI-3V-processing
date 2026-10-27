@@ -55,11 +55,11 @@ export function buildSessionCsv() {
     `classes: ${scheme.classes.map((c) => `${c.id}=${c.name}`).join('; ')}`,
     `count: ${entries.length}`,
   ].map((l) => `# ${l}`);
-  const rows = [['pid', 'flight', 'mat_file', 'index', 'pipeline_id', 'class', 'class_name', 'flags', 'classified_utc']];
-  for (const [pid, [lab, flags, t]] of entries) {
+  const rows = [['pid', 'flight', 'mat_file', 'index', 'pipeline_id', 'class', 'class_name', 'made_of', 'flags', 'classified_utc']];
+  for (const [pid, [lab, flags, t, madeOf]] of entries) {
     const [f, mat, i] = pid.split(':');
     const g = D?.index.get(pid);
-    rows.push([pid, f, mat, i, g === undefined ? '' : sourceId(D, g), lab, name.get(lab) || '', flags || '', iso(t)]);
+    rows.push([pid, f, mat, i, g === undefined ? '' : sourceId(D, g), lab, name.get(lab) || '', madeOf || '', flags || '', iso(t)]);
   }
   return head.join('\n') + '\n' + rows.map((r) => r.map(cell).join(',')).join('\n') + '\n';
 }
@@ -98,7 +98,7 @@ export function parseSessionCsv(text) {
   if (!rows.length) throw new Error('The file is empty.');
   const hdr = rows[0].map((s) => s.trim().toLowerCase());
   const col = (...names) => names.map((n) => hdr.indexOf(n)).find((i) => i >= 0) ?? -1;
-  const iPid = col('pid'), iLab = col('class', 'label'), iFl = col('flags'), iT = col('classified_utc', 'updated_utc', 'created_utc');
+  const iPid = col('pid'), iLab = col('class', 'label'), iFl = col('flags'), iOf = col('made_of'), iT = col('classified_utc', 'updated_utc', 'created_utc');
   if (iPid < 0 || iLab < 0) throw new Error('This doesn’t look like a classification file: it needs “pid” and “class” columns.');
   const items = [];
   const seen = new Map();
@@ -108,7 +108,7 @@ export function parseSessionCsv(text) {
     const pid = (r[iPid] || '').trim(), label = (r[iLab] || '').trim();
     if (!/^[A-Za-z0-9._-]+:[A-Za-z0-9._-]+:\d+$/.test(pid) || !label) { bad++; continue; }
     const t = iT >= 0 && r[iT] ? Date.parse(r[iT].replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(r[iT]) ? '' : 'Z')) / 1000 : null;
-    const it = { pid, label, flags: iFl >= 0 && r[iFl] ? r[iFl].split(/[;,]/).map((s) => s.trim()).filter(Boolean) : [], t: Number.isFinite(t) ? Math.round(t) : null };
+    const it = { pid, label, made_of: iOf >= 0 && r[iOf] ? r[iOf].trim() : null, flags: iFl >= 0 && r[iFl] ? r[iFl].split(/[;,]/).map((s) => s.trim()).filter(Boolean) : [], t: Number.isFinite(t) ? Math.round(t) : null };
     if (seen.has(pid)) items[seen.get(pid)] = it; else { seen.set(pid, items.length); items.push(it); }
   }
   // the site's own export has a person per row: use the first name if it is the only one
@@ -239,6 +239,7 @@ async function openUploadPreview(fileName, parsed, onDone) {
   const notHere = D ? items.filter((it) => !D.index.has(it.pid)).length : 0;
   const by = new Map();
   for (const it of items) by.set(it.label, (by.get(it.label) || 0) + 1);
+  const ofN = items.filter((it) => it.made_of).length;
   const max = Math.max(1, ...by.values());
 
   // people (admins can add work on someone else's behalf)
@@ -305,6 +306,7 @@ async function openUploadPreview(fileName, parsed, onDone) {
       h('div', { class: 'hbars' }, scheme.classes.filter((c) => by.has(c.id)).map((c) => h('div', { class: 'hbar' },
         h('span', {}, c.name), h('div', { class: 'track' }, h('div', { class: 'fill', style: { width: (100 * by.get(c.id) / max) + '%', background: c.color } })),
         h('span', { class: 'v' }, C.fmtInt(by.get(c.id))))))),
+    ofN ? h('p', { class: 'muted small', style: { margin: '8px 0 0' } }, `${plural(ofN, 'classification')} also say${ofN === 1 ? 's' : ''} what the particle is made of (e.g. aggregate of plates).`) : null,
     warn.length ? h('ul', { class: 'upwarn' }, warn.map((w) => h('li', {}, w))) : null,
     h('h4', { class: 'subh' }, 'Whose work is this?'), seg,
     h('h4', { class: 'subh' }, 'About the person ', h('small', { class: 'muted' }, 'from the file; change anything that’s wrong')),

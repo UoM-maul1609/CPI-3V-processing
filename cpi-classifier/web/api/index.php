@@ -130,9 +130,9 @@ case 'labels':
     $u = current_user();
     $mine = [];
     if ($u) {
-        $st = db()->prepare("SELECT pid, label, flags FROM labels WHERE user_id = ? AND flight_id IN ($in)");
+        $st = db()->prepare("SELECT pid, label, flags, made_of FROM labels WHERE user_id = ? AND flight_id IN ($in)");
         $st->execute(array_merge([$u['id']], $flights));
-        foreach ($st as $r) $mine[$r['pid']] = [$r['label'], $r['flags']];
+        foreach ($st as $r) $mine[$r['pid']] = $r['made_of'] !== null ? [$r['label'], $r['flags'], $r['made_of']] : [$r['label'], $r['flags']];
     }
     // counts per particle and per label (all users) -> {pid: {label: n}}
     $st = db()->prepare("SELECT pid, label, COUNT(*) AS n FROM labels WHERE flight_id IN ($in) GROUP BY pid, label");
@@ -142,7 +142,7 @@ case 'labels':
     out(['mine' => (object)$mine, 'counts' => (object)$counts]);
 
 case 'save':
-    // {items: [{pid, label|null, flags: [..], note?}], scheme_version}
+    // {items: [{pid, label|null, flags: [..], made_of?, note?}], scheme_version}
     $u = require_user();
     $b = require_post();
     $items = $b['items'] ?? [];
@@ -150,19 +150,20 @@ case 'save':
     $sch = scheme();
     $okLabels = array_column($sch['classes'] ?? [], 'id');
     $okFlags = array_column($sch['flags'] ?? [], 'id');
+    $ofMap = made_of_map($sch);
     $ver = substr((string)($b['scheme_version'] ?? ($sch['version'] ?? '')), 0, 32);
     $now = now_sql();
     $pdo = db();
     $upsert = is_sqlite()
-        ? 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)
+        ? 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at,made_of) VALUES (?,?,?,?,?,?,?,?,?,?)
            ON CONFLICT(user_id,pid) DO UPDATE SET label=excluded.label, flags=excluded.flags, note=excluded.note,
-           scheme_version=excluded.scheme_version, updated_at=excluded.updated_at, session_id=NULL'
-        : 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)
+           scheme_version=excluded.scheme_version, updated_at=excluded.updated_at, session_id=NULL, made_of=excluded.made_of'
+        : 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at,made_of) VALUES (?,?,?,?,?,?,?,?,?,?)
            ON DUPLICATE KEY UPDATE label=VALUES(label), flags=VALUES(flags), note=VALUES(note),
-           scheme_version=VALUES(scheme_version), updated_at=VALUES(updated_at), session_id=NULL';
+           scheme_version=VALUES(scheme_version), updated_at=VALUES(updated_at), session_id=NULL, made_of=VALUES(made_of)';
     $ins = $pdo->prepare($upsert);
     $del = $pdo->prepare('DELETE FROM labels WHERE user_id = ? AND pid = ?');
-    $logq = $pdo->prepare('INSERT INTO label_log (user_id,pid,label,flags,created_at) VALUES (?,?,?,?,?)');
+    $logq = $pdo->prepare('INSERT INTO label_log (user_id,pid,label,flags,created_at,made_of) VALUES (?,?,?,?,?,?)');
     $saved = 0;
     $pdo->beginTransaction();
     try {
@@ -172,7 +173,7 @@ case 'save':
             $label = $it['label'] ?? null;
             if ($label === null || $label === '') {
                 $del->execute([$u['id'], $pid]);
-                $logq->execute([$u['id'], $pid, null, null, $now]);
+                $logq->execute([$u['id'], $pid, null, null, $now, null]);
                 $saved++;
                 continue;
             }
@@ -181,8 +182,9 @@ case 'save':
                 fn($f) => is_string($f) && (!$okFlags || in_array($f, $okFlags, true))));
             $flagStr = implode(',', $flags);
             $note = isset($it['note']) ? mb_substr((string)$it['note'], 0, 500) : null;
-            $ins->execute([$u['id'], $pid, $m[1], $label, $flagStr, $note, $ver, $now, $now]);
-            $logq->execute([$u['id'], $pid, $label, $flagStr, $now]);
+            $mo = clean_made_of($ofMap, $label, $it['made_of'] ?? null);
+            $ins->execute([$u['id'], $pid, $m[1], $label, $flagStr, $note, $ver, $now, $now, $mo]);
+            $logq->execute([$u['id'], $pid, $label, $flagStr, $now, $mo]);
             $saved++;
         }
         $pdo->commit();
@@ -192,6 +194,52 @@ case 'save':
         fail(500, 'Could not save');
     }
     out(['saved' => $saved]);
+
+case 'examples':
+    // Example particles for the Guide: for each class (and each "made of"), particles that the
+    // people who classified them agree on, from all classifications in the database.
+    // ?flights=A,B (optional: only these flights)  &per=8  &seed=N (a different random choice)
+    if (is_demo()) out(['examples' => (object)[]]);
+    ensure_schema();
+    $per = max(1, min(24, (int)($_GET['per'] ?? 8)));
+    $seed = (string)($_GET['seed'] ?? '');
+    $where = ''; $args = [];
+    if (isset($_GET['flights'])) {
+        $fl = array_values(array_filter(explode(',', (string)$_GET['flights']), fn($f) => preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/', $f)));
+        if (!$fl) out(['examples' => (object)[]]);
+        $where = 'WHERE flight_id IN (' . implode(',', array_fill(0, count($fl), '?')) . ')';
+        $args = $fl;
+    }
+    $tot = [];
+    $st = db()->prepare("SELECT pid, COUNT(*) AS t FROM labels $where GROUP BY pid");
+    $st->execute($args);
+    foreach ($st as $r) $tot[$r['pid']] = (int)$r['t'];
+    $st = db()->prepare("SELECT pid, label, made_of, COUNT(*) AS n FROM labels $where GROUP BY pid, label, made_of");
+    $st->execute($args);
+    $byPidLabel = [];   // pid|label -> [n, [made_of => n]]
+    foreach ($st as $r) {
+        $k = $r['pid'] . "\t" . $r['label'];
+        $byPidLabel[$k][0] = ($byPidLabel[$k][0] ?? 0) + (int)$r['n'];
+        if ($r['made_of'] !== null) $byPidLabel[$k][1][$r['made_of']] = ($byPidLabel[$k][1][$r['made_of']] ?? 0) + (int)$r['n'];
+    }
+    $cand = [];   // group ("label" or "label:made_of") -> [[score, pid, made_of, n, t]]
+    foreach ($byPidLabel as $k => [$n, $ofs]) {
+        [$pid, $label] = explode("\t", $k);
+        $t = $tot[$pid];
+        if ($n / $t < 0.66) continue;                                   // most people agree
+        $score = $n * 10 - ($t - $n) * 15 + (crc32($pid . $seed) % 1000) / 1000;   // agreement first, then random
+        $mo = null;
+        if (!empty($ofs)) { arsort($ofs); $mo = array_key_first($ofs); if ($ofs[$mo] / $n < 0.5) $mo = null; }
+        $cand[$label][] = [$score, $pid, $mo, $n, $t];
+        if ($mo !== null) $cand["$label:$mo"][] = [$score, $pid, $mo, $n, $t];
+    }
+    $outEx = [];
+    foreach ($cand as $g => $list) {
+        usort($list, fn($a, $b) => $b[0] <=> $a[0]);
+        $outEx[$g] = array_map(fn($x) => ['pid' => $x[1], 'made_of' => $x[2], 'n' => $x[3], 't' => $x[4]], array_slice($list, 0, $per));
+        $outEx[$g . '#count'] = count($list);
+    }
+    out(['examples' => (object)$outEx]);
 
 case 'session_upload':
     // Classifications from a session file (practice mode download), saved as one person's work.
@@ -237,15 +285,16 @@ case 'session_upload':
         $sid = (int)$pdo->lastInsertId();
         $replace = !empty($b['replace']);
         $upsert = is_sqlite()
-            ? 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at,session_id) VALUES (?,?,?,?,?,?,?,?,?,?)
+            ? 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at,session_id,made_of) VALUES (?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(user_id,pid) DO UPDATE SET label=excluded.label, flags=excluded.flags, scheme_version=excluded.scheme_version,
-               updated_at=excluded.updated_at, session_id=excluded.session_id'
-            : 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at,session_id) VALUES (?,?,?,?,?,?,?,?,?,?)
+               updated_at=excluded.updated_at, session_id=excluded.session_id, made_of=excluded.made_of'
+            : 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at,session_id,made_of) VALUES (?,?,?,?,?,?,?,?,?,?,?)
                ON DUPLICATE KEY UPDATE label=VALUES(label), flags=VALUES(flags), scheme_version=VALUES(scheme_version),
-               updated_at=VALUES(updated_at), session_id=VALUES(session_id)';
+               updated_at=VALUES(updated_at), session_id=VALUES(session_id), made_of=VALUES(made_of)';
         $ins = $pdo->prepare($upsert);
         $has = $pdo->prepare('SELECT 1 FROM labels WHERE user_id = ? AND pid = ?');
-        $logq = $pdo->prepare('INSERT INTO label_log (user_id,pid,label,flags,created_at) VALUES (?,?,?,?,?)');
+        $logq = $pdo->prepare('INSERT INTO label_log (user_id,pid,label,flags,created_at,made_of) VALUES (?,?,?,?,?,?)');
+        $ofMap = made_of_map($sch);
         $saved = $bad = $kept = 0;
         $unknown = [];
         $ver = $clip('scheme_version', 32) ?? ($sch['version'] ?? null);
@@ -257,8 +306,9 @@ case 'session_upload':
             if (!$replace) { $has->execute([$cid, $pid]); if ($has->fetch()) { $kept++; continue; } }
             $flags = implode(',', array_values(array_filter((array)($it['flags'] ?? []), fn($f) => is_string($f) && (!$okFlags || in_array($f, $okFlags, true)))));
             $when = isset($it['t']) && is_numeric($it['t']) ? gmdate('Y-m-d H:i:s', (int)$it['t']) : now_sql();
-            $ins->execute([$cid, $pid, $m[1], $label, $flags, null, $ver, $when, now_sql(), $sid]);
-            $logq->execute([$cid, $pid, $label, $flags, now_sql()]);
+            $mo = clean_made_of($ofMap, $label, $it['made_of'] ?? null);
+            $ins->execute([$cid, $pid, $m[1], $label, $flags, null, $ver, $when, now_sql(), $sid, $mo]);
+            $logq->execute([$cid, $pid, $label, $flags, now_sql(), $mo]);
             $saved++;
         }
         $pdo->prepare('UPDATE sessions SET n_labels = ? WHERE id = ?')->execute([$saved, $sid]);
@@ -335,7 +385,7 @@ case 'export':
     // Admins: everyone's labels. Others: their own.
     $u = require_user();
     $fmt = $_GET['format'] ?? 'csv';
-    $sql = 'SELECT l.pid, l.flight_id, l.label, l.flags, l.note, l.scheme_version, l.created_at, l.updated_at,
+    $sql = 'SELECT l.pid, l.flight_id, l.label, l.made_of, l.flags, l.note, l.scheme_version, l.created_at, l.updated_at,
                    u.username, u.display_name, u.expertise, u.affiliation, u.is_external, l.session_id
             FROM labels l JOIN users u ON u.id = l.user_id';
     $args = [];
@@ -353,11 +403,11 @@ case 'export':
     header('Content-Type: text/csv; charset=utf-8');
     header("Content-Disposition: attachment; filename=\"cpi-labels-$stamp.csv\"");
     $fh = fopen('php://output', 'w');
-    fputcsv($fh, ['pid', 'flight', 'mat_file', 'index', 'label', 'flags', 'note', 'scheme_version',
+    fputcsv($fh, ['pid', 'flight', 'mat_file', 'index', 'label', 'made_of', 'flags', 'note', 'scheme_version',
                   'created_utc', 'updated_utc', 'username', 'name', 'expertise', 'affiliation', 'account', 'session_id']);
     foreach ($st as $r) {
         preg_match(PID_RE, $r['pid'], $m);
-        fputcsv($fh, [$r['pid'], $r['flight_id'], $m[2] ?? '', $m[3] ?? '', $r['label'], $r['flags'], $r['note'],
+        fputcsv($fh, [$r['pid'], $r['flight_id'], $m[2] ?? '', $m[3] ?? '', $r['label'], $r['made_of'], $r['flags'], $r['note'],
                       $r['scheme_version'], $r['created_at'], $r['updated_at'], $r['username'], $r['display_name'],
                       $r['expertise'], $r['affiliation'], (int)$r['is_external'] ? 'no login (uploaded)' : 'login', $r['session_id']]);
     }

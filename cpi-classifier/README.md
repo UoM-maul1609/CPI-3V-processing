@@ -476,7 +476,97 @@ the new default doesn't replace it: add *Droplet* there, or use *Restore the
 defaults*.
 
 Keys used by the page itself can't be given to a class: Z (undo), Y (redo),
-V (view), O (outline), B (contrast), M (colour map) and ?.
+V (view), O (outline), B (contrast), M (colour map) and ?. While the *made of*
+bar is showing, M means *mixed*.
+
+## Scale, and sampling across sizes
+
+* **True scale:** every particle at the same µm per screen pixel; the slider is the zoom.
+* **Largest fills:** also the same scale for every particle, but chosen
+  automatically, so the largest particle currently selected fills the space.
+  In the grid, the slider sets how big that largest one is; in *One at a time*
+  it fills the viewing area. Smaller particles are proportionally smaller. Change
+  the filters, and the scale follows. Use a size range to keep one odd giant
+  from shrinking everything else.
+* **Fit:** each particle fills its own tile, so sizes can't be compared.
+
+**Balanced by size** (the order menu under *Show*) stops a sample being mostly
+small particles. Give bin edges in µm (e.g. `50, 100, 200, 400, 800`, or a quick
+preset), using the size measure chosen for the filters. Particles are then taken
+from each bin in turn, randomly within a bin, so each bin contributes the same
+number until it runs out. The panel shows how many particles are in each bin.
+
+## "Made of": a second classification
+
+Some classes ask what the particle is made of:
+* **Aggregate:** of bullet rosettes, plates, columns, dendrites, needles, capped columns, mixed habits, or can't tell.
+* **Fragment:** of a dendrite, plate, column, rosette or aggregate, or can't tell.
+* **Graupel:** what the rimed crystal was.
+
+How it works:
+* **When you classify:** after choosing one of these classes (by key, click or drag), a bar appears:
+  *Aggregate of…*. Press the habit's own key (e.g. `4` for plates, `6` for bullet rosettes),
+  `M` for mixed, `X` or Enter for can't tell, or Esc to skip. The page then moves on.
+* **Later:** select particles and press **Shift + the habit's key** (e.g. Shift 4),
+  or use the buttons in the *Change* window.
+* **What's stored:** the class stays the main label (`aggregate`), and what it's made of goes in
+  its own column (`made_of`: `plate`). So you can count all aggregates, or just
+  aggregates of plates. *Show → I classified as…* also lists e.g. *Aggregate of plates*.
+* **Changing which classes ask:** in **Admin → Classes**, use *Also ask what it's made of…*
+  under any class.
+
+The default classes now include **Bullet** (key T: one arm broken off a rosette)
+and **Fragment** (key F; this replaces the old Fragment flag).
+
+## Seeing classifications that have been made
+
+* **Your own:**
+  * **Show → Classified by me (review)**, or **I classified as… → e.g. Aggregate
+    of plates**.
+  * The number on each class button shows how many you've put there; click it to
+    see them.
+* **Everyone's:** **Show → Classified by anyone**. Particles you haven't
+  classified show what other people said, as a dashed tag with the most common
+  class and how many people. A `?` means people disagree. The details panel on
+  the right lists every class people chose. **Show → People disagree** finds the
+  conflicts.
+* **Totals:** the **Progress** page has totals per class, per flight and per
+  person. Signed-in people can download their own classifications there, and
+  administrators everyone's (CSV with `label`, `made_of`, `flags`, person,
+  expertise…).
+* **Guide page:** shows example particles for each class, taken from everyone's
+  classifications in the database (particles most people agree on). Tick which
+  instruments to take them from: CPI v1.0, v1.5, v2.0, 3V-CPI. The version comes
+  from each flight's *Instrument → Version* when it was imported. *Other
+  examples* shows a different selection.
+
+## Look-alike piles
+
+The **Piles** row under the class buttons is for sorting before naming. Drag
+particles that look alike onto **+ New pile** (or onto an existing pile); each
+gets a small letter badge in the grid. Click a pile to rename it ("rounded
+blobs"), look through it, take out odd ones, show it on the page, or **classify
+the whole pile** as one class (undo with Z). Piles are kept in each person's own
+browser, not in the database.
+
+## Classifying without saving to the database
+
+* **Not signed in:** that's practice mode already.
+* **Signed in:** choose **Practice mode (save to a file only)** in the menu under
+  your name. A *Practice mode* badge shows at the top. Use **Save to a file** in
+  the bottom bar (or on the Progress page) to download your work.
+* **Afterwards:** *Back to saving* offers to keep those classifications under
+  your name. Or the file can be added later by an administrator on the Progress
+  page: *Add classifications from a file*.
+
+## Archiving flights
+
+Admin → Flights and imports lists the imported flights by project. Tick flights
+or days that aren't useful and press *Archive ticked*, or use *Archive* on one.
+Archived flights disappear from the Classify, Flights and Progress pages for
+everyone. Their images and classifications are kept, and they're listed under
+*Archived* with *Restore*. *Remove* deletes the imported images instead (the MAT
+files and classifications are kept).
 
 ## Filtering
 
