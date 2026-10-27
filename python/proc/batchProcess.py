@@ -127,6 +127,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--flight-csv", help="CSV with flight/date associations")
     parser.add_argument("--min-size-um", type=float, default=0., help="minimum measured length for PNG export (µm)")
     parser.add_argument("--min-focus", type=float, help="minimum existing CPI particle focus value for PNG export")
+    parser.add_argument("--grayscale", "--greyscale", action="store_true",
+                        help="export background-normalised grayscale particle PNGs instead of Blues_r RGB")
     parser.add_argument("--overwrite-png", action="store_true", help="regenerate PNGs that already exist")
     parser.add_argument("--only-stats", action="store_true",
                         help="only redo particle statistics on already-converted MAT files "
@@ -299,7 +301,7 @@ if __name__ == "__main__":
     if args.export_only:
         from exportParticles import export
         export(args.path, args.png_dir, args.project, args.flight_csv,
-               args.min_size_um, args.min_focus, overwrite=args.overwrite_png)
+               args.min_size_um, args.min_focus, overwrite=args.overwrite_png, grayscale=args.grayscale)
         sys.exit(0)
     edge = {}
     if args.edge_method:
@@ -347,4 +349,4 @@ if __name__ == "__main__":
     if args.export_png and not args.only_stats:
         from exportParticles import export
         export(args.path, args.png_dir, args.project, args.flight_csv,
-               args.min_size_um, args.min_focus, overwrite=args.overwrite_png)
+               args.min_size_um, args.min_focus, overwrite=args.overwrite_png, grayscale=args.grayscale)

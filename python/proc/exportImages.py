@@ -17,7 +17,7 @@ import gc
 from exportBackground import corrected_roi, options_from_dat
 
 def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
-    classifierFile,minClassSize, dropBins=[1,3,5,8],iceBins=[0,2,4,6,7],unclass=[-1]):
+    classifierFile,minClassSize, dropBins=[1,3,5,8],iceBins=[0,2,4,6,7],unclass=[-1],grayscale=False):
 
     if classifier == True:
         import keras
@@ -235,15 +235,15 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
                 if classifier==True:
                     # drops
                     if(np.isin(class2[i],dropBins)):
-                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='Greys_r')
+                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='gray' if grayscale else 'Greys_r')
                     # ice
                     elif(np.isin(class2[i],iceBins)):
-                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='Blues_r')
+                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='gray' if grayscale else 'Blues_r')
                     # unclassified
                     elif(np.isin(class2[i],unclass)):
-                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='Reds_r')
+                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='gray' if grayscale else 'Reds_r')
                 elif classifier==False:
-                    h.imshow(roi_pixels,vmin=0,vmax=255,cmap='Blues_r')
+                    h.imshow(roi_pixels,vmin=0,vmax=255,cmap='gray' if grayscale else 'Blues_r')
                 h.axis('off')
                 page_has_particles=True
                 
