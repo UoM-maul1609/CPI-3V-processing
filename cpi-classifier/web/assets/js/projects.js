@@ -85,7 +85,7 @@ export async function viewProject(root, name) {
   const total = flights.reduce((s, f) => s + f.n, 0);
   const uniq = (xs) => [...new Set(xs.filter(Boolean))];
   const platforms = uniq(flights.map((f) => f.platform));
-  const instruments = uniq(flights.map((f) => [f.instrument?.name, f.instrument?.version && 'v' + f.instrument.version].filter(Boolean).join(' ')));
+  const instruments = uniq(flights.map((f) => [f.instrument?.name, f.instrument?.version && (/^\d/.test(f.instrument.version) ? 'v' : '') + f.instrument.version].filter(Boolean).join(' ')));
   const fmtDate = (d) => new Date(d + 'T00:00:00Z').toLocaleDateString([], { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
   const facts = h('dl', { class: 'projfacts' });
   const fact = (k, v) => { if (v) facts.append(h('div', {}, h('dt', {}, k), h('dd', {}, v))); };

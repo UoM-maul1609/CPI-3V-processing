@@ -922,3 +922,10 @@ button.pill { cursor: pointer; font: inherit; font-size: .78rem; }
 .guide-cls .exchips, .guide-cls > p.muted.small { grid-column: 1 / -1; }
 .tile .tag.others { background: transparent; border-top: 3px dashed; height: 0; }
 .tile .tagname.others { background: rgb(255 255 255 / 85%); color: #333; border: 1px dashed #888; font-style: italic; }
+.instchips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 0 0 8px; }
+.instchips > span { margin-right: 2px; }
+.instchip { font: inherit; font-size: .76rem; padding: 2px 8px; border-radius: 20px; border: 1px solid var(--line); background: var(--panel); color: var(--ink-2); cursor: pointer; }
+.instchip.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); font-weight: 700; }
+.instchip.part { border-color: var(--accent); border-style: dashed; }
+.instchip:disabled { opacity: .4; cursor: default; }
+.ofbar.edit { border-width: 1px; border-style: dashed; animation: none; }

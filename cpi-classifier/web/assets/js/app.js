@@ -481,6 +481,24 @@ function emptyNoData(root) {
 }
 
 // ---------------------------------------------------------------- sidebar
+/** Instrument buttons above the flight list: tick or untick every flight from that instrument. */
+function instrumentChips() {
+  const by = new Map();
+  for (const f of visibleFlights()) { const k = instrumentKey(f); if (!by.has(k)) by.set(k, []); by.get(k).push(f.id); }
+  if (by.size < 1) return null;
+  const row = h('div', { class: 'instchips', role: 'group', 'aria-label': 'Instrument' }, h('span', { class: 'muted small' }, 'Instrument'));
+  for (const k of [...INSTRUMENTS, ...by.keys()].filter((x, i, a) => a.indexOf(x) === i)) {
+    const ids = by.get(k) || [];
+    const on = ids.length && ids.every((id) => S.flights.includes(id));
+    const part = ids.some((id) => S.flights.includes(id));
+    row.append(h('button', { class: 'instchip' + (on ? ' on' : part ? ' part' : ''), disabled: !ids.length,
+      title: ids.length ? `${ids.length} flight${ids.length === 1 ? '' : 's'}: click to ${on ? 'leave them out' : 'include them all'}` : 'No flights from this instrument',
+      onclick: () => { S.flights = on ? S.flights.filter((x) => !ids.includes(x)) : [...new Set([...S.flights, ...ids])]; savePrefs(); route(); } },
+    k.replace('CPI (version not given)', 'CPI ?')));
+  }
+  return row;
+}
+// ---------------------------------------------------------------- sidebar
 function buildSidebar() {
   const side = h('div', { class: 'sidebar', id: 'sidebar' });
 
@@ -527,6 +545,7 @@ function buildSidebar() {
       h('span', {},
         h('button', { class: 'btn ghost', onclick: () => { S.flights = visibleFlights().map((f) => f.id); savePrefs(); route(); } }, 'All'),
         h('button', { class: 'btn ghost', onclick: () => { S.flights = []; savePrefs(); route(); } }, 'None'))),
+    instrumentChips(),
     fl));
 
   if (!D) return side;
@@ -866,6 +885,7 @@ function updateSelChip() {
 }
 function refreshPaletteState() {
   updateSelChip();
+  updateOfEditBar();
   const g = currentG();
   const mine = g >= 0 ? labels.mine.get(D.pid(g)) : null;
   $$('#palette .cls').forEach((b) => b.classList.toggle('current', !!mine && mine.label === b.dataset.cls && (S.view === 'single' || selection.size <= 1)));
@@ -1592,7 +1612,7 @@ function askMadeOf(clsId, pids, pos) {
   const c = classById.get(clsId);
   ofAsk = { cls: clsId, pids, pos };
   const bar = $('#ofbar'); if (!bar) return;
-  bar.innerHTML = '';
+  bar.innerHTML = ''; bar.dataset.mode = 'ask'; bar.classList.remove('edit');
   bar.style.setProperty('--c', c.color);
   bar.append(
     h('span', { class: 'oftitle' }, h('b', {}, `${c.name}${pids.length > 1 ? ` (${pids.length})` : ''} of…`)),
@@ -1601,7 +1621,30 @@ function askMadeOf(clsId, pids, pos) {
     h('button', { class: 'btn ghost small', title: 'Leave it as just ' + c.name + ' (Esc)', onclick: () => answerMadeOf(null) }, 'Skip', h('kbd', {}, 'Esc')));
   bar.hidden = false;
 }
-function closeOfBar() { ofAsk = null; const bar = $('#ofbar'); if (bar) { bar.hidden = true; bar.innerHTML = ''; } }
+function closeOfBar() { ofAsk = null; const bar = $('#ofbar'); if (bar) { bar.hidden = true; bar.innerHTML = ''; bar.dataset.mode = ''; } }
+/** When the particle(s) you're on are already an aggregate, fragment or graupel: show "made of" to change it. */
+function updateOfEditBar() {
+  if (ofAsk || !D) return;
+  const bar = $('#ofbar'); if (!bar) return;
+  const pids = targets().map((p) => D.pid(order[p]));
+  const ms = pids.map((pid) => labels.mine.get(pid)).filter(Boolean);
+  const cls = ms.length && ms.length === pids.length && ms.every((m) => m.label === ms[0].label) ? classById.get(ms[0].label) : null;
+  if (!cls || !cls.of) { if (bar.dataset.mode === 'edit') { bar.hidden = true; bar.innerHTML = ''; bar.dataset.mode = ''; } return; }
+  const cur = ms.every((m) => m.made_of === ms[0].made_of) ? ms[0].made_of : undefined;
+  const key = cls.id + '|' + pids.join(',') + '|' + cur;
+  if (bar.dataset.mode === 'edit' && bar.dataset.key === key && !bar.hidden) return;
+  bar.dataset.mode = 'edit'; bar.dataset.key = key;
+  bar.innerHTML = '';
+  bar.style.setProperty('--c', cls.color);
+  bar.classList.add('edit');
+  bar.append(
+    h('span', { class: 'oftitle' }, `${cls.name}${pids.length > 1 ? ` (${pids.length})` : ''}, made of:`),
+    ...cls.of.map((v) => { const o = ofInfo(v); return h('button', { class: 'ofbtn' + (cur === v ? ' on' : ''), style: { '--c': o.color }, title: `Shift+${(o.key || '').toUpperCase()}`, onclick: () => setMadeOf(v, pids) },
+      o.key ? h('kbd', {}, o.key.toUpperCase()) : null, o.name); }),
+    h('span', { class: 'grow' }),
+    cur ? h('button', { class: 'btn ghost small', onclick: () => setMadeOf(null, pids) }, 'Clear') : h('span', { class: 'muted small' }, 'Shift + key also works'));
+  bar.hidden = false;
+}
 function answerMadeOf(v) {
   const a = ofAsk; if (!a) return;
   closeOfBar();
@@ -1618,14 +1661,15 @@ function setMadeOf(v, pids, refresh = true) {
   for (const pid of pids) {
     const m = labels.mine.get(pid);
     const c = m && classById.get(m.label);
-    if (!c || !c.of || !c.of.includes(v)) continue;
+    if (!c || !c.of || (v && !c.of.includes(v)) || (!v && !m.made_of)) continue;
     changes.push({ pid, before: snap(m), after: mkLabel(m.label, m.flags.slice(), v) });
   }
   if (!changes.length) return 0;
   const c = classById.get(labels.mine.get(changes[0].pid).label);
-  commit(changes, `${plural(changes.length, 'particle')} → ${c.name} of ${ofInfo(v).plural}`);
-  if (refresh) { afterChange(changes.map((x) => x.pid)); toast(`${plural(changes.length, 'particle')} → ${c.name} of ${ofInfo(v).plural}`); }
-  else { afterChange(changes.map((x) => x.pid)); }
+  const what = v ? `${c.name} of ${ofInfo(v).plural}` : `${c.name} (made of cleared)`;
+  commit(changes, `${plural(changes.length, 'particle')} → ${what}`);
+  afterChange(changes.map((x) => x.pid));
+  if (refresh) toast(`${plural(changes.length, 'particle')} → ${what}`);
   return changes.length;
 }
 
@@ -2023,7 +2067,7 @@ async function viewFlights(root) {
         fNotes.has(f.id) ? h('div', { class: 'flightnote', html: noteHtml(fNotes.get(f.id)) }) : null),
       h('td', { class: 'num nowrap' }, f.date || '–'),
       h('td', {}, f.platform || '–'),
-      h('td', {}, [f.instrument?.name, f.instrument?.version && 'v' + f.instrument.version].filter(Boolean).join(' ') || '–', f.pixel_um ? h('div', { class: 'muted', style: { fontSize: '.82rem' } }, `${f.pixel_um} µm/px`) : null),
+      h('td', {}, [f.instrument?.name, f.instrument?.version && (/^\d/.test(f.instrument.version) ? 'v' : '') + f.instrument.version].filter(Boolean).join(' ') || '–', f.pixel_um ? h('div', { class: 'muted', style: { fontSize: '.82rem' } }, `${f.pixel_um} µm/px`) : null),
       h('td', { class: 'n' }, fmtInt(f.n)),
       h('td', {}, sparkline(f.timeline)),
       h('td', { class: 'num nowrap' }, f.t_start ? `${f.t_start.slice(11, 16)}–${f.t_end.slice(11, 16)}` : '–'),

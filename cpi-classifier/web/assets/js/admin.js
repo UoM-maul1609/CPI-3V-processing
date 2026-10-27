@@ -521,7 +521,8 @@ async function openProjectForm(folder, cfgId) {
     try {
       const r = await C.api.adminPost('save_project', { config, source_dir: folder.dir, mat_dir: F.mat_dir.value.trim(), groups: [...chosen], import: doImport });
       d.close();
-      C.toast(doImport ? `Importing ${r.saved}…` : `Saved settings for ${r.saved}`);
+      C.toast(doImport ? `Importing ${r.saved}…` : `Saved settings for ${r.saved}` + (r.updated_flights ? `; ${r.updated_flights} imported flight${r.updated_flights === 1 ? '' : 's'} updated` : ''));
+      if (r.updated_flights) { await C.onDataChanged(); loadFlights(); }
       await Promise.all([loadJobs(), loadFolders()]);
       document.getElementById('jobsBox')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) { err.textContent = e.message; }
@@ -853,7 +854,8 @@ async function openForm(folder, flightId) {
         config, source_dir: folder.dir, mat_files: [...chosenMats], nav_file: navFile.value || null,
         import: doImport, force: !!(flightId && forceChk.checked) });
       d.close();
-      C.toast(doImport ? `Importing ${r.saved}…` : `Saved settings for ${r.saved}`);
+      C.toast(doImport ? `Importing ${r.saved}…` : `Saved settings for ${r.saved}` + (r.updated_flights ? `; ${r.updated_flights} imported flight${r.updated_flights === 1 ? '' : 's'} updated` : ''));
+      if (r.updated_flights) { await C.onDataChanged(); loadFlights(); }
       await Promise.all([loadJobs(), loadFolders()]);
       document.getElementById('jobsBox')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) { err.textContent = e.message; }

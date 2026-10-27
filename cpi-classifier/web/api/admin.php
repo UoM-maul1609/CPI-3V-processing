@@ -197,6 +197,26 @@ function rebuild_manifest(): void {
     if ($code !== 0) fail(500, "Rebuilding the flight list failed:\n" . $out);
 }
 
+/**
+ * After "Save settings only": copy the descriptive settings (instrument, platform, notes)
+ * into the already-imported flights, so they show at once without importing again.
+ */
+function refresh_flight_meta(string $configId, array $c): int {
+    $n = 0;
+    foreach (glob(data_dir() . '/flights/*/meta.json') ?: [] as $mf) {
+        $m = read_json_file($mf);
+        if (!$m || (($m['config_id'] ?? null) !== $configId && ($m['id'] ?? null) !== $configId)) continue;
+        if (isset($c['instrument']) && is_array($c['instrument'])) $m['instrument'] = $c['instrument'];
+        foreach (['platform', 'notes'] as $k) if (array_key_exists($k, $c)) $m[$k] = $c[$k];
+        if (!empty($c['label']) && ($m['id'] ?? null) === $configId) $m['label'] = $c['label'];
+        if (!empty($c['campaign']) && ($m['id'] ?? null) === $configId) $m['campaign'] = $c['campaign'];
+        write_json_file($mf, $m);
+        $n++;
+    }
+    if ($n) rebuild_manifest();
+    return $n;
+}
+
 function rrmdir(string $dir): void {
     foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
                                            RecursiveIteratorIterator::CHILD_FIRST) as $f) {
@@ -349,7 +369,8 @@ print(json.dumps(r))') . ' 2>&1'));
         $path = work_dir('flights') . "/$id.json";
         write_json_file($path, $c);
         $job = !empty($b['import']) ? queue_job($id, $path, !empty($b['force']), $u['username']) : null;
-        out(['saved' => $id, 'job' => $job]);
+        $updated = $job ? 0 : refresh_flight_meta($id, $c);
+        out(['saved' => $id, 'job' => $job, 'updated_flights' => $updated]);
 
     case 'admin_navcols':
         $p = raw_path((string)($_GET['path'] ?? ''));
@@ -398,7 +419,8 @@ print(json.dumps(r))') . ' 2>&1'));
         $path = work_dir('flights') . "/$id.json";
         write_json_file($path, $c);
         $job = !empty($b['import']) ? queue_job($id, $path, !empty($b['force']), $u['username']) : null;
-        out(['saved' => $id, 'job' => $job]);
+        $updated = $job ? 0 : refresh_flight_meta($id, $c);
+        out(['saved' => $id, 'job' => $job, 'updated_flights' => $updated]);
 
     case 'admin_import':
         // re-run the import for a saved flight

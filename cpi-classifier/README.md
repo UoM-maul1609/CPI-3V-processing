@@ -534,6 +534,15 @@ and **Fragment** (key F; this replaces the old Fragment flag).
   person. Signed-in people can download their own classifications there, and
   administrators everyone's (CSV with `label`, `made_of`, `flags`, person,
   expertise…).
+* **Changing them:** while reviewing, press another class key (or drag to a
+  class) to change a class. When the particle(s) you're on are an aggregate,
+  fragment or graupel, a dashed *made of* bar appears under the images: click to
+  set or change what it's made of, or *Clear*. Select several to change them
+  together.
+* **Narrowing down:** use the flight list (tick projects or flights), the
+  **Instrument** buttons above it (CPI v1.0, v1.5, v2.0, 3V-CPI: ticks every
+  flight from that instrument), and the size, shape and focus filters. These
+  combine with any *Show* choice.
 * **Guide page:** shows example particles for each class, taken from everyone's
   classifications in the database (particles most people agree on). Tick which
   instruments to take them from: CPI v1.0, v1.5, v2.0, 3V-CPI. The version comes
@@ -558,6 +567,13 @@ browser, not in the database.
 * **Afterwards:** *Back to saving* offers to keep those classifications under
   your name. Or the file can be added later by an administrator on the Progress
   page: *Add classifications from a file*.
+
+## Changing a flight's details after importing
+
+In **Admin → Flights and imports**, use **Change settings** on the flight or
+project. Edit the instrument (name, version, e.g. `1.0`, `1.5`, `2.0`, or `3V`
+for the 3V-CPI), the platform or the notes, then **Save settings only**. The
+imported flights are updated straight away, without importing again.
 
 ## Archiving flights
 
