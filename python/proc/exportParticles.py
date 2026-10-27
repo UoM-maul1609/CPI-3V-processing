@@ -151,7 +151,7 @@ def _write_png(img, target):
             os.unlink(tmp)
 
 def export(source, output, project=None, flight_csv=None, min_size_um=0., min_focus=None,
-           skip_existing=True, overwrite=False, grayscale=False):
+           skip_existing=True, overwrite=False, grayscale=False, background_level=180):
     source=Path(source).resolve()
     if not source.is_dir():
         raise NotADirectoryError(source)
@@ -208,7 +208,7 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
                     try:
                         # MAT currently holds only one particle contour per ROI. No overlay
                         # is added unless the source explicitly stores multiple detections.
-                        arr=corrected_roi(rois[i],bg,bg_used,i,normalization_options); img=_encode_image(arr,None,grayscale=grayscale)
+                        arr=corrected_roi(rois[i],bg,bg_used,i,normalization_options,background_level=background_level); img=_encode_image(arr,None,grayscale=grayscale)
                         _write_png(img,png)
                         status='exported';written+=1
                     except Exception as exc:
@@ -251,7 +251,11 @@ def main():
     p.add_argument('--overwrite',action='store_true',help='Regenerate existing images')
     p.add_argument('--grayscale', '--greyscale', action='store_true',
                    help='export background-normalised grayscale PNGs (default: Blues_r RGB)')
+    p.add_argument('--background-level', type=float, default=180.,
+                   help='8-bit intensity assigned to corrected background transmittance 1 (default: 180)')
     args=p.parse_args()
+    if not math.isfinite(args.background_level) or not 0 < args.background_level <= 255:
+        p.error('--background-level must be > 0 and <= 255')
     if args.min_size_um < 0 or (args.min_focus is not None and not math.isfinite(args.min_focus)):
         p.error('Invalid size/focus threshold')
-    export(args.path,args.png_dir,args.project,args.flight_csv,args.min_size_um,args.min_focus,overwrite=args.overwrite,grayscale=args.grayscale)
+    export(args.path,args.png_dir,args.project,args.flight_csv,args.min_size_um,args.min_focus,overwrite=args.overwrite,grayscale=args.grayscale,background_level=args.background_level)

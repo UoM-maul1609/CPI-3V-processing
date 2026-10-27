@@ -17,7 +17,7 @@ import gc
 from exportBackground import corrected_roi, options_from_dat
 
 def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
-    classifierFile,minClassSize, dropBins=[1,3,5,8],iceBins=[0,2,4,6,7],unclass=[-1],grayscale=False):
+    classifierFile,minClassSize, dropBins=[1,3,5,8],iceBins=[0,2,4,6,7],unclass=[-1],grayscale=False,background_level=180):
 
     if classifier == True:
         import keras
@@ -231,7 +231,7 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
             
             
             if runx<= (1.+interxy):
-                roi_pixels = corrected_roi(ROI_N['IMAGE'][0,0][0,i], bg, bg_used, i, norm_opts, cpiv1=cpiv1, start_x=ROI_N['StartX'][0,0][0,i])
+                roi_pixels = corrected_roi(ROI_N['IMAGE'][0,0][0,i], bg, bg_used, i, norm_opts, cpiv1=cpiv1, start_x=ROI_N['StartX'][0,0][0,i], background_level=background_level)
                 if classifier==True:
                     # drops
                     if(np.isin(class2[i],dropBins)):

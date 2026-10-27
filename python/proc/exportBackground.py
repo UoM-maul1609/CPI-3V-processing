@@ -27,7 +27,7 @@ def options_from_dat(dat):
     return opts
 
 
-def corrected_roi(roi, bg, bg_used, index, options, *, start_x=None, cpiv1=False):
+def corrected_roi(roi, bg, bg_used, index, options, *, start_x=None, cpiv1=False, background_level=180):
     """Return background-corrected 8-bit ROI; fail rather than silently export raw."""
     image = unwrap(roi['IM']).astype(np.float64)
     background = unwrap(bg[0, index]['BG']).astype(np.float64)
@@ -47,10 +47,12 @@ def corrected_roi(roi, bg, bg_used, index, options, *, start_x=None, cpiv1=False
             background = _remove_centre_strip(background, int(start_x))
     if image.ndim != 2 or image.shape != background.shape:
         raise ValueError(f'ROI/background shape mismatch: {image.shape} vs {background.shape}')
+    if not np.isfinite(background_level) or not 0 < background_level <= 255:
+        raise ValueError("background_level must be > 0 and <= 255")
     T = transmittance(image, background, options)
     if not np.isfinite(T).all():
         raise ValueError('Nonfinite background-normalised transmittance')
-    return np.clip(np.rint(255.0 * T), 0, 255).astype(np.uint8)
+    return np.clip(np.rint(float(background_level) * T), 0, 255).astype(np.uint8)
 
 
 def apply_visual_colormap(arr8, cmap_name='Blues_r'):

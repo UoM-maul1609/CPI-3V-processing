@@ -19,6 +19,8 @@ def exportImagesDriver(
     classifier,
     classifierFile,
     minClassSize,
+    grayscale=False,
+    background_level=180,
 ):
     # The child discovers the same sorted .roi list itself.  This keeps
     # Matplotlib (and optional Keras) out of the long-lived coordinator.
@@ -33,11 +35,13 @@ def exportImagesDriver(
         str(bool(classifier)),
         classifierFile,
         str(minClassSize),
+        str(bool(grayscale)),
+        str(float(background_level)),
     ]
     subprocess.run(command, check=True)
 
 
-def _worker(path1, foc_crit, min_len, cpiv1, classifier, classifierFile, minClassSize):
+def _worker(path1, foc_crit, min_len, cpiv1, classifier, classifierFile, minClassSize, grayscale=False, background_level=180):
     import scipy.io as sio
 
     from exportImages import exportImages
@@ -59,14 +63,16 @@ def _worker(path1, foc_crit, min_len, cpiv1, classifier, classifierFile, minClas
         classifier,
         classifierFile,
         minClassSize,
+        grayscale=grayscale,
+        background_level=background_level,
     )
     print("done")
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 9 or sys.argv[1] != "worker":
+    if len(sys.argv) not in (9, 10, 11) or sys.argv[1] != "worker":
         raise SystemExit(
-            "usage: exportImagesDriver.py worker PATH FOC MINLEN CPIV1 CLASSIFIER MODEL MINCLASSSIZE"
+            "usage: exportImagesDriver.py worker PATH FOC MINLEN CPIV1 CLASSIFIER MODEL MINCLASSSIZE [GRAYSCALE] [BACKGROUND_LEVEL]"
         )
     _worker(
         sys.argv[2],
@@ -76,4 +82,6 @@ if __name__ == "__main__":
         parse_bool(sys.argv[6]),
         sys.argv[7],
         float(sys.argv[8]),
+        parse_bool(sys.argv[9]) if len(sys.argv) >= 10 else False,
+        float(sys.argv[10]) if len(sys.argv) == 11 else 180.,
     )

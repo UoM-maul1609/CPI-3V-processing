@@ -18,6 +18,7 @@ environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
 environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 import argparse
+import math
 import json
 import os
 import subprocess
@@ -128,7 +129,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--min-size-um", type=float, default=0., help="minimum measured length for PNG export (µm)")
     parser.add_argument("--min-focus", type=float, help="minimum existing CPI particle focus value for PNG export")
     parser.add_argument("--grayscale", "--greyscale", action="store_true",
-                        help="export background-normalised grayscale particle PNGs instead of Blues_r RGB")
+                        help="use grayscale instead of colour maps for background-normalised particle PNGs and montages")
+    parser.add_argument("--background-level", type=float, default=180.,
+                        help="display intensity at background transmittance 1 (default: 180; 0 < value <= 255)")
     parser.add_argument("--overwrite-png", action="store_true", help="regenerate PNGs that already exist")
     parser.add_argument("--only-stats", action="store_true",
                         help="only redo particle statistics on already-converted MAT files "
@@ -180,7 +183,7 @@ def _assign_backgrounds(path1: str, mat_files, use_v1: bool) -> None:
 
 def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = False,
              cpi_v1: bool = None, images: bool = None, timeseries: bool = None,
-             backgrounds: str = None, max_cutoff: float = None) -> None:
+             backgrounds: str = None, max_cutoff: float = None, grayscale: bool = False, background_level: float = 180.) -> None:
     edge = dict(edge_options, **(edge or {}))
     use_v1 = cpiv1 if cpi_v1 is None else cpi_v1
     path1 = normalise_directory(path1)
@@ -256,6 +259,8 @@ def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = F
             classifier,
             classifierFile,
             minClassSize,
+            grayscale=grayscale,
+            background_level=background_level,
         )
 
     if (output_timeseries if timeseries is None else timeseries):
@@ -294,6 +299,8 @@ def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = F
 
 if __name__ == "__main__":
     args = _parse_args()
+    if not math.isfinite(args.background_level) or not 0 < args.background_level <= 255:
+        raise SystemExit("--background-level must be > 0 and <= 255")
     if args.export_only and not args.export_png:
         raise SystemExit("--export-only requires --export-png")
     if args.export_png and not args.png_dir:
@@ -301,7 +308,8 @@ if __name__ == "__main__":
     if args.export_only:
         from exportParticles import export
         export(args.path, args.png_dir, args.project, args.flight_csv,
-               args.min_size_um, args.min_focus, overwrite=args.overwrite_png, grayscale=args.grayscale)
+               args.min_size_um, args.min_focus, overwrite=args.overwrite_png, grayscale=args.grayscale,
+               background_level=args.background_level)
         sys.exit(0)
     edge = {}
     if args.edge_method:
@@ -344,9 +352,11 @@ if __name__ == "__main__":
         edge["pixel_um"] = args.pixel_um
     run_jobs(args.path, args.cores, edge=edge, only_stats=args.only_stats, cpi_v1=True if args.cpiv1 else None,
              images=False if args.no_images else None, timeseries=False if args.no_timeseries else None,
-             backgrounds=args.backgrounds, max_cutoff=args.max_cutoff)
+             backgrounds=args.backgrounds, max_cutoff=args.max_cutoff, grayscale=args.grayscale,
+             background_level=args.background_level)
 
     if args.export_png and not args.only_stats:
         from exportParticles import export
         export(args.path, args.png_dir, args.project, args.flight_csv,
-               args.min_size_um, args.min_focus, overwrite=args.overwrite_png, grayscale=args.grayscale)
+               args.min_size_um, args.min_focus, overwrite=args.overwrite_png, grayscale=args.grayscale,
+               background_level=args.background_level)
