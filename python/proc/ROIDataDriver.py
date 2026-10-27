@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import json
+import traceback
 import os
 import subprocess
 import sys
@@ -73,10 +75,30 @@ def ROIDataDriver(path1, filename, dt, process_sweep1_if_exist, cpiv1, sweeps="1
             "re-run the first sweep to rebuild it."
         )
 
+    # CPI_SKIP_FAILED_V1: persist success/failure lists across separate sweep processes.
+    report_path = os.path.join(path1, "cpi_processing_report.json")
+    report = {"sweep1_ok": [], "sweep2_ok": [], "failures": []}
+    def save_report():
+        temp = report_path + ".tmp"
+        with open(temp, "w") as f:
+            json.dump(report, f, indent=2)
+        os.replace(temp, report_path)
+
     if "1" in sweeps:
         print("=========================1st sweep================================")
+        save_report()  # invalidate any older success list before running
         for name in filename:
-            _run_worker("sweep1", path1, name, dt, process_sweep1_if_exist, cpiv1)
+            mat = os.path.join(path1, name.replace(".roi", ".mat"))
+            # Keep old outputs untouched on failed reprocessing: no new output is accepted.
+            try:
+                _run_worker("sweep1", path1, name, dt, process_sweep1_if_exist, cpiv1)
+                if not os.path.isfile(mat):
+                    raise RuntimeError("Stage 1 did not create a MAT file")
+                report["sweep1_ok"].append(name)
+            except (subprocess.CalledProcessError, OSError, RuntimeError, ValueError) as exc:
+                report["failures"].append({"file": name, "stage": "sweep1", "error": str(exc)})
+                print(f"WARNING: Skipping failed ROI file {name} (sweep1): {exc}", flush=True)
+            save_report()
 
     data = sio.loadmat(state_file, variable_names=["t_range"])
     if "t_range" not in data:
@@ -85,9 +107,24 @@ def ROIDataDriver(path1, filename, dt, process_sweep1_if_exist, cpiv1, sweeps="1
 
     if "2" in sweeps:
         print("=========================2nd sweep================================")
-        for name in filename:
-            _run_worker("sweep2", path1, name, cpiv1)
+        if "1" not in sweeps:
+            if not os.path.exists(report_path):
+                raise RuntimeError("Missing stage-1 success report; run the first sweep")
+            with open(report_path) as f:
+                report = json.load(f)
+        names = [name for name in filename if name in report.get("sweep1_ok", [])]
+        for name in names:
+            try:
+                _run_worker("sweep2", path1, name, cpiv1)
+                report["sweep2_ok"].append(name)
+            except (subprocess.CalledProcessError, OSError, RuntimeError, ValueError) as exc:
+                report["failures"].append({"file": name, "stage": "sweep2", "error": str(exc)})
+                print(f"WARNING: Skipping failed ROI file {name} (sweep2): {exc}", flush=True)
+            save_report()
 
+    print(f"CPI conversion: {len(report.get('sweep1_ok', []))} stage-1 OK; "
+          f"{len(report.get('sweep2_ok', []))} stage-2 OK; "
+          f"{len(report.get('failures', []))} failed (see {report_path})", flush=True)
     return t_range
 
 
@@ -221,9 +258,7 @@ if __name__ == "__main__":
                 "usage: ROIDataDriver.py driver PATH DT PROCESS_EXISTING CPIV1 [SWEEPS]"
             )
         driver_path = normalise_directory(sys.argv[2])
-        driver_files = sorted(
-            f for f in os.listdir(driver_path) if f.endswith(".roi")
-        )
+        driver_files = sorted(f for f in os.listdir(driver_path) if f.endswith(".roi"))
         ROIDataDriver(
             driver_path,
             driver_files,
