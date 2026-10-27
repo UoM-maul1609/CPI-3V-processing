@@ -16,8 +16,8 @@ def convertDataToHouseSA(bytes1, ushort, order, house, cpiv1):
     if cpiv1:
         # CPIView HKver20 has an 11-word header and 38 readings (98 bytes).
         # HKver25 has 13 header words and 40 readings (106 bytes).
-        # HKver30 has 13 header words and 46 readings (118 bytes).
-        layouts = {20: (98, 11, 38), 25: (106, 13, 40), 30: (118, 13, 46)}
+        # CPIv1 A1D7 version 30 has 13 header words and 40 readings (106 bytes).
+        layouts = {20: (98, 11, 38), 25: (106, 13, 40), 30: (106, 13, 40)}
         dtype = [
             ('BlockNum', 'uint16'), ('ulItemSize', 'uint32'),
             ('usVersion', 'uint16'), ('ulXtraData', 'uint32'),
