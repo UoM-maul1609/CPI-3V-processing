@@ -139,10 +139,18 @@ def _encode_image(arr, outline, grayscale=False):
         draw.line(xy+[xy[0]],fill=(255,0,0),width=1)
     return img
 
+def _new_file_mode():
+    # tempfile.mkstemp makes files readable by the owner only (0600). Give the
+    # finished files the normal permissions instead (0644 / 0664, per umask), so
+    # other programs (e.g. the web classifier, running as another user) can read them.
+    mask=os.umask(0); os.umask(mask)
+    return 0o666 & ~mask
+
 def _write_png(img, target):
     target.parent.mkdir(parents=True,exist_ok=True)
     fd, tmp=tempfile.mkstemp(prefix='.partial_',suffix='.png',dir=target.parent)
     os.close(fd)
+    os.chmod(tmp,_new_file_mode())
     try:
         img.save(tmp,format='PNG',compress_level=6)
         os.replace(tmp,target)
@@ -227,6 +235,7 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
     catalog_path=project_dir/'particle_catalogue.csv'
     fd,tmp=tempfile.mkstemp(prefix='.catalogue_',suffix='.csv',dir=project_dir)
     os.close(fd)
+    os.chmod(tmp,_new_file_mode())
     try:
         with open(tmp,'w',newline='',encoding='utf-8') as f:
             writer=csv.DictWriter(f,fieldnames=_FIELDS)
