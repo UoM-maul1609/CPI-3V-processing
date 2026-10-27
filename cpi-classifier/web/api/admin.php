@@ -53,7 +53,15 @@ function data_dir(): string {
  */
 function raw_path(string $rel, bool $mustBeDir = false): string {
     $root = raw_root();
-    $rel = trim(str_replace('\\', '/', $rel), '/');
+    $rel = str_replace('\\', '/', $rel);
+    // a full path is fine too, as long as it is inside raw_root
+    if (str_starts_with($rel, '/')) {
+        $abs = rtrim($rel, '/');
+        if ($abs === $root) $rel = '';
+        elseif (str_starts_with($abs, $root . '/')) $rel = substr($abs, strlen($root) + 1);
+        else fail(400, "That folder is outside the MAT folder ($root). Give a path inside it, or change raw_root in config.php");
+    }
+    $rel = trim($rel, '/');
     if (str_contains($rel, "\0")) fail(400, 'Bad path');
     foreach (explode('/', $rel) as $seg) {
         if ($seg === '..' || $seg === '.') fail(400, 'That path is not inside the MAT folder');
