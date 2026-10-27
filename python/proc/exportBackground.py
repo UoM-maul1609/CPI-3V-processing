@@ -1,7 +1,7 @@
 """Export-time intensity normalisation using CPI processing's own transmittance."""
 import json
 import numpy as np
-from matplotlib import cm
+from matplotlib import colormaps
 try:
     from edgeDetect import EdgeOptions, transmittance
 except ImportError:
@@ -65,5 +65,5 @@ def apply_visual_colormap(arr8, cmap_name='Blues_r'):
         raise ValueError(f'Expected a 2-D uint8 image, got shape {arr.shape}')
     if arr.dtype != np.uint8:
         arr = np.clip(np.rint(arr), 0, 255).astype(np.uint8)
-    rgba = cm.get_cmap(cmap_name)(arr.astype(np.float32) / 255.0, bytes=True)
+    rgba = colormaps[cmap_name](arr.astype(np.float32) / 255.0, bytes=True)
     return np.asarray(rgba[..., :3], dtype=np.uint8)
