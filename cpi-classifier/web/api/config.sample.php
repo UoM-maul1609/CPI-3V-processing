@@ -35,7 +35,7 @@ return [
     // --- Importing flights from the admin page -----------------------------
     // Folder on this server that holds your MAT files (any layout; one folder
     // per flight is easiest: <project>/<flight>/). The web server only needs to READ it.
-    'raw_root' => '/mnt/CPI-data',
+    'raw_root' => '/mnt/CPI-raw',
     // Folder the web server can WRITE, outside the web root: saved flight
     // settings and import logs go here.
     'work_dir' => '/srv/cpi/work',
