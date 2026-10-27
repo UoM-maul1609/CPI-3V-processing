@@ -1,0 +1,18 @@
+{
+  "id": "JFJ-2026-01-20",
+  "label": "Jungfraujoch, 20 Jan 2026",
+  "kind": "ground",
+  "campaign": "EXAMPLE-GROUND",
+  "platform": "Sphinx observatory, wind tunnel inlet",
+  "instrument": {"name": "CPI", "version": "1.0"},
+  "mat_files": ["20260120/*.mat"],
+  "site": {"lat": 46.548, "lon": 7.985, "alt": 3580},
+  "nav": {
+    "file": "met_20260120.csv",
+    "time_column": "time",
+    "time_units": "iso",
+    "fields": {"temp": "T_C"},
+    "temp_units": "C",
+    "max_gap_s": 120
+  }
+}

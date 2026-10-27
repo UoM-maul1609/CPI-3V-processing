@@ -1,0 +1,5 @@
+# Apache: never serve the schema files or the sample config as text.
+<FilesMatch "\.(sql|md)$">
+  Require all denied
+</FilesMatch>
+Options -Indexes

@@ -1,0 +1,28 @@
+{
+  "version": "habit-v2",
+  "title": "Ice crystal habit",
+  "help": "Pick the habit that best describes the particle. Add flags for extra features. If you can't tell, use 'Can't tell' rather than guessing.",
+  "classes": [
+    {"id": "droplet",   "name": "Droplet",            "key": "d", "color": "#14a3b8", "desc": "Liquid drop: a near-perfect circle with a smooth edge, usually with a bright spot or ring in the middle where it focuses the light."},
+    {"id": "sphere",    "name": "Quasi-sphere",       "key": "1", "color": "#8ecae6", "desc": "Round but not quite a perfect circle, no bright centre: frozen drop or small quasi-spherical ice."},
+    {"id": "column",    "name": "Column",             "key": "2", "color": "#4f9dde", "desc": "Hexagonal prism longer than wide, flat ends, solid or hollow."},
+    {"id": "needle",    "name": "Needle",             "key": "3", "color": "#2b6cb0", "desc": "Very long thin column (aspect ratio above about 5)."},
+    {"id": "plate",     "name": "Plate",              "key": "4", "color": "#3fb68b", "desc": "Thin hexagonal plate or sectored plate."},
+    {"id": "dendrite",  "name": "Stellar / dendrite", "key": "5", "color": "#1e8f5a", "desc": "Six-armed star, fern-like branches."},
+    {"id": "rosette",   "name": "Bullet rosette",     "key": "6", "color": "#e0a526", "desc": "Several columns or bullets radiating from one centre."},
+    {"id": "capped",    "name": "Capped column",      "key": "7", "color": "#d97a29", "desc": "Column with plates on one or both ends."},
+    {"id": "aggregate", "name": "Aggregate",          "key": "8", "color": "#c2507a", "desc": "Several crystals stuck together."},
+    {"id": "graupel",   "name": "Graupel / rimed",    "key": "9", "color": "#8d5fd3", "desc": "Heavily rimed, original habit hidden; lumpy outline."},
+    {"id": "irregular", "name": "Irregular",          "key": "0", "color": "#8a8f98", "desc": "Ice with no recognisable habit."},
+    {"id": "small",     "name": "Too small to tell",  "key": "s", "color": "#b8bcc4", "desc": "Only a few pixels across; habit can't be judged."},
+    {"id": "unusable",  "name": "Can't tell / blurred","key": "x", "color": "#5c6370", "desc": "Out of focus, overlapping, or otherwise unclassifiable."},
+    {"id": "artefact",  "name": "Artefact",           "key": "a", "color": "#e5484d", "desc": "Not a cloud particle: shattering debris, streaks, smudges, stuck particle, empty ROI."}
+  ],
+  "flags": [
+    {"id": "rimed",    "name": "Rimed",          "key": "r", "desc": "Some riming visible on the crystal."},
+    {"id": "hollow",   "name": "Hollow",         "key": "h", "desc": "Hollow or skeletal (bright interior)."},
+    {"id": "broken",   "name": "Fragment",       "key": "f", "desc": "Broken piece of a larger crystal."},
+    {"id": "cutoff",   "name": "Cut off",        "key": "c", "desc": "Particle runs off the edge of the image."},
+    {"id": "unsure",   "name": "Unsure",         "key": "u", "desc": "Your best guess, but you're not confident."}
+  ]
+}

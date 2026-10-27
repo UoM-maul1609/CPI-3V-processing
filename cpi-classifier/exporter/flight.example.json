@@ -1,0 +1,37 @@
+{
+  "id": "C123",
+  "label": "C123 – frontal cirrus",
+  "kind": "aircraft",
+  "campaign": "EXAMPLE-2026",
+  "platform": "FAAM BAe-146",
+  "date": "2026-02-11",
+  "instrument": {"name": "CPI", "version": "3V-CPI", "serial": "SPEC-xxx"},
+  "pixel_um": null,
+
+  "mat_files": ["mat/*.mat"],
+  "transpose": true,
+  "colormap": "gray",
+  "stretch": null,
+
+  "select": {
+    "valid_only": true,
+    "size_field": "len",
+    "min_size_um": 0,
+    "max_size_um": null,
+    "exclude_edge_touch": false,
+    "image_types": null
+  },
+
+  "nav": {
+    "file": "core_faam_20260211_c123_1hz.nc",
+    "format": "netcdf",
+    "time_column": "Time",
+    "fields": {"lat": "LAT_GIN", "lon": "LON_GIN", "alt": "ALT_GIN", "temp": "TAT_DI_R"},
+    "temp_units": "K",
+    "alt_units": "m",
+    "max_gap_s": 5
+  },
+
+  "notes": "Anything people classifying this flight should know.",
+  "extra": {"pi": "", "doi": ""}
+}

@@ -1,0 +1,21 @@
+# Apache settings for the classifier (needs mod_deflate / mod_expires / mod_headers;
+# lines for missing modules are skipped).
+Options -Indexes
+DirectoryIndex index.html index.php
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE application/json text/css text/javascript application/javascript image/svg+xml
+</IfModule>
+
+<IfModule mod_expires.c>
+  ExpiresActive On
+  # particle images (when web/data is used directly rather than the /cpi/data alias)
+  ExpiresByType image/png "access plus 1 day"
+  ExpiresByType application/json "access plus 5 minutes"
+</IfModule>
+
+<IfModule mod_headers.c>
+  <FilesMatch "\.(js|css)$">
+    Header set Cache-Control "no-cache"
+  </FilesMatch>
+</IfModule>
