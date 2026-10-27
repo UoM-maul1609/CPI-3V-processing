@@ -22,3 +22,9 @@ __pycache__/
 *.rem
 .ipynb_checkpoints/
 .ipynb_checkpoints/batchProcess-checkpoint.py
+
+# web classifier: server settings and imported data (also in classifier/.gitignore)
+cpi-classifier/web/api/config.php
+cpi-classifier/web/data/*
+!cpi-classifier/web/data/README.txt
+
