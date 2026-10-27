@@ -734,6 +734,11 @@ def place_file(src, dst, mode="link"):
     shutil.copyfile(src, dst)
 
 
+def safe_key(key):
+    """A flight/date key made safe for ids and URLs, e.g. 'C077+C078' -> 'C077-C078'."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", str(key)).strip("-") or "undated"
+
+
 def group_key(flight, date):
     return (flight or "").strip() or (date or "").strip() or "undated"
 
@@ -842,7 +847,7 @@ def import_catalogue(cfg_path, out, force=False, limit=None):
                 else:
                     missing_png += 1
                     continue
-            fid = f"{prefix}-{key}"
+            fid = f"{prefix}-{safe_key(key)}"
             fdir = os.path.join(out, "flights", fid)
             img_dir = os.path.join(fdir, "img", stem)
             os.makedirs(img_dir, exist_ok=True)
@@ -881,7 +886,7 @@ def import_catalogue(cfg_path, out, force=False, limit=None):
     metas = []
     nav_by_group = cfg.get("nav_by_group") or {}
     for key, a in acc.items():
-        fid = f"{prefix}-{key}"
+        fid = f"{prefix}-{safe_key(key)}"
         fdir = os.path.join(out, "flights", fid)
         stems = stems_by_key[key]
         C = {c: np.asarray(v, dtype=float) for c, v in a.items() if c != "_stem"}

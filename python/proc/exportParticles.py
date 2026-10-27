@@ -94,19 +94,31 @@ def _flight_rows(csvpath, project):
     return out
 
 def _choose_flight(ts, matstem, rows):
-    # Explicit source-file match is safest; otherwise require unique time range.
-    # Day-only matching is allowed only when exactly one flight exists that day.
+    """Flight label for one particle, decided per particle (not per file), so one ROI
+    file that spans several flights is split between them by time.
+
+    1. Rows naming this file (source_key). If several flights share the file, the
+       one whose start/end window contains the particle's time wins.
+    2. Otherwise, a flight whose start/end window contains the time.
+    3. Otherwise, a flight on that day with no end time.
+    If more than one flight still fits (a shared file and no times to tell them
+    apart), the labels are joined, e.g. 'C077+C078', so the particle keeps both
+    rather than being given to one flight arbitrarily or left blank."""
     if ts is None:
         return ''
-    candidates=[r for r in rows if r['source_key'] and
-                (r['source_key'] == matstem or r['source_key'] == matstem+'.roi')]
-    if not candidates:
-        candidates=[r for r in rows if r['start'] and r['end'] and r['start'] <= ts < r['end']]
-    if not candidates:
-        candidates=[r for r in rows if not r['end'] and r['date']==ts.date().isoformat()
-                    and (r['start'] is None or r['start'] <= ts)]
-    labels={r['flight'] for r in candidates if r['flight']}
-    return labels.pop() if len(labels)==1 else ''
+    timed = lambda r: r['start'] is not None and r['end'] is not None
+    inside = lambda r: timed(r) and r['start'] <= ts < r['end']
+    keyed=[r for r in rows if r['source_key'] and
+           (r['source_key'] == matstem or r['source_key'] == matstem+'.roi')]
+    if keyed:
+        candidates=[r for r in keyed if inside(r)] or [r for r in keyed if not timed(r)] or keyed
+    else:
+        candidates=[r for r in rows if inside(r)]
+        if not candidates:
+            candidates=[r for r in rows if not r['end'] and r['date']==ts.date().isoformat()
+                        and (r['start'] is None or r['start'] <= ts)]
+    labels=sorted({r['flight'] for r in candidates if r['flight']})
+    return '+'.join(labels)
 
 def _boundaries(dat, i):
     try:

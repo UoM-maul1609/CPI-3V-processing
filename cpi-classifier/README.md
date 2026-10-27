@@ -173,6 +173,16 @@ that already exist are skipped (`--force` rewrites them).
 | `nav` | Optional CSV or netCDF time series interpolated onto each particle: `fields` maps `lat`, `lon`, `alt`, `temp` to column / variable names. `time_units` is `iso`, `unix`, `datenum` or `seconds since <date>` (netCDF reads it from the file). Also `temp_units` (`K` or `C`), `alt_units` (`m` or `ft`) and `max_gap_s`, beyond which a particle gets no value rather than an interpolated one. FAAM-style `(Time, sps)` arrays are handled. |
 | `site` | For ground sites: fixed `lat`, `lon`, `alt` used when there's no nav value. |
 
+### ROI files that span more than one flight
+
+One MAT/ROI file can hold particles from several flights: the import puts each
+particle in the flight given for it in `particle_catalogue.csv`, so a shared file
+is simply split between flights. Particles your pipeline could only place in
+"either flight" (e.g. `C077+C078`, when the flight list gives no times to tell
+them apart) become one combined flight, labelled `C077+C078` (id `…-C077-C078`).
+Give the flights start and end times in your flight list and they are split by
+time instead.
+
 ### Colour maps
 
 You can apply a colour map in two places:
