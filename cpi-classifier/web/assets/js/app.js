@@ -60,7 +60,7 @@ const DEFAULTS = {
   bigTile: 360,             // "Largest fills": screen size of the largest particle in the grid                // screen px per µm ×2.5 (true scale) — see pxPerUm()
   tile: 130,                // tile size in fit mode
   outline: false,
-  cmap: 'gray',             // live colour map (grey exports only)
+  cmap: 'blues',            // live colour map (grey exports only): Blues_r
   brightness: 1,
   contrast: 1,
   outlineColor: '#ff3b6b',
@@ -77,7 +77,34 @@ const DEFAULTS = {
   theme: null,
 };
 const S = Object.assign({}, DEFAULTS, lsGet('cpi.prefs', {}));
-const savePrefs = () => lsSet('cpi.prefs', S);
+if ((S.prefsV || 1) < 2) { S.cmap = 'blues'; S.prefsV = 2; lsSet('cpi.prefs', S); }    // Blues_r became the default colour map
+// Display settings also travel with your account, so they follow you to other computers
+// (and between the tunnel address and the campus address, which browsers keep apart).
+const SYNCED = ['cmap', 'brightness', 'contrast', 'outline', 'outlineColor', 'overlays', 'sizeField', 'scale', 'zoom', 'bigTile', 'tile',
+  'view', 'order', 'sizeBins', 'hideEdge', 'inspector', 'exportOpts', 'guideInst', 'prefsV'];
+let prefsTimer = null, prefsSent = '';
+const savePrefs = () => {
+  lsSet('cpi.prefs', S);
+  if (!server.user) return;
+  clearTimeout(prefsTimer);
+  prefsTimer = setTimeout(() => {
+    const p = Object.fromEntries(SYNCED.filter((k) => S[k] !== undefined).map((k) => [k, S[k]]));
+    const j = JSON.stringify(p);
+    if (j === prefsSent) return;
+    prefsSent = j;
+    api.savePrefs(p).catch(() => { prefsSent = ''; });
+  }, 1500);
+};
+/** After signing in: use the settings stored with the account. */
+function applyAccountPrefs() {
+  const p = server.user?.prefs;
+  if (!p || typeof p !== 'object' || !Object.keys(p).length) { savePrefs(); return; }   // first time: store this browser's
+  for (const k of SYNCED) if (p[k] !== undefined) S[k] = p[k];
+  if ((S.prefsV || 1) < 2) { S.cmap = 'blues'; S.prefsV = 2; }
+  prefsSent = JSON.stringify(Object.fromEntries(SYNCED.filter((k) => S[k] !== undefined).map((k) => [k, S[k]])));
+  lsSet('cpi.prefs', S);
+  applyDisplay();
+}
 if (S.boost) { S.contrast = 1.7; delete S.boost; }
 if (typeof S.caption === 'string') { S.overlays = { size: ['size'], shape: ['aspect', 'area'], time: ['time'] }[S.caption] || []; delete S.caption; }
 const session = { n: 0, start: 0, last: 0, active: 0 };   // particles classified this visit
@@ -341,6 +368,7 @@ form.addEventListener('submit', async (e) => {
       openChangePassword(true); return;
     }
     api.restoreQueue();
+    applyAccountPrefs();
     await refreshLabels();
     toast(`Signed in as ${server.user.display_name}`);
     if (location.hash.startsWith('#/admin') && !server.user.is_admin) location.hash = '#/classify'; else route();
@@ -2323,6 +2351,7 @@ async function start() {
   await display.loadColormaps();
   try { manifest = await loadManifest(); } catch { manifest = null; }
   fNotes = await flightNotes();
+  if (server.user) applyAccountPrefs();
   applyDisplay();
   renderUserBox();
   if (server.user?.must_change_pw) openChangePassword(true);

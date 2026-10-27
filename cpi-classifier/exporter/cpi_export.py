@@ -746,16 +746,29 @@ def read_catalogue(project_dir, name=CATALOGUE_NAME):
     rows, groups = [], {}
     csv.field_size_limit(10 ** 8)
     with open(path, newline="", encoding="utf-8-sig") as fh:
-        for r in csv.DictReader(fh):
-            rel = (r.get("png_relative_path") or "").strip()
+        rd = csv.reader(fh)
+        head = next(rd, [])
+        col = {h.strip(): i for i, h in enumerate(head)}
+        need = ["png_relative_path", "flight", "date", "source_mat", "roi_index", "source_id", "project"]
+        ix = {k: col.get(k) for k in need}
+        if ix["png_relative_path"] is None:
+            raise SystemExit(f"{name} has no png_relative_path column")
+        ip, iflt, idate, imat, iroi, isid, iproj = (ix[k] for k in need)
+        get = lambda r, i: r[i] if i is not None and i < len(r) else ""
+        for r in rd:
+            # most rows are particles that weren't exported (no PNG): skip them as cheaply as possible
+            rel = r[ip].strip() if ip < len(r) else ""
             if not rel:
                 continue
-            key = group_key(r.get("flight"), r.get("date"))
-            g = groups.setdefault(key, {"key": key, "flight": (r.get("flight") or "").strip(),
-                                        "date": (r.get("date") or "").strip(), "n": 0, "mats": set(), "project": r.get("project")})
+            flight, date = get(r, iflt), get(r, idate)
+            key = group_key(flight, date)
+            g = groups.get(key)
+            if g is None:
+                g = groups[key] = {"key": key, "flight": flight.strip(), "date": date.strip(), "n": 0, "mats": set(), "project": get(r, iproj)}
             g["n"] += 1
-            g["mats"].add(r.get("source_mat"))
-            rows.append((key, r.get("source_mat"), int(r.get("roi_index") or 0), rel, r.get("source_id")))
+            mat = get(r, imat)
+            g["mats"].add(mat)
+            rows.append((key, mat, int(get(r, iroi) or 0), rel, get(r, isid)))
     return rows, groups
 
 

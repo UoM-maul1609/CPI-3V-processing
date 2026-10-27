@@ -335,11 +335,19 @@ print(json.dumps(r))') . ' 2>&1'));
         out(['root' => $root, 'folders' => $list]);
 
     case 'admin_catsummary':
+        // Reading a big catalogue takes a while, so the summary is kept until the file changes.
         $p = raw_path((string)($_GET['path'] ?? ''), true);
+        $csv = "$p/particle_catalogue.csv";
+        $sig = is_file($csv) ? filesize($csv) . '-' . filemtime($csv) : '';
+        $cacheDir = work_dir('cache');
+        $cacheFile = $cacheDir . '/catsummary-' . md5($p) . '.json';
+        $cached = is_file($cacheFile) ? read_json_file($cacheFile) : null;
+        if ($cached && ($cached['sig'] ?? null) === $sig && is_array($cached['summary'] ?? null)) out(['summary' => $cached['summary'], 'cached' => true]);
         $code = 0;
         $o = run_sync(['--catalogue-summary', $p], $code);
         $j = json_decode(trim((string)substr($o, (int)strrpos("\n" . $o, "\n{"))), true);
         if ($code !== 0 || !is_array($j)) fail(500, "Couldn't read the particle catalogue: " . $o);
+        write_json_file($cacheFile, ['sig' => $sig, 'summary' => $j]);
         out(['summary' => $j]);
 
     case 'admin_save_project':

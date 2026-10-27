@@ -445,8 +445,10 @@ function projectRow(f, busy) {
 async function openProjectForm(folder, cfgId) {
   const { h } = C;
   let summary, cfg = {};
+  const slow = setTimeout(() => C.toast('Reading the particle catalogue… (a big one takes a minute the first time; after that it opens at once)', 120000), 600);
   try { summary = (await C.api.adminGet('catsummary', { path: folder.dir })).summary; }
-  catch (e) { C.toast(e.message, 5000); return; }
+  catch (e) { clearTimeout(slow); C.toast(e.message, 5000); return; }
+  clearTimeout(slow); document.getElementById('toast')?.classList.remove('show');
   if (cfgId) { try { cfg = (await C.api.adminGet('flight_get', { id: cfgId })).config; } catch { cfg = {}; } }
   const inst = cfg.instrument || {};
   const chosen = new Set(cfg.groups || summary.groups.map((g) => g.key));

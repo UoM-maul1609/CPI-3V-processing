@@ -77,6 +77,7 @@ export async function fetchScheme() {
 // sessions added from files, and your own details
 export const uploadSession = (body) => call('session_upload', { body });
 export const fetchSessions = () => call('sessions');
+export const savePrefs = (prefs) => call('prefs_save', { body: { prefs } });
 export const fetchExamples = (flights, per = 8, seed = '') => call('examples', { params: { flights: flights.join(','), per: String(per), seed } });
 export const deleteSession = (id) => call('session_delete', { body: { id } });
 export const updateProfile = (body) => call('profile_update', { body });

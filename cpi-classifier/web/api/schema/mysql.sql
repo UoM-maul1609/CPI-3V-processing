@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS users (
   disabled      TINYINT      NOT NULL DEFAULT 0,
   expertise     VARCHAR(60)  NULL,
   affiliation   VARCHAR(120) NULL,
-  is_external   TINYINT      NOT NULL DEFAULT 0     -- 1 = a contributor without a login (uploaded session)
+  is_external   TINYINT      NOT NULL DEFAULT 0,    -- 1 = a contributor without a login (uploaded session)
+  prefs         TEXT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- One current classification per person per particle.

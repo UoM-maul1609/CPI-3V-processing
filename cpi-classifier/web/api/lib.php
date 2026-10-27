@@ -76,6 +76,7 @@ function ensure_schema(): void {
         ['users', 'disabled', 'INTEGER NOT NULL DEFAULT 0'], ['users', 'expertise', 'VARCHAR(60) NULL'],
         ['users', 'affiliation', 'VARCHAR(120) NULL'], ['users', 'is_external', 'INTEGER NOT NULL DEFAULT 0'],
         ['labels', 'session_id', 'INTEGER NULL'],
+        ['users', 'prefs', 'TEXT NULL'],
         ['labels', 'made_of', 'VARCHAR(32) NULL'], ['label_log', 'made_of', 'VARCHAR(32) NULL'],
     ];
     foreach ($cols as [$table, $col, $type]) {
@@ -129,7 +130,7 @@ function current_user(bool $fresh = false): ?array {
     if ($fresh) $u = false;
     if ($u === false) {
         ensure_schema();
-        $st = db()->prepare('SELECT id, username, display_name, email, must_change_pw, is_admin, disabled, expertise, affiliation FROM users WHERE id = ?');
+        $st = db()->prepare('SELECT id, username, display_name, email, must_change_pw, is_admin, disabled, expertise, affiliation, prefs FROM users WHERE id = ?');
         $st->execute([$_SESSION['uid']]);
         $u = $st->fetch() ?: null;
         if ($u && (int)$u['disabled']) $u = null;
@@ -137,6 +138,7 @@ function current_user(bool $fresh = false): ?array {
             $u['id'] = (int)$u['id'];
             $u['is_admin'] = (int)$u['is_admin'] === 1 || in_array($u['username'], cfg()['admins'] ?? [], true);
             $u['must_change_pw'] = (int)$u['must_change_pw'] === 1;
+            $u['prefs'] = $u['prefs'] ? (json_decode($u['prefs'], true) ?: (object)[]) : (object)[];   // display settings, so they follow you between computers
             unset($u['disabled']);
         }
     }

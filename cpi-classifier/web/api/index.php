@@ -112,6 +112,17 @@ case 'profile_update':
     }
     out(['user' => current_user(true)]);
 
+case 'prefs_save':
+    // display settings (colour map, outline, scale...) kept with the account
+    $u = require_user(true);
+    $b = require_post();
+    $prefs = $b['prefs'] ?? null;
+    if (!is_array($prefs)) fail(400, 'Missing settings');
+    $json = json_encode($prefs, JSON_UNESCAPED_UNICODE);
+    if (strlen($json) > 20000) fail(400, 'Settings too large');
+    db()->prepare('UPDATE users SET prefs = ? WHERE id = ?')->execute([$json, $u['id']]);
+    out([]);
+
 case 'logout':
     require_post();
     start_session();

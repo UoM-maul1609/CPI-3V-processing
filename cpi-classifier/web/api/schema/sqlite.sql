@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS users (
   disabled      INTEGER NOT NULL DEFAULT 0,
   expertise     TEXT NULL,
   affiliation   TEXT NULL,
-  is_external   INTEGER NOT NULL DEFAULT 0
+  is_external   INTEGER NOT NULL DEFAULT 0,
+  prefs         TEXT NULL
 );
 
 CREATE TABLE IF NOT EXISTS labels (

@@ -568,6 +568,17 @@ browser, not in the database.
   your name. Or the file can be added later by an administrator on the Progress
   page: *Add classifications from a file*.
 
+## Display settings
+
+* **Defaults:** the colour map is Blues (Blues_r) for greyscale images. Change it
+  under **Display**, where you can also switch the particle **outline** on (or
+  press O), and set brightness, contrast and labels.
+* **They're remembered:** when you're signed in, these settings are stored with
+  your account, so they follow you to another computer, and between the
+  SSH-tunnel address and the campus address (browsers keep those apart). Not
+  signed in, they're remembered by that browser.
+* **Image downloads** start with the outline on or off to match the screen.
+
 ## Changing a flight's details after importing
 
 In **Admin → Flights and imports**, use **Change settings** on the flight or

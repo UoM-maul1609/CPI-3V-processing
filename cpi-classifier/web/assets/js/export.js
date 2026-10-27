@@ -197,7 +197,7 @@ const csvCell = (v) => { if (v === null || v === undefined || (typeof v === 'num
 
 // ------------------------------------------------------------------ one particle
 export async function downloadOne(g, C) {
-  const o = { ...EXPORT_DEFAULTS, ...(C.S.exportOpts || {}) };
+  const o = { ...EXPORT_DEFAULTS, outline: !!C.S.outline, ...(C.S.exportOpts || {}) };
   const D = C.getD();
   const m = C.labels.mine.get(D.pid(g));
   const cls = m && C.classById().get(m.label);
@@ -210,7 +210,7 @@ export function openExport(C) {
   const { h, S } = C;
   const D = C.getD();
   if (!D) { C.toast('Choose some flights first'); return; }
-  const o = { ...EXPORT_DEFAULTS, ...(S.exportOpts || {}) };
+  const o = { ...EXPORT_DEFAULTS, outline: !!S.outline, ...(S.exportOpts || {}) };
   if (!D.flights.some((F) => F.meta.pixel_um) || !o.umPerPx) o.umPerPx = 1.25;
   const save = () => { S.exportOpts = { ...o }; C.savePrefs(); };
   const sel = C.getSelection();
