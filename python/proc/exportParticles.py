@@ -91,7 +91,26 @@ def _flight_rows(csvpath, project):
                 raise ValueError(f'Invalid flight catalogue date/time: {row}') from exc
             out.append(dict(date=day,flight=(row.get('flight') or '').strip(),start=start,end=end,
                             source_key=(row.get('source_key') or '').strip()))
+    _check_flight_rows(out, csvpath)
     return out
+
+def _check_flight_rows(rows, csvpath):
+    """Say what was read, and warn about windows that overlap (a particle in both would get both labels)."""
+    timed=sorted((r['start'],r['end'],r['flight']) for r in rows if r['start'] and r['end'])
+    for (s1,e1,f1),(s2,e2,f2) in zip(timed,timed[1:]):
+        if s2 < e1 and f1 != f2:
+            print(f'WARNING: {csvpath}: {f1} ({s1}..{e1}) overlaps {f2} ({s2}..{e2}); particles in the overlap get "{f1}+{f2}"',flush=True)
+    flights=sorted({r['flight'] for r in rows if r['flight']})
+    print(f'Flight list {csvpath}: {len(rows)} rows, {len(flights)} flights '
+          f'({len(timed)} with start and end times)',flush=True)
+
+def _flight_date(label, rows, fallback):
+    """The date of a flight (from the flight list), so a flight that runs past
+    midnight keeps all its images in one folder."""
+    if not label or '+' in label:
+        return fallback
+    dates=sorted(r['date'] for r in rows if r['flight']==label and r['date'])
+    return dates[0] if dates else fallback
 
 def _choose_flight(ts, matstem, rows):
     """Flight label for one particle, decided per particle (not per file), so one ROI
@@ -177,7 +196,13 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
         raise NotADirectoryError(source)
     root=Path(output).resolve()
     project=project or source.name
+    if not flight_csv and (source/'flights.csv').is_file():
+        flight_csv=source/'flights.csv'          # a flight list next to the MAT files is used automatically
+        print(f'Using flight list {flight_csv}',flush=True)
     rows=_flight_rows(flight_csv,project)
+    if flight_csv and not rows:
+        print(f'WARNING: no rows for project {project!r} in {flight_csv} (check its "project" column)',flush=True)
+    per_flight={}
     project_dir=root/_safe(project)
     mat_files=sorted(p for p in source.glob('*.mat') if p.name not in {'full_backgrounds.mat','timeseries.mat','timeseries_class.mat'})
     if not mat_files:
@@ -213,7 +238,8 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
             source_id=f'{_safe(project)}_{_safe(mat.stem)}_roi{i+1:07d}_p01'
             dt=_dt_from_matlab(times[i]); date=dt.date().isoformat() if dt else 'undated'
             flight=_choose_flight(dt,mat.stem,rows)
-            folder=project_dir / (_safe(date)+'_'+_safe(flight) if flight else _safe(date))
+            fdate=_flight_date(flight,rows,date)
+            folder=project_dir / (_safe(fdate)+'_'+_safe(flight) if flight else _safe(date))
             png=folder/(source_id+'.png')
             size=_scalar_float(sizes[i])
             foc=_scalar_float(focus[i])
@@ -235,6 +261,8 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
                         status='error';error=str(exc)
             else:
                 filtered+=1
+            if eligible:
+                per_flight[flight or f'(no flight) {date}']=per_flight.get(flight or f'(no flight) {date}',0)+1
             catalogue.append(dict(source_id=source_id,project=project,flight=flight,date=date,
                  timestamp=dt.isoformat(timespec='milliseconds') if dt else '',source_mat=mat.name,
                  source_roi=mat.stem+'.roi',roi_index=i+1,particle_index=1,
@@ -257,6 +285,10 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
         if os.path.exists(tmp):os.unlink(tmp)
     error_file=project_dir/'export_errors.json'
     error_file.write_text(json.dumps(errors,indent=2)+'\n',encoding='utf-8')
+    if rows:
+        print('Exported particles per flight:',flush=True)
+        for k in sorted(per_flight, key=lambda k: (k.startswith('('), k)):
+            print(f'  {k:28s} {per_flight[k]:8d}',flush=True)
     print(f'Export complete: {written} written, {existing} already present, {filtered} filtered, '
           f'{len(errors)} MAT files unreadable; catalogue={catalog_path}',flush=True)
     return dict(written=written,existing=existing,filtered=filtered,errors=errors,catalogue=str(catalog_path))
@@ -266,7 +298,8 @@ def main():
     p.add_argument('path',help='Directory of previously processed ROI MAT files')
     p.add_argument('--png-dir',required=True,help='PNG output root')
     p.add_argument('--project',help='Campaign name (default: input directory name)')
-    p.add_argument('--flight-csv',help='Flight mapping CSV with date,flight and optional time windows')
+    p.add_argument('--flight-csv',help='Flight list CSV: project,flight,date[,start_datetime,end_datetime] '
+                   '(default: flights.csv in the MAT folder, if there is one)')
     p.add_argument('--min-size-um',type=float,default=0.,help='Minimum CPI measured maximum length in µm')
     p.add_argument('--min-focus',type=float,help='Minimum existing CPI focus value (higher is better)')
     p.add_argument('--overwrite',action='store_true',help='Regenerate existing images')
@@ -280,3 +313,6 @@ def main():
     if args.min_size_um < 0 or (args.min_focus is not None and not math.isfinite(args.min_focus)):
         p.error('Invalid size/focus threshold')
     export(args.path,args.png_dir,args.project,args.flight_csv,args.min_size_um,args.min_focus,overwrite=args.overwrite,grayscale=args.grayscale,background_level=args.background_level)
+
+if __name__ == '__main__':
+    main()
