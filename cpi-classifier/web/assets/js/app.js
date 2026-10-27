@@ -120,6 +120,32 @@ let shown = 0;                // how many of `order` are on screen (grid)
 let focusPos = 0;             // position in `order`
 let anchorPos = -1;
 const selection = new Set();  // positions in `order`
+
+// Where you were on the Classify page, so going to another page (or reloading) and coming
+// back puts you at the same particles, scrolled to the same place, rather than a fresh set.
+// Kept only while the flights, filters, order and sign-in are unchanged.
+const SPOT_KEY = 'cpi.spot';
+let spot = null;
+let stageView = '';           // the view the stage was last drawn in
+function spotSig() {
+  return JSON.stringify([Dkey, S.show, S.order, S.seed, S.ranges, S.hideEdge, S.sizeField, S.sizeBins || null, S.extraDims,
+    server.user?.id || server.user?.username || '', practice.on]);
+}
+function rememberSpot() {
+  if (!D || !order.length || !$('#stage')) return;
+  const st = $('#stage');
+  spot = { sig: spotSig(), order, shown, focusPos, anchorPos, view: stageView, sel: [...selection],
+    stageTop: st.scrollTop, winTop: window.scrollY };
+  try { sessionStorage.setItem(SPOT_KEY, JSON.stringify(Object.assign({}, spot, { order: Array.from(order) }))); } catch { /* too big or blocked: memory only */ }
+}
+function takeSpot() {
+  let sp = spot;
+  if (!sp) { try { sp = JSON.parse(sessionStorage.getItem(SPOT_KEY) || 'null'); } catch { sp = null; } }
+  spot = null;
+  if (!sp || sp.sig !== spotSig() || !Array.isArray(sp.order) && !ArrayBuffer.isView(sp.order)) return null;
+  if (!sp.order.length || sp.order.some((g) => g >= D.n)) return null;
+  return sp;
+}
 const armed = new Set();      // flags waiting for the next class key
 const undoStack = [];         // [{changes:[{pid, before, after}], desc, t}]
 const redoStack = [];
@@ -454,6 +480,7 @@ async function route() {
   const fn = views[name] || viewClassify;
   const navName = name === 'project' ? 'flights' : name;
   $$('.mainnav a').forEach((a) => { if (a.dataset.route === navName) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
+  if (classifyEl?.isConnected) rememberSpot();
   document.removeEventListener('keydown', onKey);
   if (name !== 'admin') leaveAdmin();
   await fn($('#view'));
@@ -496,7 +523,7 @@ async function viewClassify(root) {
   root.append(classifyEl);
   root.style.display = 'contents';
   document.addEventListener('keydown', onKey);
-  recompute();
+  recompute(takeSpot());
 }
 
 function emptyNoData(root) {
@@ -925,8 +952,9 @@ function refreshPaletteState() {
 }
 
 // ---------------------------------------------------------------- filtering
-function recompute() {
+function recompute(restore = null) {
   closeOfBar();
+  if (!restore) { spot = null; try { sessionStorage.removeItem(SPOT_KEY); } catch { /* ignore */ } }
   if (!D) { order = []; renderStage(); updateCount(0); return; }
   const n = D.n;
   const col = D.col;
@@ -965,8 +993,25 @@ function recompute() {
     }
   }
   for (const d of dims) d.rh.draw();
-  order = sortOrder(out);
   selection.clear(); anchorPos = -1; focusPos = 0;
+  if (restore) {
+    // back where you were: the same particles in the same order (including any you've
+    // classified since they were shown), the same selection and scroll position
+    order = restore.order;
+    focusPos = Math.min(restore.focusPos || 0, order.length - 1);
+    anchorPos = restore.anchorPos ?? -1;
+    for (const p of restore.sel || []) if (p < order.length) selection.add(p);
+    updateCount(out.length);
+    renderStage(false, Math.max(restore.view === S.view ? restore.shown : 0, focusPos + 1));
+    const st = $('#stage');
+    const put = () => {
+      if (restore.view === S.view) { if (st) st.scrollTop = restore.stageTop || 0; window.scrollTo(0, restore.winTop || 0); }
+      else $('#grid .tile.focus')?.scrollIntoView({ block: 'center' });
+    };
+    put(); requestAnimationFrame(put);
+    return;
+  }
+  order = sortOrder(out);
   updateCount(out.length);
   renderStage();
 }
@@ -1075,7 +1120,7 @@ function currentG() {
   return order[Math.max(0, Math.min(order.length - 1, focusPos))];
 }
 
-function renderStage(keepScroll = false) {
+function renderStage(keepScroll = false, count = 0) {
   const st = $('#stage'); if (!st) return;
   updateZoomUi();
   applyDisplay();
@@ -1101,8 +1146,9 @@ function renderStage(keepScroll = false) {
     renderInspector(-1);
     return;
   }
+  stageView = S.view;
   if (S.view === 'single') renderSingle(st);
-  else renderGrid(st, keepScroll ? Math.max(shown, S.page) : S.page);
+  else renderGrid(st, Math.max(count, keepScroll ? Math.max(shown, S.page) : S.page));
   if (keepScroll) st.scrollTop = top;
   renderInspector(currentG());
   refreshPaletteState();

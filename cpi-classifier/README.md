@@ -298,6 +298,9 @@ or Apache basic auth.
   * **True scale** draws every particle at the same µm per screen pixel, with a
     scale bar, so sizes really compare. **Fit** fills each tile.
   * Outline (O) overlays the detected boundary. Contrast (B) stretches the image.
+  * Going to another page (Guide, Progress, Flights…) and back, or reloading the
+    browser tab, returns you to the same particles, scrolled to where you were.
+    Changing the flights, filters, order or Shuffle starts a fresh set.
   * **Drag and drop:** drag a particle, or a whole selection, onto a class button
     to put it in that class, or onto *Remove label*. In the one-at-a-time view
     you can drag the large image. Each class button shows how many particles
