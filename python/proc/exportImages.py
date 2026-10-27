@@ -14,6 +14,7 @@ from datetime import datetime
 from datetime import timedelta
 from tqdm import tqdm
 import gc
+from exportBackground import corrected_roi, options_from_dat
 
 def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
     classifierFile,minClassSize, dropBins=[1,3,5,8],iceBins=[0,2,4,6,7],unclass=[-1]):
@@ -115,9 +116,13 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
 
    
         dataload=sio.loadmat(os.path.join(pathname, filenames[l].replace('.roi', '.mat')),
-                           variable_names=['ROI_N','dat'])
+                           variable_names=['ROI_N','dat','BG','BG_USED'])
         ROI_N=dataload['ROI_N']
         dat=dataload['dat']
+        if 'BG' not in dataload:
+            raise ValueError('Missing BG in '+filenames[l]+': cannot normalise exports')
+        bg, bg_used = dataload['BG'], dataload.get('BG_USED')
+        norm_opts = options_from_dat(dat)
         del dataload
         
         """
@@ -226,18 +231,19 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
             
             
             if runx<= (1.+interxy):
+                roi_pixels = corrected_roi(ROI_N['IMAGE'][0,0][0,i], bg, bg_used, i, norm_opts, cpiv1=cpiv1, start_x=ROI_N['StartX'][0,0][0,i])
                 if classifier==True:
                     # drops
                     if(np.isin(class2[i],dropBins)):
-                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Greys_r')
+                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='Greys_r')
                     # ice
                     elif(np.isin(class2[i],iceBins)):
-                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
+                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='Blues_r')
                     # unclassified
                     elif(np.isin(class2[i],unclass)):
-                        h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Reds_r')
+                        h.imshow(roi_pixels,vmin=0,vmax=255,cmap='Reds_r')
                 elif classifier==False:
-                    h.imshow(ROI_N['IMAGE'][0,0][0,i]['IM'][0,0],cmap='Blues_r')
+                    h.imshow(roi_pixels,vmin=0,vmax=255,cmap='Blues_r')
                 h.axis('off')
                 page_has_particles=True
                 

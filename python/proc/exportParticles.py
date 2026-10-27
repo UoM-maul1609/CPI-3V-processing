@@ -19,6 +19,7 @@ import tempfile
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy.io import loadmat
+from exportBackground import corrected_roi, options_from_dat
 
 _FIELDS = ('source_id','project','flight','date','timestamp','source_mat','source_roi','roi_index','particle_index','size_um','focus','eligible','export_status','png_relative_path','processing_options','error')
 
@@ -162,7 +163,10 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
     written=existing=filtered=0
     for mat in mat_files:
         try:
-            data=loadmat(mat,variable_names=['ROI_N','dat'])
+            data=loadmat(mat,variable_names=['ROI_N','dat','BG','BG_USED'])
+            if 'BG' not in data:
+                raise ValueError('Missing BG: cannot export background-normalised ROIs')
+            bg, bg_used = data['BG'], data.get('BG_USED')
             rois=np.asarray(_field(data['ROI_N'],'IMAGE')).reshape(-1)
             times=np.asarray(_field(data['ROI_N'],'Time')).reshape(-1)
             dat=data['dat']
@@ -175,6 +179,7 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
                 opts=str(_single(opts))
             except (KeyError,TypeError):
                 opts=''
+            normalization_options = options_from_dat(dat)
         except Exception as exc:
             errors.append({'file':mat.name,'error':str(exc)})
             print(f'WARNING: skipping {mat.name}: {exc}',flush=True)
@@ -199,7 +204,7 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
                     try:
                         # MAT currently holds only one particle contour per ROI. No overlay
                         # is added unless the source explicitly stores multiple detections.
-                        arr=_png_bytes_array(rois[i]); img=_encode_image(arr,None)
+                        arr=corrected_roi(rois[i],bg,bg_used,i,normalization_options); img=_encode_image(arr,None)
                         _write_png(img,png)
                         status='exported';written+=1
                     except Exception as exc:
