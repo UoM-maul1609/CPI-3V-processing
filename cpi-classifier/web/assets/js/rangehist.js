@@ -2,6 +2,8 @@
 // property and lets you choose a range of it.
 
 const NB = 44;
+const DOMAINS = new WeakMap();
+const BINS = new WeakMap();      // column array -> {key, b: Uint8Array of bin numbers}   // column array -> {lin|log: {lo, hi, empty}}
 const H = 52;
 
 export class RangeHist {
@@ -44,15 +46,29 @@ export class RangeHist {
   get active() { return this.range[0] !== null || this.range[1] !== null; }
 
   setDomain(values) {
-    // robust domain: ignore the extreme 0.2% so one odd particle doesn't squash the plot
-    const v = [];
-    for (let i = 0; i < values.length; i++) { const x = values[i]; if (Number.isFinite(x) && (!this.o.log || x > 0)) v.push(x); }
-    if (!v.length) { this.lo = 0; this.hi = 1; this.empty = true; return; }
-    this.empty = false;
-    v.sort((a, b) => a - b);
-    const q = (p) => v[Math.min(v.length - 1, Math.max(0, Math.round(p * (v.length - 1))))];
-    this.lo = q(0.002); this.hi = q(0.998);
-    if (this.hi <= this.lo) { this.hi = this.lo + (this.o.log ? this.lo : 1); }
+    // robust domain: ignore the extreme 0.2% so one odd particle doesn't squash the plot.
+    // A sample of up to 200,000 is plenty for that, and the answer is remembered per column,
+    // so millions of particles don't mean seconds of sorting each time the page is drawn.
+    const key = this.o.log ? 'log' : 'lin';
+    let memo = DOMAINS.get(values);
+    if (memo && memo[key]) { Object.assign(this, memo[key]); return; }
+    const n = values.length;
+    const step = Math.max(1, Math.floor(n / 200000));
+    const v = new Float64Array(Math.ceil(n / step));
+    let m = 0;
+    for (let i = 0; i < n; i += step) { const x = values[i]; if (Number.isFinite(x) && (!this.o.log || x > 0)) v[m++] = x; }
+    let out;
+    if (!m) out = { lo: 0, hi: 1, empty: true };
+    else {
+      const w = v.subarray(0, m).sort();
+      const q = (p) => w[Math.min(m - 1, Math.max(0, Math.round(p * (m - 1))))];
+      let lo = q(0.002), hi = q(0.998);
+      if (hi <= lo) hi = lo + (this.o.log ? lo : 1);
+      out = { lo, hi, empty: false };
+    }
+    if (!memo) { memo = {}; DOMAINS.set(values, memo); }
+    memo[key] = out;
+    Object.assign(this, out);
   }
 
   tx(v) { // value -> 0..1
@@ -67,6 +83,16 @@ export class RangeHist {
     if (!Number.isFinite(v) || (this.o.log && v <= 0)) return -1;
     const b = Math.floor(this.tx(v) * NB);
     return b < 0 ? 0 : b >= NB ? NB - 1 : b;
+  }
+  /** Bin number of every value in a column (255 = no bin), worked out once and remembered. */
+  binsOf(values) {
+    const key = `${this.o.log ? 'log' : 'lin'}:${this.lo}:${this.hi}`;
+    let memo = BINS.get(values);
+    if (memo && memo.key === key) return memo.b;
+    const b = new Uint8Array(values.length);
+    for (let i = 0; i < values.length; i++) { const k = this.bin(values[i]); b[i] = k < 0 ? 255 : k; }
+    BINS.set(values, { key, b });
+    return b;
   }
   pass(v) {
     const [a, b] = this.range;

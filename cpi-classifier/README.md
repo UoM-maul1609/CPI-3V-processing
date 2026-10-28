@@ -656,6 +656,24 @@ browser, not in the database.
   (everyone's for administrators, your own otherwise), so you can see how
   someone's view of a particle changed.
 
+## Big projects (millions of particles)
+
+* **Particle tables are stored in a binary form** (`catalog.bin` beside each
+  flight's `catalog.json`). The browser reads it straight into memory, which is
+  many times quicker than a JSON table for millions of particles, and the page no
+  longer sorts every value or builds a text id for every particle when it opens.
+  On a 2-million-particle test: about 2 s to open the Classify page instead of
+  11 s, and under 1 s to come back to it instead of 10 s.
+* **Flights imported before this** still work. To convert them (no re-export
+  needed), as the user that owns the data folder:
+  ```
+  sudo -u www-data /var/www/cpi/venv/bin/python /var/www/cpi/cpi3v/cpi-classifier/exporter/cpi_export.py --convert-catalogs /var/www/cpi/data
+  ```
+* **Compression:** `deploy/apache-cpi-compress.conf` makes Apache compress
+  catalogues on the way to the browser (install steps are in the file).
+* **Tick fewer flights for speed.** The page loads every particle in the ticked
+  flights; above 3 million it warns you. One project at a time is a good size.
+
 ## Display settings
 
 * **Defaults:** the colour map is Blues (Blues_r) for greyscale images. Change it

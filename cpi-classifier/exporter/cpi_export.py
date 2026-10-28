@@ -277,6 +277,48 @@ def col_to_list(a: np.ndarray, decimals: int):
     return out
 
 
+def write_catalog(flight_dir, fid, stems, n, fields_meta, cols):
+    """Write the particle table as catalog.json (a small header) + catalog.bin (the columns).
+
+    cols: name -> numpy array. f and i (file and image index) are stored as uint32,
+    t (seconds since 1970) as float64, everything else as float32 with NaN for
+    missing. The browser reads catalog.bin straight into typed arrays: far quicker
+    to load, and much smaller, than a column of JSON numbers for millions of particles."""
+    layout, parts, off = {}, [], 0
+    for name, a in cols.items():
+        dtype = "<u4" if name in ("f", "i") else "<f8" if name == "t" else "<f4"
+        arr = np.ascontiguousarray(np.asarray(a, dtype=float if dtype != "<u4" else np.int64).astype(dtype))
+        pad = (-off) % 8
+        if pad:
+            parts.append(b"\0" * pad); off += pad
+        layout[name] = [{"<u4": "u32", "<f8": "f64", "<f4": "f32"}[dtype], off]
+        b = arr.tobytes()
+        parts.append(b); off += len(b)
+    tmp = os.path.join(flight_dir, "catalog.bin.tmp")
+    with open(tmp, "wb") as fh:
+        for b in parts:
+            fh.write(b)
+    os.replace(tmp, os.path.join(flight_dir, "catalog.bin"))
+    write_json(os.path.join(flight_dir, "catalog.json"),
+               {"version": 2, "flight": fid, "files": stems, "n": int(n), "fields": fields_meta,
+                "bin": {"file": "catalog.bin", "bytes": off, "cols": layout}})
+
+
+def convert_catalogs(data_dir):
+    """Rewrite older catalog.json files (JSON columns) in the binary form, in place."""
+    done = 0
+    for cj in sorted(glob.glob(os.path.join(data_dir, "flights", "*", "catalog.json"))):
+        with open(cj, encoding="utf-8") as fh:
+            c = json.load(fh)
+        if "cols" not in c:
+            continue
+        cols = {k: np.array([np.nan if v is None else v for v in vals], dtype=float) for k, vals in c["cols"].items()}
+        write_catalog(os.path.dirname(cj), c["flight"], c["files"], c["n"], c["fields"], cols)
+        done += 1
+        log(f"  {c['flight']}: {c['n']} particles")
+    log(f"Converted {done} catalogue(s)")
+
+
 def datenum_to_unix(dn):
     return (np.asarray(dn, dtype=float) - MATLAB_UNIX_EPOCH) * 86400.0
 
@@ -626,20 +668,17 @@ def finish_flight(C, stems, proc_seen, cfg, base, fid, flight_dir, meta_extra):
 
     # catalogue -------------------------------------------------------------
     fields_meta = {}
-    out_cols = {"f": [int(v) for v in C["_file"]], "i": [int(v) for v in C["_idx"]],
-                "t": col_to_list(C["t"], 3)}
+    out_cols = {"f": C["_file"], "i": C["_idx"], "t": np.round(np.asarray(C["t"], dtype=float), 3)}
     for key, src, label, unit, dec, group in FIELDS:
         if np.isfinite(C[key]).any():
-            out_cols[key] = col_to_list(C[key], dec)
+            out_cols[key] = np.round(np.asarray(C[key], dtype=float), dec)
             fields_meta[key] = {"label": label, "unit": unit, "group": group, "src": src}
     for key, (label, unit, dec, group) in EXTRA_FIELDS.items():
         if key in C and np.isfinite(C[key]).any():
-            out_cols[key] = col_to_list(C[key], dec)
+            out_cols[key] = np.round(np.asarray(C[key], dtype=float), dec)
             fields_meta[key] = {"label": label, "unit": unit, "group": group}
 
-    catalog = {"version": FORMAT_VERSION, "flight": fid, "files": stems,
-               "n": int(C["t"].size), "fields": fields_meta, "cols": out_cols}
-    write_json(os.path.join(flight_dir, "catalog.json"), catalog)
+    write_catalog(flight_dir, fid, stems, C["t"].size, fields_meta, out_cols)
 
     finite_t = C["t"][np.isfinite(C["t"])]
     timeline = None
@@ -1029,6 +1068,7 @@ def main(argv=None):
     ap.add_argument("--list-colormaps", action="store_true", help="list the built-in colour maps")
     ap.add_argument("--progress", action="store_true", help="print machine-readable @progress lines (for the admin page)")
     ap.add_argument("--nav-columns", metavar="FILE", help="print the columns of a navigation file as JSON, then stop")
+    ap.add_argument("--convert-catalogs", metavar="DATA_DIR", help="rewrite already-exported catalogues in the fast binary form, then stop")
     ap.add_argument("--catalogue-summary", metavar="DIR", help="print the flights in a pipeline particle_catalogue.csv as JSON, then stop")
     a = ap.parse_args(argv)
     PROGRESS["on"] = a.progress
@@ -1037,6 +1077,9 @@ def main(argv=None):
         return
     if a.catalogue_summary:
         print(json.dumps(catalogue_summary(a.catalogue_summary)))
+        return
+    if a.convert_catalogs:
+        convert_catalogs(a.convert_catalogs)
         return
     if a.list_colormaps:
         for k, v in builtin_colormaps().items():

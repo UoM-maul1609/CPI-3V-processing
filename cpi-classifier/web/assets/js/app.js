@@ -136,7 +136,8 @@ function rememberSpot() {
   const st = $('#stage');
   spot = { sig: spotSig(), order, shown, focusPos, anchorPos, view: stageView, sel: [...selection],
     stageTop: st.scrollTop, winTop: window.scrollY };
-  try { sessionStorage.setItem(SPOT_KEY, JSON.stringify(Object.assign({}, spot, { order: Array.from(order) }))); } catch { /* too big or blocked: memory only */ }
+  // for a reload too, but not for huge selections (too big to store, and slow to write)
+  try { if (order.length <= 200000) sessionStorage.setItem(SPOT_KEY, JSON.stringify(Object.assign({}, spot, { order: Array.from(order) }))); else sessionStorage.removeItem(SPOT_KEY); } catch { /* too big or blocked: memory only */ }
 }
 function takeSpot() {
   let sp = spot;
@@ -498,21 +499,27 @@ function selectedFlights() {
   return S.flights;
 }
 
-async function ensureData() {
+async function ensureData(onProgress = null) {
   const ids = selectedFlights();
   const key = ids.join('|');
   if (key === Dkey && D) return;
   Dkey = key;
-  D = ids.length ? await combine(ids) : null;
+  D = null;
+  try { D = ids.length ? await combine(ids, onProgress) : null; } catch (e) { Dkey = ''; throw e; }
   if (D) await refreshLabels();
+  if (D && D.n > BIG_N) setTimeout(() => toast(`${fmtInt(D.n)} particles from ${ids.length} flights: the page may be slow. Tick fewer flights (or one project) for a faster page.`, 7000), 300);
 }
+const BIG_N = 3e6;
 
 async function viewClassify(root) {
   root.className = '';
   root.innerHTML = '';
   if (!manifest || !visibleFlights().length) return emptyNoData(root);
-  root.append(h('div', { class: 'empty' }, h('p', {}, 'Loading particles…')));
-  try { await ensureData(); } catch (e) { root.innerHTML = ''; root.append(h('div', { class: 'empty' }, h('h2', {}, 'Could not load the particles'), h('p', {}, e.message))); return; }
+  const note = h('p', {}, 'Loading particles…');
+  root.append(h('div', { class: 'empty' }, note));
+  const want = selectedFlights().reduce((t, id) => t + (manifest.byId.get(id)?.n || 0), 0);
+  if (want) note.textContent = `Loading ${fmtInt(want)} particles…`;
+  try { await ensureData((done, total) => { if (total > 1) note.textContent = `Loading ${fmtInt(want)} particles… (${done} of ${total} flights)`; }); } catch (e) { root.innerHTML = ''; root.append(h('div', { class: 'empty' }, h('h2', {}, 'Could not load the particles'), h('p', {}, e.message))); return; }
   root.innerHTML = '';
 
   classifyEl = h('div', { class: 'classify' + (S.inspector ? '' : ' no-insp') });
@@ -970,33 +977,45 @@ function recompute(restore = null) {
   for (const d of dims) d.rh.all.fill(0);
   const vals = dims.map((d) => col[d.field]);
   const bins = dims.map((d) => d.rh);
+  const bix = dims.map((d, k) => d.rh.binsOf(vals[k]));     // bin numbers, worked out once per column
   const show = S.show;
   const [showCls, showOf] = show.startsWith('cls:') ? show.slice(4).split(':') : [null, null];
   const showPile = show.startsWith('pile:') ? new Set(piles.get(show.slice(5))?.pids || []) : null;
   if (show.startsWith('pile:') && !showPile) { S.show = 'todo'; return recompute(); }
+  // which particles are labelled, as flags by particle number: looking each one up by its
+  // id string would mean building millions of strings on a big selection
+  const mineAt = new Map();
+  const MINE = 1, ANY = 2, DIS = 4, PILE = 8;
+  const mark = new Uint8Array(show === 'all' ? 0 : n);
+  if (show !== 'all') {
+    for (const [pid, m] of labels.mine) { const g = D.index.get(pid); if (g !== undefined) { mark[g] |= MINE; mineAt.set(g, m); } }
+    if (show === 'none' || show === 'any' || show === 'disagree') {
+      for (const [pid, c] of labels.counts) { const g = D.index.get(pid); if (g !== undefined) { mark[g] |= ANY; if (Object.keys(c).length > 1) mark[g] |= DIS; } }
+    }
+    if (showPile) for (const pid of showPile) { const g = D.index.get(pid); if (g !== undefined) mark[g] |= PILE; }
+  }
   const out = [];
   for (let g = 0; g < n; g++) {
     if (S.hideEdge && edge && edge[g] > 0) continue;
     if (show !== 'all') {
-      const pid = D.pid(g);
-      const m = labels.mine.get(pid);
-      if (show === 'todo' && m) continue;
-      if (show === 'mine' && !m) continue;
-      if (showCls && (!m || m.label !== showCls || (showOf && m.made_of !== showOf))) continue;
-      if (showPile && !showPile.has(pid)) continue;
-      if (show === 'none' && labels.counts.has(pid)) continue;
-      if (show === 'any' && !labels.counts.has(pid)) continue;
-      if (show === 'disagree') { const c = labels.counts.get(pid); if (!c || Object.keys(c).length < 2) continue; }
+      const f = mark[g];
+      if (show === 'todo' && (f & MINE)) continue;
+      if (show === 'mine' && !(f & MINE)) continue;
+      if (showCls) { const m = (f & MINE) ? mineAt.get(g) : null; if (!m || m.label !== showCls || (showOf && m.made_of !== showOf)) continue; }
+      if (showPile && !(f & PILE)) continue;
+      if (show === 'none' && (f & ANY)) continue;
+      if (show === 'any' && !(f & ANY)) continue;
+      if (show === 'disagree' && !(f & DIS)) continue;
     }
     let fails = 0, last = -1;
     for (let k = 0; k < nd; k++) {
       if (!bins[k].pass(vals[k][g])) { fails++; last = k; if (fails > 1) break; }
     }
     if (fails === 0) {
-      for (let k = 0; k < nd; k++) { const b = bins[k].bin(vals[k][g]); if (b >= 0) bins[k].all[b]++; }
+      for (let k = 0; k < nd; k++) { const b = bix[k][g]; if (b !== 255) bins[k].all[b]++; }
       out.push(g);
     } else if (fails === 1) {
-      const b = bins[last].bin(vals[last][g]); if (b >= 0) bins[last].all[b]++;
+      const b = bix[last][g]; if (b !== 255) bins[last].all[b]++;
     }
   }
   for (const d of dims) d.rh.draw();

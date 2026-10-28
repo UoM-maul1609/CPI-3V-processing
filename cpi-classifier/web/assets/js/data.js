@@ -24,10 +24,24 @@ export async function loadManifest() {
   return manifest;
 }
 
+/** A flight's particle table: catalog.json, plus catalog.bin (typed columns) when the
+ *  exporter wrote one. Older exports keep their columns in the JSON itself. */
 export function loadCatalog(id) {
   if (!catalogs.has(id)) {
-    const p = fetch(`${DATA_ROOT}flights/${encodeURIComponent(id)}/catalog.json`)
-      .then((r) => { if (!r.ok) throw new Error(`Could not load particles for ${id}`); return r.json(); });
+    const base = `${DATA_ROOT}flights/${encodeURIComponent(id)}/`;
+    const p = fetch(base + 'catalog.json')
+      .then((r) => { if (!r.ok) throw new Error(`Could not load particles for ${id}`); return r.json(); })
+      .then(async (c) => {
+        if (!c.bin) return c;
+        const r = await fetch(base + c.bin.file + '?v=' + encodeURIComponent(c.bin.bytes));
+        if (!r.ok) throw new Error(`Could not load particles for ${id}`);
+        const buf = await r.arrayBuffer();
+        const T = { u32: Uint32Array, f64: Float64Array, f32: Float32Array };
+        c.cols = {};
+        for (const [name, [type, off]] of Object.entries(c.bin.cols)) c.cols[name] = new T[type](buf, off, c.n);
+        c.typed = true;
+        return c;
+      });
     catalogs.set(id, p);
     p.catch(() => catalogs.delete(id));
   }
@@ -62,16 +76,18 @@ export function loadBoundaries(flightId, stem) {
  *   D.fields[name]       {label, unit, group}
  *   D.pid(g), D.img(g)   helpers;  D.index  Map pid -> g
  */
-export async function combine(ids) {
-  const cats = await Promise.all(ids.map(loadCatalog));
+export async function combine(ids, onProgress = null) {
+  let done = 0;
+  const cats = await Promise.all(ids.map((id) => loadCatalog(id).then((c) => { done++; onProgress?.(done, ids.length); return c; })));
   const n = cats.reduce((s, c) => s + c.n, 0);
   const fields = {};
   for (const c of cats) Object.assign(fields, c.fields);
   fields.t = { label: 'Time', unit: 'UTC', group: 'time' };
   const names = Object.keys(fields);
   const col = {};
-  for (const k of names) col[k] = new Float64Array(n).fill(NaN);
-  const fl = new Uint16Array(n), file = new Uint16Array(n), roi = new Uint32Array(n);
+  // times need float64; everything else is fine (and half the memory) as float32
+  for (const k of names) col[k] = (k === 't' ? new Float64Array(n) : new Float32Array(n)).fill(NaN);
+  const fl = new Uint16Array(n), file = new Uint32Array(n), roi = new Uint32Array(n);
   const flights = [];
   let off = 0;
   cats.forEach((c, k) => {
@@ -81,10 +97,12 @@ export async function combine(ids) {
       const src = c.cols[name];
       if (!src) continue;
       const dst = col[name];
-      for (let i = 0; i < c.n; i++) { const v = src[i]; if (v !== null) dst[off + i] = v; }
+      if (c.typed) dst.set(src, off);
+      else for (let i = 0; i < c.n; i++) { const v = src[i]; if (v !== null) dst[off + i] = v; }
     }
     fl.fill(k, off, off + c.n);
-    for (let i = 0; i < c.n; i++) { file[off + i] = c.cols.f[i]; roi[off + i] = c.cols.i[i]; }
+    if (c.typed) { file.set(c.cols.f, off); roi.set(c.cols.i, off); }
+    else for (let i = 0; i < c.n; i++) { file[off + i] = c.cols.f[i]; roi[off + i] = c.cols.i[i]; }
     off += c.n;
   });
   const D = { n, col, fields, fl, file, roi, flights };
@@ -92,9 +110,38 @@ export async function combine(ids) {
   D.stem = (g) => flights[fl[g]].files[file[g]];
   D.img = (g) => { const F = flights[fl[g]]; return `${DATA_ROOT}flights/${encodeURIComponent(F.id)}/img/${encodeURIComponent(F.files[file[g]])}/${roi[g]}.png`; };
   D.pixel = (g) => flights[fl[g]].pixel_um;
-  D.index = new Map();
-  for (let g = 0; g < n; g++) D.index.set(D.pid(g), g);
+  D.index = pidIndex(D);
   return D;
+}
+
+/** pid -> particle number, without making a string for every particle up front (millions of
+ *  them would take seconds and hundreds of MB). Each flight's lookup is built the first
+ *  time one of its particles is asked for, keyed by numbers. Behaves like a read-only Map. */
+function pidIndex(D) {
+  const byId = new Map(D.flights.map((F, k) => [F.id, k]));
+  const perFlight = new Map();     // k -> {stems: Map stem->file index, at: Map key->g}
+  const lookup = (k) => {
+    let L = perFlight.get(k);
+    if (!L) {
+      const F = D.flights[k];
+      L = { stems: new Map(F.files.map((s, i) => [s, i])), at: new Map() };
+      for (let g = F.offset, end = F.offset + F.n; g < end; g++) L.at.set(D.file[g] * 4294967296 + D.roi[g], g);
+      perFlight.set(k, L);
+    }
+    return L;
+  };
+  const find = (pid) => {
+    if (typeof pid !== 'string') return undefined;
+    const a = pid.indexOf(':'), b = pid.lastIndexOf(':');
+    if (a < 0 || b <= a) return undefined;
+    const k = byId.get(pid.slice(0, a));
+    if (k === undefined) return undefined;
+    const L = lookup(k);
+    const fi = L.stems.get(pid.slice(a + 1, b));
+    if (fi === undefined) return undefined;
+    return L.at.get(fi * 4294967296 + Number(pid.slice(b + 1)));
+  };
+  return { get: find, has: (pid) => find(pid) !== undefined, get size() { return D.n; } };
 }
 
 // ---------------------------------------------------------------- formatting
