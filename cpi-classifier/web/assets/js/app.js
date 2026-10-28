@@ -81,7 +81,7 @@ if ((S.prefsV || 1) < 2) { S.cmap = 'blues'; S.prefsV = 2; lsSet('cpi.prefs', S)
 // Display settings also travel with your account, so they follow you to other computers
 // (and between the tunnel address and the campus address, which browsers keep apart).
 const SYNCED = ['cmap', 'brightness', 'contrast', 'outline', 'outlineColor', 'overlays', 'sizeField', 'scale', 'zoom', 'bigTile', 'tile',
-  'view', 'order', 'sizeBins', 'hideEdge', 'inspector', 'exportOpts', 'guideInst', 'guideWho', 'guideScale', 'guideSize', 'guidePer', 'prefsV'];
+  'view', 'order', 'sizeBins', 'hideEdge', 'inspector', 'exportOpts', 'flights', 'projOpen', 'show', 'guideInst', 'guideWho', 'guideScale', 'guideSize', 'guidePer', 'prefsV'];
 let prefsTimer = null, prefsSent = '';
 const savePrefs = () => {
   lsSet('cpi.prefs', S);
@@ -494,7 +494,8 @@ let classifyEl = null;
 
 function selectedFlights() {
   const ids = visibleFlights().map((f) => f.id);
-  if (S.flights === null) S.flights = ids.length <= 3 ? ids : ids.slice(0, 1);
+  // first visit: one flight (the first of the first project), not everything; people tick more
+  if (S.flights == null) { const first = groupByProject(visibleFlights()).values().next().value; S.flights = first && first.length ? [first[0].id] : []; savePrefs(); }
   S.flights = S.flights.filter((id) => ids.includes(id));
   return S.flights;
 }
@@ -573,24 +574,38 @@ function buildSidebar() {
   // flights
   const fl = h('div', { class: 'flightlist' });
   const byProject = groupByProject(visibleFlights());
+  if (!S.projOpen || typeof S.projOpen !== 'object') S.projOpen = {};
   for (const [project, list] of byProject) {
-    if (byProject.size > 1 || project) {
-      const n = list.filter((f) => S.flights.includes(f.id)).length;
+    const grouped = byProject.size > 1 || !!project;
+    const n = list.filter((f) => S.flights.includes(f.id)).length;
+    // projects fold away: open if you said so, otherwise only when one of its flights is ticked
+    const open = !grouped || (S.projOpen[project] ?? n > 0);
+    if (grouped) {
       const cb = h('input', { type: 'checkbox', checked: n === list.length, onchange: (e) => {
         const ids = list.map((f) => f.id);
         S.flights = e.target.checked ? [...new Set([...S.flights, ...ids])] : S.flights.filter((x) => !ids.includes(x));
         savePrefs(); route();
       } });
       cb.indeterminate = n > 0 && n < list.length;
-      fl.append(h('label', { class: 'flightrow projrow', title: `All flights in ${project || 'no project'}` }, cb,
+      const caret = h('button', { type: 'button', class: 'projcaret', 'aria-expanded': String(open), 'aria-label': `${open ? 'Hide' : 'Show'} the flights in ${project || 'no project'}`,
+        onclick: (e) => {
+          e.preventDefault(); e.stopPropagation();
+          const now = e.currentTarget.getAttribute('aria-expanded') !== 'true';
+          S.projOpen = Object.assign({}, S.projOpen, { [project]: now }); savePrefs();
+          e.currentTarget.setAttribute('aria-expanded', String(now));
+          e.currentTarget.setAttribute('aria-label', `${now ? 'Hide' : 'Show'} the flights in ${project || 'no project'}`);
+          fl.querySelectorAll('.flightrow[data-proj]').forEach((r) => { if (r.dataset.proj === project) r.hidden = !now; });
+        },
+        html: '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' });
+      fl.append(h('label', { class: 'flightrow projrow', title: `All flights in ${project || 'no project'}` }, caret, cb,
         h('span', { class: 'fl-name' }, project || 'No project',
         project ? h('a', { class: 'projinfo', href: projectHref(project), title: `About ${project}: description, pictures and links`, 'aria-label': `About ${project}`, onclick: (e) => e.stopPropagation(),
           html: '<svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 11v6M12 7.5v.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>' }) : null),
-        h('span', { class: 'fl-n' }, fmtInt(list.reduce((a, f) => a + f.n, 0)))));
+        h('span', { class: 'fl-n' }, n && n < list.length ? `${n}/${list.length} · ` : '', fmtInt(list.reduce((a, f) => a + f.n, 0)))));
     }
   for (const f of list) {
     const on = S.flights.includes(f.id);
-    fl.append(h('label', { class: 'flightrow' + (project ? ' inproj' : ''), title: [f.campaign, f.platform, f.date].filter(Boolean).join(', ') },
+    fl.append(h('label', { class: 'flightrow' + (project ? ' inproj' : ''), 'data-proj': grouped ? project : null, hidden: !open, title: [f.campaign, f.platform, f.date].filter(Boolean).join(', ') },
       h('input', { type: 'checkbox', checked: on, onchange: async (e) => {
         S.flights = e.target.checked ? [...S.flights, f.id] : S.flights.filter((x) => x !== f.id);
         savePrefs(); route();

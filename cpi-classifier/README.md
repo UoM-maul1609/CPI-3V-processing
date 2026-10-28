@@ -671,6 +671,10 @@ browser, not in the database.
   ```
 * **Compression:** `deploy/apache-cpi-compress.conf` makes Apache compress
   catalogues on the way to the browser (install steps are in the file).
+* **The flight list** folds each project away (the arrow beside it); a project
+  opens by itself when one of its flights is ticked. A first visit ticks just one
+  flight. Which flights are ticked, which projects are open, and the *Show*
+  choice are remembered with your account, so they follow you to other computers.
 * **Tick fewer flights for speed.** The page loads every particle in the ticked
   flights; above 3 million it warns you. One project at a time is a good size.
 

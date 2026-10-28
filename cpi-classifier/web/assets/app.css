@@ -1035,3 +1035,12 @@ body.dragging .guide-cls { outline: 1px dashed color-mix(in srgb, var(--c) 60%, 
 .flowcls kbd { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px; font: 700 .7rem/1 var(--font); background: var(--c, var(--panel-2)); color: #fff; }
 .flowflag { border-style: dashed; border-left-width: 1px; }
 .flowflag kbd { background: var(--panel-2); color: var(--ink-2); border-radius: 50%; }
+
+/* ---------- flight list: projects fold away ---------- */
+.flightlist { max-height: min(46vh, 520px); }
+.flightrow.projrow { grid-template-columns: 18px 18px 1fr auto; }
+.projcaret { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; background: none; color: var(--ink-3); cursor: pointer; border-radius: 4px; }
+.projcaret:hover { background: var(--panel-2); color: var(--ink); }
+.projcaret svg { transition: transform .15s; }
+.projcaret[aria-expanded="true"] svg { transform: rotate(90deg); }
+.flightrow[hidden] { display: none; }
