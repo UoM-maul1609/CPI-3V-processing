@@ -176,6 +176,17 @@ function clean_made_of(array $map, string $label, $v): ?string {
     return isset($map[$label]) && in_array($v, $map[$label], true) ? $v : null;
 }
 
+/** flag id -> the classes it applies to (flags with no list apply to every class). */
+function flag_for_map(array $sch): array {
+    $m = [];
+    foreach ($sch['flags'] ?? [] as $f) if (!empty($f['for']) && is_array($f['for'])) $m[$f['id']] = array_map('strval', $f['for']);
+    return $m;
+}
+/** Drop flags that don't apply to this label (e.g. Chain on a plate). */
+function flag_applies(array $forMap, string $flag, string $label): bool {
+    return !isset($forMap[$flag]) || in_array($label, $forMap[$flag], true);
+}
+
 /** The classes and flags: the admin's edited copy if there is one, else config/scheme.json. */
 function scheme_override_file(): ?string {
     $w = cfg()['work_dir'] ?? '';

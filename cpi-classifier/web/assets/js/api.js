@@ -78,14 +78,14 @@ export async function fetchScheme() {
 export const uploadSession = (body) => call('session_upload', { body });
 export const fetchSessions = () => call('sessions');
 export const savePrefs = (prefs) => call('prefs_save', { body: { prefs } });
-export const fetchExamples = (flights, per = 8, seed = '') => call('examples', { params: { flights: flights.join(','), per: String(per), seed } });
+export const fetchExamples = (flights, per = 8, seed = '', mine = false) => call('examples', { params: { flights: flights.join(','), per: String(per), seed, ...(mine ? { mine: '1' } : {}) } });
 export const deleteSession = (id) => call('session_delete', { body: { id } });
 export const updateProfile = (body) => call('profile_update', { body });
 // admin actions (admin page only)
 export const adminGet = (action, params) => call('admin_' + action, { params });
 export const adminPost = (action, body) => call('admin_' + action, { body });
-export function exportUrl(format = 'csv', mine = false) {
-  return BASE + '?' + new URLSearchParams({ a: 'export', format, ...(mine ? { mine: '1' } : {}) });
+export function exportUrl(format = 'csv', mine = false, history = false) {
+  return BASE + '?' + new URLSearchParams({ a: 'export', format, ...(mine ? { mine: '1' } : {}), ...(history ? { history: '1' } : {}) });
 }
 
 // ---------------------------------------------------------------- save queue

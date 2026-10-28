@@ -197,6 +197,53 @@ export function unsavedCount() {
   return n;
 }
 
+// ------------------------------------------------------------------ continue from a file (practice)
+/** Load a saved session file back into this browser, to carry on where you left off
+ *  (no account needed). Classifications already in this browser are kept; where both
+ *  have the same particle, the newer one wins. */
+export function openContinue(onDone) {
+  const { h } = C;
+  const input = h('input', { type: 'file', accept: '.csv,text/csv', hidden: true });
+  input.addEventListener('change', async () => {
+    const file = input.files[0]; input.remove();
+    if (!file) return;
+    let parsed;
+    try {
+      if (file.size > 20e6) throw new Error('That file is too big for a session file.');
+      parsed = parseSessionCsv(await file.text());
+      if (!parsed.items.length) throw new Error('No classifications found in that file.');
+    } catch (e) { C.toast(e.message, 4000); return; }
+    const known = new Set(C.getScheme().classes.map((c) => c.id));
+    const st = C.practice.load();
+    let added = 0, updated = 0, kept = 0, unknown = 0;
+    for (const it of parsed.items) {
+      if (!known.has(it.label)) { unknown++; continue; }
+      const cur = st[it.pid];
+      const t = it.t || 0;
+      if (cur && (cur[2] || 0) > t) { kept++; continue; }
+      const v = [it.label, (it.flags || []).join(','), t];
+      if (it.made_of) v.push(it.made_of);
+      if (cur) updated++; else added++;
+      st[it.pid] = v;
+    }
+    try { localStorage.setItem('cpi.practice', JSON.stringify(st)); } catch { C.toast('This browser could not store them (storage full or blocked).', 5000); return; }
+    // details from the file, and what counts as already saved
+    const m = practiceMeta.load();
+    for (const k of FIELDS) if (!m[k] && parsed.meta[k]) m[k] = parsed.meta[k];
+    const savedAt = Date.parse(parsed.meta.saved_utc || '') || 0;
+    if (savedAt > (m.saved || 0)) { m.saved = savedAt; m.savedCount = Object.keys(st).length; }
+    if (!m.started) { const ts = parsed.items.map((x) => x.t).filter(Boolean); m.started = ts.length ? Math.min(...ts) : Math.round(Date.now() / 1000); }
+    practiceMeta.save(m);
+    const bits = [`${plural(added + updated, 'classification')} loaded`];
+    if (kept) bits.push(`${C.fmtInt(kept)} kept from this browser (newer)`);
+    if (unknown) bits.push(`${C.fmtInt(unknown)} skipped (classes this site doesn’t have)`);
+    C.toast(bits.join('; ') + '. Carry on where you left off.', 5000);
+    onDone?.();
+  });
+  document.body.append(input);
+  input.click();
+}
+
 // ------------------------------------------------------------------ upload
 /** Progress page card: add classifications from a file (signed in only). */
 export function uploadCard(onDone) {
@@ -263,15 +310,22 @@ async function openUploadPreview(fileName, parsed, onDone) {
     seg.append(opt('new', 'Someone without an account', 'Kept under their name, with no login. You can give them a password later on the Admin page.'));
     if (others.length) seg.append(opt('existing', 'Someone already listed', 'Added to that person’s classifications.', pick));
   }
-  const replace = h('input', { type: 'checkbox' });
-  const replaceLbl = h('span');
+  let clash = 'newer';
+  const clashBox = h('div', { class: 'whoopts clashopts', role: 'radiogroup' });
   const err = h('p', { class: 'formerr', role: 'alert' });
   const go = h('button', { type: 'submit', class: 'btn primary' });
+  const clashLbl = h('span');
   function sync() {
     pick.disabled = target !== 'existing';
     f.els.name.closest('.fld').classList.toggle('dim', target === 'me');
-    const who = target === 'me' ? 'you' : 'they';
-    replaceLbl.textContent = `Where ${who} already classified a particle, use the class in this file (otherwise ${target === 'me' ? 'your' : 'their'} existing one is kept)`;
+    const who = target === 'me' ? 'you' : 'they', their = target === 'me' ? 'your' : 'their';
+    clashBox.innerHTML = '';
+    for (const [v, t, sub] of [
+      ['newer', 'The more recent one counts', `Whichever was classified later becomes ${their} current opinion. The other is kept in ${their} history, with its date.`],
+      ['file', 'The file’s one counts', `This file’s classification becomes ${their} current opinion; the earlier one is kept in ${their} history.`],
+      ['keep', `${target === 'me' ? 'Your' : 'Their'} existing one counts`, `Nothing already there changes; this file’s classifications are only added to ${their} history.`],
+    ]) clashBox.append(h('label', { class: 'whoopt' }, h('input', { type: 'radio', name: 'clash', value: v, checked: clash === v, onchange: () => { clash = v; } }), h('span', {}, h('b', {}, t), h('small', {}, sub))));
+    clashLbl.textContent = `Where ${who} already classified a particle`;
     go.textContent = `Add ${plural(items.length, 'classification')}`;
   }
   sync();
@@ -294,10 +348,13 @@ async function openUploadPreview(fileName, parsed, onDone) {
       if (target !== 'me' && !meta.name) { err.textContent = 'Give the name of the person who made these classifications.'; f.els.name.focus(); return; }
       go.disabled = true; go.textContent = 'Adding…';
       try {
-        const r = await api.uploadSession({ meta, target: target === 'existing' ? Number(pick.value) : target, replace: replace.checked, items });
+        const r = await api.uploadSession({ meta, target: target === 'existing' ? Number(pick.value) : target, clash, items });
         d.close();
-        const kept = r.kept_existing ? `; ${plural(r.kept_existing, 'particle')} already classified, kept as ${target === 'me' ? 'you' : 'they'} had ${r.kept_existing === 1 ? 'it' : 'them'}` : '';
-        C.toast(`Added ${plural(r.saved, 'classification')} for ${r.contributor}${kept}`, 5000);
+        const bits = [`Added ${plural(r.saved, 'classification')} for ${r.contributor}`];
+        if (r.replaced) bits.push(`${plural(r.replaced, 'changed opinion')} now current`);
+        if (r.kept_existing) bits.push(`${plural(r.kept_existing, 'earlier opinion')} kept in the history only`);
+        if (r.same) bits.push(`${C.fmtInt(r.same)} the same as before`);
+        C.toast(bits.join('; '), 6000);
         await onDone?.();
       } catch (ex) { err.textContent = ex.message; go.disabled = false; sync(); }
     } },
@@ -311,7 +368,7 @@ async function openUploadPreview(fileName, parsed, onDone) {
     h('h4', { class: 'subh' }, 'Whose work is this?'), seg,
     h('h4', { class: 'subh' }, 'About the person ', h('small', { class: 'muted' }, 'from the file; change anything that’s wrong')),
     f.wrap,
-    h('label', { class: 'check' }, replace, replaceLbl),
+    h('h4', { class: 'subh' }, clashLbl), clashBox,
     err,
     h('div', { class: 'dlg-actions sticky' },
       h('button', { type: 'button', class: 'btn ghost', onclick: () => d.close() }, 'Cancel'), go)));

@@ -623,6 +623,9 @@ print(json.dumps(r))') . ' 2>&1'));
                     if (!empty($c['of']) && is_array($c['of']))
                         $item['of'] = array_values(array_unique(array_filter(array_map('strval', $c['of']), fn($x) => preg_match('/^[a-z0-9_]{1,40}$/', $x))));
                 }
+                // a flag that only applies to some classes (e.g. Chain for aggregates)
+                if ($kind === 'flags' && !empty($c['for']) && is_array($c['for']))
+                    $item['for'] = array_values(array_unique(array_filter(array_map('strval', $c['for']), fn($x) => preg_match('/^[a-z0-9_]{1,40}$/', $x))));
                 $clean[$kind][] = $item;
             }
         }
@@ -633,6 +636,12 @@ print(json.dumps(r))') . ' 2>&1'));
             if (!$cc['of']) unset($cc['of']);
         }
         unset($cc);
+        foreach ($clean['flags'] as &$ff) {
+            if (!isset($ff['for'])) continue;
+            $ff['for'] = array_values(array_filter($ff['for'], fn($x) => isset($ids[$x])));
+            if (!$ff['for']) unset($ff['for']);
+        }
+        unset($ff);
         $clean['version'] = 'custom-' . gmdate('YmdHi');
         $f = scheme_override_file();
         if (!$f) fail(500, "Set 'work_dir' in config.php so edited classes can be saved");

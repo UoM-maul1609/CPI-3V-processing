@@ -204,6 +204,20 @@ async function classesView(inner) {
             render();
           } }), name))));
     };
+    // A flag can be limited to some classes (e.g. Chain only for aggregates); it then appears only beside those
+    const forEditor = (c) => {
+      const opts = sch.classes.filter((x) => x.id).map((x) => [x.id, x.name]);
+      const chosen = new Set(c.for || []);
+      return h('details', { class: 'ce-of', open: chosen.size > 0 },
+        h('summary', { class: 'muted small' }, chosen.size ? `Only for: ${[...chosen].map((v) => opts.find((o) => o[0] === v)?.[1] || v).join(', ')}` : 'For every class (limit it to some…)'),
+        h('div', { class: 'ce-ofchips' }, opts.map(([id, name]) => h('label', { class: 'check small' },
+          h('input', { type: 'checkbox', checked: chosen.has(id), onchange: (e) => {
+            if (e.target.checked) chosen.add(id); else chosen.delete(id);
+            const order = opts.map((o) => o[0]).filter((x) => chosen.has(x));
+            if (order.length) c.for = order; else delete c.for;
+            render();
+          } }), name))));
+    };
     const row = (kind, c, i) => {
       const list = sch[kind];
       const used = usage.get(c.id) || 0;
@@ -217,7 +231,7 @@ async function classesView(inner) {
         h('span', { class: 'ce-text' },
           h('input', { class: 'ce-name', value: c.name, placeholder: 'Name', 'aria-label': 'Name', onchange: (e) => { c.name = e.target.value; if (isNew) c.id = ''; render(); } }),
           h('input', { class: 'ce-desc', value: c.desc || '', placeholder: 'What it looks like (shown as a tip and in the guide)', 'aria-label': 'Description', onchange: (e) => { c.desc = e.target.value; } }),
-          kind === 'classes' ? ofEditor(c) : null),
+          kind === 'classes' ? ofEditor(c) : forEditor(c)),
         h('span', { class: 'ce-used muted small' }, used ? `${used.toLocaleString()} used` : isNew ? 'new' : 'unused'),
         h('button', { class: 'iconbtn sm danger', 'aria-label': `Remove ${c.name}`, title: 'Remove', onclick: () => {
           if (used && !confirm(`${used} classifications use “${c.name}”. They stay in the database (and in downloads) under the id “${c.id}”, but people can no longer choose it. Remove it?`)) return;
@@ -238,7 +252,7 @@ async function classesView(inner) {
         box.querySelector('.celist .cerow:last-child .ce-name')?.focus();
       } }, '+ Add a class'),
       h('h2', { style: { marginTop: '28px' } }, 'Flags'),
-      h('p', { class: 'muted small' }, 'Extra details people can add to any class, e.g. rimed or hollow.'),
+      h('p', { class: 'muted small' }, 'Extra details people can add to a class, e.g. rimed. A flag limited to some classes (Hollow, Chain) appears only beside those classes, as a second choice.'),
       h('div', { class: 'celist' }, sch.flags.map((c, i) => row('flags', c, i))),
       h('button', { class: 'btn small', onclick: () => { sch.flags.push({ id: '', name: '', key: '', desc: '' }); render(); box.querySelector('.celist:last-of-type .cerow:last-child .ce-name')?.focus(); } }, '+ Add a flag'),
       h('h2', { style: { marginTop: '28px' } }, 'Guidance for people classifying'),

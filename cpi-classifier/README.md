@@ -356,8 +356,10 @@ or Apache basic auth.
 * **Progress:** counts per class, coverage per flight, contributors, agreement
   between people, and CSV/JSON download. Admins can download everyone's labels;
   other people download their own.
-* **Guide:** the scheme, keyboard shortcuts, and example particles. The examples
-  are the particles people agree on most for each class.
+* **Guide:** the scheme, keyboard shortcuts, and example particles for each
+  class: the ones people agree on most, or your own. You can resize them, show
+  them at the same scale, filter by project and instrument, click one to change
+  your classification, or drag it onto another class (see *Guide page* below).
 
 Labels save automatically in small batches. If the connection drops, unsent
 labels are kept in the browser and sent later. Every change also goes to an
@@ -486,7 +488,10 @@ The default list starts with **Droplet** (key D): liquid drops, near-perfect
 circles with a bright centre spot. **Quasi-sphere** (key 1) is for round ice and
 frozen drops. If you have already saved your own class list on the Admin page,
 the new default doesn't replace it: add *Droplet* there, or use *Restore the
-defaults*.
+defaults*. The same goes for the classes added later (Scroll, the Hollow and
+Chain choices, the extra *made of* options): if your Admin → Classes list was
+saved before, press *Restore the defaults* to get them (classifications already
+made are kept).
 
 Keys used by the page itself can't be given to a class: Z (undo), Y (redo),
 V (view), O (outline), B (contrast), M (colour map) and ?. While the *made of*
@@ -512,9 +517,30 @@ number until it runs out. The panel shows how many particles are in each bin.
 ## "Made of": a second classification
 
 Some classes ask what the particle is made of:
-* **Aggregate:** of bullet rosettes, plates, columns, dendrites, needles, capped columns, mixed habits, or can't tell.
-* **Fragment:** of a dendrite, plate, column, rosette or aggregate, or can't tell.
-* **Graupel:** what the rimed crystal was.
+* **Aggregate:** of bullet rosettes, plates, columns, dendrites, needles, capped columns, bullets, quasi-spheres, mixed habits, or can't tell.
+* **Fragment:** of a dendrite, plate, column, capped column, rosette or aggregate, or can't tell.
+* **Graupel:** what the rimed crystal was (including capped columns).
+
+Some classes also have a **second choice of their own**, which appears beside
+them (in the *made of* bar, and as a flag that only lights up for them):
+* **Hollow** (key H): for columns, needles, plates, bullets, capped columns and
+  rosettes, e.g. a hollow column or a hollowed (skeletal) plate. It stays a
+  column or plate, so counts of columns still include hollow ones.
+* **Chain** (key N): for aggregates linked end to end, e.g. *Aggregate of
+  quasi-spheres (chain)*. Press N while the *Aggregate of…* bar is up, or later.
+* **Scroll / sheath** (key L) is a class of its own.
+* **Side planes / polycrystal** (key P): plates growing out at different angles,
+  or several crystals grown (not stuck) together; common at about −20 to −40 °C.
+  Aggregates, fragments and graupel can also be made of them.
+* **Graupel vs Rimed:** Graupel is for crystals so rimed you can't tell what they
+  were. If you can still tell, use that habit plus the Rimed flag.
+* **Too small to tell:** fewer than about 15 pixels across (≈35 µm on a CPI).
+* **Rimed** works on any class, so a rimed capped column is *Capped column* +
+  Rimed (R).
+
+These are stored as flags (`hollow`, `chain`) alongside the class and *made of*.
+In **Admin → Classes**, any flag can be limited to some classes (*For every
+class (limit it to some…)*).
 
 How it works:
 * **When you classify:** after choosing one of these classes (by key, click or drag), a bar appears:
@@ -556,11 +582,31 @@ and **Fragment** (key F; this replaces the old Fragment flag).
   **Instrument** buttons above it (CPI v1.0, v1.5, v2.0, 3V-CPI: ticks every
   flight from that instrument), and the size, shape and focus filters. These
   combine with any *Show* choice.
-* **Guide page:** shows example particles for each class, taken from everyone's
-  classifications in the database (particles most people agree on). Tick which
-  instruments to take them from: CPI v1.0, v1.5, v2.0, 3V-CPI. The version comes
-  from each flight's *Instrument → Version* when it was imported. *Other
-  examples* shows a different selection.
+* **Guide page:** shows example particles for each class.
+  * **How to decide** at the top lists the questions in order (artefact? drop?
+    can you judge it? aggregate? fragment? graupel? which habit? irregular),
+    with the classes for each, so everyone reaches the same answer the same way.
+    It also reminds people to classify the 3D shape, not the 2D outline.
+  * **Agreed by most** takes them from everyone's classifications (particles most
+    people agree on); a tick shows you agree, a dashed outline that you said
+    something else. **Mine** shows your own classifications.
+  * Filter by **project** and **instrument** (CPI v1.0, v1.5, v2.0, 3V-CPI; the
+    version comes from each flight's *Instrument → Version*). *8/16/32/60 per
+    class* sets how many; *Other examples* picks a different set.
+  * The **slider** sets the picture size. **Same scale** draws every particle at
+    the same µm per screen pixel, with a scale bar, so sizes compare.
+  * **Click** a picture to change your classification (class and flag keys work,
+    ← → step through, Z undoes). **Drag** it onto another class, or
+    onto a *made of* chip, to reclassify it. In *Mine* it moves there.
+
+## On a phone
+
+The Classify page works on a phone: the class buttons become a compact strip
+(swipe sideways for more), flags and status sit underneath, and the particles get
+the rest of the screen. Tap a particle, then tap a class. *One at a time* is
+usually easiest on a small screen. While *Aggregate of…* is asking, the other
+buttons step aside until you answer or tap Skip. Dragging and the look-alike
+piles need a mouse.
 
 ## Look-alike piles
 
@@ -580,6 +626,35 @@ browser, not in the database.
 * **Afterwards:** *Back to saving* offers to keep those classifications under
   your name. Or the file can be added later by an administrator on the Progress
   page: *Add classifications from a file*.
+* **Carrying on later, without an account:** *Save to a file*, close the page,
+  and next time (in any browser, on any computer) press **Continue from a file**
+  (in the bottom bar when the browser has nothing unsaved, or on the Progress
+  page) and pick that file. Its classifications come back into the browser, with
+  the name and details saved in it, and the Classify page skips them, so you
+  carry on where you left off. Anything already in the browser is kept; where
+  both have the same particle, the newer classification wins. Save again before
+  you stop, and use the newest file next time.
+
+## Dates, changes of mind, and adding a file to someone's profile
+
+* **Every classification has a date.** Each person has one *current* opinion per
+  particle (the `labels` table, with `created_utc` and `updated_utc`), and every
+  opinion they have ever given is kept, with its date, in the history
+  (`label_log`). Agreement and counts use the current opinion, so nobody counts
+  twice. Classifications made before this change already have their dates; nothing
+  needs filling in.
+* **Adding a file to someone's profile (administrators):** Progress → *Add
+  classifications from a file*, then *Someone already listed* (picked
+  automatically when the name in the file matches), or *Someone without an
+  account*. Every classification in the file goes into that person's history with
+  the date it was made. Where they had already classified a particle, choose:
+  * **The more recent one counts** (default): whichever was classified later
+    becomes their current opinion; the other stays in the history.
+  * **The file's one counts**, or **Their existing one counts**.
+  Identical classifications are skipped.
+* **Full history (CSV)** on the Progress page lists every opinion with its date
+  (everyone's for administrators, your own otherwise), so you can see how
+  someone's view of a particle changed.
 
 ## Display settings
 

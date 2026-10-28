@@ -161,6 +161,7 @@ case 'save':
     $sch = scheme();
     $okLabels = array_column($sch['classes'] ?? [], 'id');
     $okFlags = array_column($sch['flags'] ?? [], 'id');
+    $forMap = flag_for_map($sch);
     $ofMap = made_of_map($sch);
     $ver = substr((string)($b['scheme_version'] ?? ($sch['version'] ?? '')), 0, 32);
     $now = now_sql();
@@ -190,7 +191,7 @@ case 'save':
             }
             if ($okLabels && !in_array($label, $okLabels, true)) continue;
             $flags = array_values(array_filter((array)($it['flags'] ?? []),
-                fn($f) => is_string($f) && (!$okFlags || in_array($f, $okFlags, true))));
+                fn($f) => is_string($f) && (!$okFlags || in_array($f, $okFlags, true)) && flag_applies($forMap, $f, $label)));
             $flagStr = implode(',', $flags);
             $note = isset($it['note']) ? mb_substr((string)$it['note'], 0, 500) : null;
             $mo = clean_made_of($ofMap, $label, $it['made_of'] ?? null);
@@ -210,9 +211,11 @@ case 'examples':
     // Example particles for the Guide: for each class (and each "made of"), particles that the
     // people who classified them agree on, from all classifications in the database.
     // ?flights=A,B (optional: only these flights)  &per=8  &seed=N (a different random choice)
+    // &mine=1: the signed-in person's own classifications instead, grouped the same way.
+    // Each example also carries "me": [label, flags, made_of] when the signed-in person has classified it.
     if (is_demo()) out(['examples' => (object)[]]);
     ensure_schema();
-    $per = max(1, min(24, (int)($_GET['per'] ?? 8)));
+    $per = max(1, min(60, (int)($_GET['per'] ?? 8)));
     $seed = (string)($_GET['seed'] ?? '');
     $where = ''; $args = [];
     if (isset($_GET['flights'])) {
@@ -220,6 +223,26 @@ case 'examples':
         if (!$fl) out(['examples' => (object)[]]);
         $where = 'WHERE flight_id IN (' . implode(',', array_fill(0, count($fl), '?')) . ')';
         $args = $fl;
+    }
+    $me = current_user();
+    if (!empty($_GET['mine'])) {
+        if (!$me) out(['examples' => (object)[]]);
+        $w2 = $where ? "$where AND user_id = ?" : 'WHERE user_id = ?';
+        $st = db()->prepare("SELECT pid, label, flags, made_of FROM labels $w2");
+        $st->execute(array_merge($args, [$me['id']]));
+        $cand = [];
+        foreach ($st as $r) {
+            $e = [crc32($r['pid'] . $seed), $r['pid'], $r['made_of'], 1, 1, [$r['label'], (string)$r['flags'], $r['made_of']]];
+            $cand[$r['label']][] = $e;
+            if ($r['made_of'] !== null) $cand[$r['label'] . ':' . $r['made_of']][] = $e;
+        }
+        $outEx = [];
+        foreach ($cand as $g => $list) {
+            usort($list, fn($a, $b) => $a[0] <=> $b[0]);
+            $outEx[$g] = array_map(fn($x) => ['pid' => $x[1], 'made_of' => $x[2], 'n' => 1, 't' => 1, 'me' => $x[5]], array_slice($list, 0, $per));
+            $outEx[$g . '#count'] = count($list);
+        }
+        out(['examples' => (object)$outEx]);
     }
     $tot = [];
     $st = db()->prepare("SELECT pid, COUNT(*) AS t FROM labels $where GROUP BY pid");
@@ -250,12 +273,28 @@ case 'examples':
         $outEx[$g] = array_map(fn($x) => ['pid' => $x[1], 'made_of' => $x[2], 'n' => $x[3], 't' => $x[4]], array_slice($list, 0, $per));
         $outEx[$g . '#count'] = count($list);
     }
+    if ($me && $outEx) {
+        // what the signed-in person said about each example
+        $pids = [];
+        foreach ($outEx as $g => $list) if (is_array($list)) foreach ($list as $e) $pids[$e['pid']] = 1;
+        $mine = [];
+        foreach (array_chunk(array_keys($pids), 500) as $chunk) {
+            $st = db()->prepare('SELECT pid, label, flags, made_of FROM labels WHERE user_id = ? AND pid IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')');
+            $st->execute(array_merge([$me['id']], $chunk));
+            foreach ($st as $r) $mine[$r['pid']] = [$r['label'], (string)$r['flags'], $r['made_of']];
+        }
+        foreach ($outEx as $g => &$list) if (is_array($list)) foreach ($list as &$e) if (isset($mine[$e['pid']])) $e['me'] = $mine[$e['pid']];
+        unset($list, $e);
+    }
     out(['examples' => (object)$outEx]);
 
 case 'session_upload':
     // Classifications from a session file (practice mode download), saved as one person's work.
     // {meta: {name, expertise, affiliation, notes, file_name, scheme_version, started_utc},
-    //  target: 'me' | 'new' | <user id>, replace: bool, items: [{pid, label, flags, t}]}
+    //  target: 'me' | 'new' | <user id>, clash: 'newer' | 'file' | 'keep', items: [{pid, label, flags, t}]}
+    // Every classification in the file goes into the person's history (label_log) with the date it was
+    // made. Where they had already classified a particle, 'newer' (the default) makes whichever
+    // opinion is more recent their current one; the other stays in the history.
     $u = require_user();
     $b = require_post();
     $meta = (array)($b['meta'] ?? []);
@@ -291,10 +330,12 @@ case 'session_upload':
         $sch = scheme();
         $okLabels = array_column($sch['classes'] ?? [], 'id');
         $okFlags = array_column($sch['flags'] ?? [], 'id');
+        $forMap = flag_for_map($sch);
         $pdo->prepare('INSERT INTO sessions (contributor_id, uploaded_by, name, expertise, affiliation, notes, file_name, scheme_version, started_utc, n_labels, created_at) VALUES (?,?,?,?,?,?,?,?,?,0,?)')
             ->execute([$cid, $u['id'], $name, $exp, $aff, $clip('notes', 1000), $clip('file_name', 200), $clip('scheme_version', 32), $clip('started_utc', 32), now_sql()]);
         $sid = (int)$pdo->lastInsertId();
-        $replace = !empty($b['replace']);
+        $clash = (string)($b['clash'] ?? (isset($b['replace']) ? (!empty($b['replace']) ? 'file' : 'keep') : 'newer'));
+        if (!in_array($clash, ['newer', 'file', 'keep'], true)) $clash = 'newer';
         $upsert = is_sqlite()
             ? 'INSERT INTO labels (user_id,pid,flight_id,label,flags,note,scheme_version,created_at,updated_at,session_id,made_of) VALUES (?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(user_id,pid) DO UPDATE SET label=excluded.label, flags=excluded.flags, scheme_version=excluded.scheme_version,
@@ -303,10 +344,11 @@ case 'session_upload':
                ON DUPLICATE KEY UPDATE label=VALUES(label), flags=VALUES(flags), scheme_version=VALUES(scheme_version),
                updated_at=VALUES(updated_at), session_id=VALUES(session_id), made_of=VALUES(made_of)';
         $ins = $pdo->prepare($upsert);
-        $has = $pdo->prepare('SELECT 1 FROM labels WHERE user_id = ? AND pid = ?');
+        $has = $pdo->prepare('SELECT label, flags, made_of, updated_at FROM labels WHERE user_id = ? AND pid = ?');
+        $logged = $pdo->prepare('SELECT 1 FROM label_log WHERE user_id = ? AND pid = ? LIMIT 1');
         $logq = $pdo->prepare('INSERT INTO label_log (user_id,pid,label,flags,created_at,made_of) VALUES (?,?,?,?,?,?)');
         $ofMap = made_of_map($sch);
-        $saved = $bad = $kept = 0;
+        $saved = $bad = $kept = $replaced = $same = 0;
         $unknown = [];
         $ver = $clip('scheme_version', 32) ?? ($sch['version'] ?? null);
         foreach ($items as $it) {
@@ -314,15 +356,30 @@ case 'session_upload':
             if (!preg_match(PID_RE, $pid, $m)) { $bad++; continue; }
             $label = (string)($it['label'] ?? '');
             if ($okLabels && !in_array($label, $okLabels, true)) { $unknown[$label] = ($unknown[$label] ?? 0) + 1; continue; }
-            if (!$replace) { $has->execute([$cid, $pid]); if ($has->fetch()) { $kept++; continue; } }
-            $flags = implode(',', array_values(array_filter((array)($it['flags'] ?? []), fn($f) => is_string($f) && (!$okFlags || in_array($f, $okFlags, true)))));
+            $flags = implode(',', array_values(array_filter((array)($it['flags'] ?? []), fn($f) => is_string($f) && (!$okFlags || in_array($f, $okFlags, true)) && flag_applies($forMap, $f, (string)$label))));
             $when = isset($it['t']) && is_numeric($it['t']) ? gmdate('Y-m-d H:i:s', (int)$it['t']) : now_sql();
             $mo = clean_made_of($ofMap, $label, $it['made_of'] ?? null);
-            $ins->execute([$cid, $pid, $m[1], $label, $flags, null, $ver, $when, now_sql(), $sid, $mo]);
-            $logq->execute([$cid, $pid, $label, $flags, now_sql(), $mo]);
+            $has->execute([$cid, $pid]);
+            $cur = $has->fetch();
+            $has->closeCursor();
+            if ($cur) {
+                if ($cur['label'] === $label && (string)$cur['flags'] === $flags && ($cur['made_of'] ?? null) === $mo) { $same++; continue; }
+                // make sure the opinion already held is in the history before anything changes
+                $logged->execute([$cid, $pid]);
+                if (!$logged->fetch()) $logq->execute([$cid, $pid, $cur['label'], $cur['flags'], $cur['updated_at'], $cur['made_of']]);
+                $logged->closeCursor();
+                $logq->execute([$cid, $pid, $label, $flags, $when, $mo]);      // the file's opinion, with its own date
+                $fileWins = $clash === 'file' || ($clash === 'newer' && strcmp($when, (string)$cur['updated_at']) > 0);
+                if (!$fileWins) { $kept++; continue; }
+                $ins->execute([$cid, $pid, $m[1], $label, $flags, null, $ver, $when, $when, $sid, $mo]);
+                $replaced++;
+                continue;
+            }
+            $ins->execute([$cid, $pid, $m[1], $label, $flags, null, $ver, $when, $when, $sid, $mo]);
+            $logq->execute([$cid, $pid, $label, $flags, $when, $mo]);
             $saved++;
         }
-        $pdo->prepare('UPDATE sessions SET n_labels = ? WHERE id = ?')->execute([$saved, $sid]);
+        $pdo->prepare('UPDATE sessions SET n_labels = ? WHERE id = ?')->execute([$saved + $replaced, $sid]);
         $pdo->commit();
     } catch (Throwable $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
@@ -331,7 +388,7 @@ case 'session_upload':
     }
     $st = db()->prepare('SELECT display_name FROM users WHERE id = ?');
     $st->execute([$cid]);
-    out(['session_id' => $sid, 'saved' => $saved, 'kept_existing' => $kept, 'bad' => $bad, 'unknown' => $unknown, 'contributor' => $st->fetchColumn()]);
+    out(['session_id' => $sid, 'saved' => $saved, 'replaced' => $replaced, 'same' => $same, 'kept_existing' => $kept, 'bad' => $bad, 'unknown' => $unknown, 'contributor' => $st->fetchColumn()]);
 
 case 'sessions':
     $u = require_user();
@@ -394,8 +451,29 @@ case 'stats':
 
 case 'export':
     // Admins: everyone's labels. Others: their own.
+    // &history=1: every opinion with its date (label_log), so changes of mind can be followed.
     $u = require_user();
     $fmt = $_GET['format'] ?? 'csv';
+    if (($_GET['history'] ?? '') === '1') {
+        $sql = 'SELECT g.pid, g.label, g.made_of, g.flags, g.created_at, u.username, u.display_name, u.expertise
+                FROM label_log g JOIN users u ON u.id = g.user_id';
+        $args = [];
+        if (!$u['is_admin'] || ($_GET['mine'] ?? '') === '1') { $sql .= ' WHERE g.user_id = ?'; $args[] = $u['id']; }
+        $sql .= ' ORDER BY g.pid, u.username, g.created_at, g.id';
+        $st = db()->prepare($sql);
+        $st->execute($args);
+        $stamp = gmdate('Ymd-His');
+        header('Content-Type: text/csv; charset=utf-8');
+        header("Content-Disposition: attachment; filename=\"cpi-label-history-$stamp.csv\"");
+        $fh = fopen('php://output', 'w');
+        fputcsv($fh, ['pid', 'flight', 'mat_file', 'index', 'label', 'made_of', 'flags', 'when_utc', 'username', 'name', 'expertise']);
+        foreach ($st as $r) {
+            preg_match(PID_RE, $r['pid'], $m);
+            fputcsv($fh, [$r['pid'], $m[1] ?? '', $m[2] ?? '', $m[3] ?? '', $r['label'] ?? '(removed)', $r['made_of'], $r['flags'], $r['created_at'],
+                          $r['username'], $r['display_name'], $r['expertise']]);
+        }
+        exit;
+    }
     $sql = 'SELECT l.pid, l.flight_id, l.label, l.made_of, l.flags, l.note, l.scheme_version, l.created_at, l.updated_at,
                    u.username, u.display_name, u.expertise, u.affiliation, u.is_external, l.session_id
             FROM labels l JOIN users u ON u.id = l.user_id';

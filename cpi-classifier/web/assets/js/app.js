@@ -12,7 +12,7 @@ import { OVERLAYS, infoLines, infoItems, niceBar } from './annot.js';
 import { openExport, downloadOne, sourceId } from './export.js';
 import { initProjects, viewProject, projectCards, projectHref, projectIndex, flightNotes, noteHtml } from './projects.js';
 let fNotes = new Map();   // flight id -> note (from the project pages)
-import { initSessions, openDownload, unsavedCount, practiceMeta, uploadCard, sessionsCard, openProfile } from './session.js';
+import { initSessions, openDownload, openContinue, unsavedCount, practiceMeta, uploadCard, sessionsCard, openProfile } from './session.js';
 
 // ------------------------------------------------------------------ helpers
 const $ = (s, el = document) => el.querySelector(s);
@@ -81,7 +81,7 @@ if ((S.prefsV || 1) < 2) { S.cmap = 'blues'; S.prefsV = 2; lsSet('cpi.prefs', S)
 // Display settings also travel with your account, so they follow you to other computers
 // (and between the tunnel address and the campus address, which browsers keep apart).
 const SYNCED = ['cmap', 'brightness', 'contrast', 'outline', 'outlineColor', 'overlays', 'sizeField', 'scale', 'zoom', 'bigTile', 'tile',
-  'view', 'order', 'sizeBins', 'hideEdge', 'inspector', 'exportOpts', 'guideInst', 'prefsV'];
+  'view', 'order', 'sizeBins', 'hideEdge', 'inspector', 'exportOpts', 'guideInst', 'guideWho', 'guideScale', 'guideSize', 'guidePer', 'prefsV'];
 let prefsTimer = null, prefsSent = '';
 const savePrefs = () => {
   lsSet('cpi.prefs', S);
@@ -884,7 +884,7 @@ function buildPalette() {
   }
   const fl = h('div', { class: 'palette-flags', role: 'group', 'aria-label': 'Flags' });
   for (const f of scheme.flags) {
-    fl.append(h('button', { class: 'flag', 'data-flag': f.id, 'aria-pressed': 'false', title: f.desc, onclick: () => toggleFlag(f.id) },
+    fl.append(h('button', { class: 'flag', 'data-flag': f.id, 'aria-pressed': 'false', title: f.desc + (f.for ? `\nOnly for ${forText(f)}.` : ''), onclick: () => toggleFlag(f.id) },
       h('kbd', {}, f.key.toUpperCase()), f.name));
   }
   const rm = h('button', { class: 'btn ghost small binremove', title: 'Remove your label from the selected particles (Delete). You can also drag particles here.', onclick: () => removeLabel() }, 'Remove label');
@@ -899,6 +899,10 @@ function buildPalette() {
       h('button', { class: 'btn ghost small', id: 'redoBtn', title: 'Redo (Y, Shift Z or Ctrl/⌘ Shift Z)', onclick: redo, disabled: true }, 'Redo ↷')));
   const pl = h('div', { class: 'palette-piles', id: 'piles', role: 'group', 'aria-label': 'Look-alike piles' });
   const ofb = h('div', { class: 'ofbar', id: 'ofbar', role: 'group', 'aria-label': 'What is it made of?', hidden: true });
+  // phones: the classes scroll sideways; fade the edge only while there's more to see
+  const edge = () => cls.classList.toggle('scrolled-end', cls.scrollLeft + cls.clientWidth >= cls.scrollWidth - 4);
+  cls.addEventListener('scroll', edge, { passive: true });
+  requestAnimationFrame(edge);
   pal.append(ofb, cls, pl, fl, st);
   queueMicrotask(() => { updateSaveState(); updateBinCounts(); renderPiles(); });
   return pal;
@@ -913,6 +917,7 @@ function updateSaveState() {
     el.append(h('span', { title: 'Classifications made now stay in this browser and are not saved to the database.' }, server.demo ? 'Demonstration: not saved' : 'Practice mode'));
     if (practice.count()) el.append( h('button', { class: 'linkbtn', title: 'Save your practice classifications to a file you keep', onclick: openDownload },
         un ? `Save ${fmtInt(un)} to a file` : 'Saved to a file ✓'));
+    if (!practice.count() || !practiceMeta.load().saved) el.append(h('button', { class: 'linkbtn', title: 'Load classifications you saved to a file earlier, and carry on from there', onclick: continueFromFile }, 'Continue from a file'));
     if (server.user) el.append(h('button', { class: 'linkbtn', title: 'Leave practice mode', onclick: () => setPracticeForced(false) }, 'Back to saving'));
     else if (!server.demo && server.reachable !== false) el.append(h('button', { class: 'linkbtn', onclick: () => openAuth() }, 'Sign in'));
     $('#undoBtn') && ($('#undoBtn').disabled = !undoStack.length);
@@ -948,6 +953,8 @@ function refreshPaletteState() {
     const f = b.dataset.flag;
     const on = armed.has(f) || (S.view === 'single' && mine && mine.flags.includes(f));
     b.setAttribute('aria-pressed', String(!!on));
+    const fl = flagById(f);
+    if (fl && fl.for) b.classList.toggle('na', !!mine && !flagFor(fl, mine.label));
   });
 }
 
@@ -1168,7 +1175,7 @@ function renderGrid(st, count) {
         h('p', { class: 'muted' }, 'Changed your mind? Press another class, or Z to undo. Press ? at any time for all the shortcuts.'),
         practice.on ? h('p', { class: 'muted', style: { marginTop: '4px' } }, server.demo
           ? 'This is a demonstration: try it freely. Nothing is saved to the database.'
-          : 'You’re in practice mode until you sign in: try it freely, nothing is saved to the database.') : null),
+          : 'You’re in practice mode until you sign in: try it freely, nothing is saved to the database. Use “Save to a file” to keep your work, and “Continue from a file” to pick it up again later.') : null),
       h('button', { class: 'btn primary', onclick: () => { lsSet('cpi.welcomed', true); card.remove(); } }, 'Got it'));
     st.append(card);
   }
@@ -1269,7 +1276,7 @@ function decorateTile(t) {
   if (m) {
     const c = classById.get(m.label);
     t.append(h('span', { class: 'tag', style: { background: c?.color || '#888' } }),
-      h('span', { class: 'tagname' }, labelText(m, true) + (m.flags.length ? ' +' + m.flags.length : '')));
+      h('span', { class: 'tagname' }, labelText(m, true) + (otherFlags(m).length ? ' +' + otherFlags(m).length : '')));
   }
   const n = totalVotes(pid) - (m ? 1 : 0);
   if (!m && n > 0) {
@@ -1439,7 +1446,7 @@ function renderSingle(st) {
         h('button', { class: 'btn ghost small', onclick: () => downloadOne(g, exportCtx), title: 'Download this image' }, 'Download'))),
     h('button', { class: 'single-nav next', 'aria-label': 'Next particle', onclick: () => moveFocus(focusPos + 1), disabled: focusPos >= order.length - 1 }, '›'),
     h('div', { class: 'single-mylabel' },
-      c ? [h('span', { class: 'dot', style: { background: c.color } }), `You said ${labelText(m)}` + (m.flags.length ? ` (${m.flags.map((f) => scheme.flags.find((x) => x.id === f)?.name || f).join(', ')})` : '')]
+      c ? [h('span', { class: 'dot', style: { background: c.color } }), `You said ${labelText(m)}` + (otherFlags(m).length ? ` (${otherFlags(m).map((f) => scheme.flags.find((x) => x.id === f)?.name || f).join(', ')})` : '')]
         : h('span', { class: 'muted' }, 'Press a class key, or drag the image to a class'),
       c ? h('button', { class: 'btn ghost small', onclick: () => removeLabel([focusPos]) }, 'Remove') : null));
   st.append(h('div', { class: 'single' }, strip, main));
@@ -1496,7 +1503,7 @@ function renderInspector(g) {
     const c = m && classById.get(m.label);
     yours = h('div', { class: 'yours' + (c ? '' : ' none') },
       c ? [h('span', { class: 'dot', style: { background: c.color } }), h('span', { class: 'yours-txt' }, 'You: ', h('b', {}, labelText(m)),
-            m.flags.length ? ' + ' + m.flags.map((f) => scheme.flags.find((x) => x.id === f)?.name || f).join(', ') : '')]
+            otherFlags(m).length ? ' + ' + otherFlags(m).map((f) => scheme.flags.find((x) => x.id === f)?.name || f).join(', ') : '')]
         : h('span', { class: 'yours-txt muted' }, 'Not classified by you'),
       h('button', { class: 'btn small', onclick: () => openFixer(pid) }, c ? 'Change' : 'Classify'));
   }
@@ -1573,7 +1580,9 @@ function afterChange(pids, jump = false) {
   updateSaveState();
   refreshFixer();
   refreshHistory();
+  if (onLabelsChanged) onLabelsChanged(pids);
 }
+let onLabelsChanged = null;    // the Guide redraws its examples when a classification changes
 
 function hitBin(clsId) {
   const btn = $(`#palette .cls[data-cls="${clsId}"]`);
@@ -1587,7 +1596,7 @@ function classify(clsId, pos = targets()) {
   const changes = pos.map((p) => {
     const pid = D.pid(order[p]);
     const prev = labels.mine.get(pid);
-    return { pid, before: snap(prev), after: mkLabel(clsId, armed.size ? [...armed] : (prev ? prev.flags.slice() : []), prev && prev.label === clsId ? prev.made_of : null) };
+    return { pid, before: snap(prev), after: mkLabel(clsId, keepFlags(armed.size ? [...armed] : (prev ? prev.flags.slice() : []), clsId), prev && prev.label === clsId ? prev.made_of : null) };
   });
   const changed = changes.filter((x) => x.before && x.before.label !== clsId).length;
   bumpSession(changes.filter((x) => !x.before).length);
@@ -1653,10 +1662,17 @@ function toggleFlag(flagId) {
     refreshPaletteState();
     return;
   }
-  const turnOn = !labelled.every((p) => labels.mine.get(D.pid(order[p])).flags.includes(flagId));
-  const fname = scheme.flags.find((f) => f.id === flagId)?.name;
-  const changes = labelled.map((p) => {
-    const pid = D.pid(order[p]);
+  toggleFlagPids(flagId, labelled.map((p) => D.pid(order[p])));
+}
+/** Add or remove a flag on these particles (only where it applies to their class). */
+function toggleFlagPids(flagId, allPids) {
+  if (!needUser()) return;
+  const fl = flagById(flagId);
+  const pids = allPids.filter((pid) => { const m = labels.mine.get(pid); return m && (!fl || flagFor(fl, m.label)); });
+  if (!pids.length) { toast(`${fl?.name || flagId} is only for ${forText(fl)}`, 2500); return; }
+  const turnOn = !pids.every((pid) => labels.mine.get(pid).flags.includes(flagId));
+  const fname = fl?.name;
+  const changes = pids.map((pid) => {
     const m = labels.mine.get(pid);
     const flags = turnOn ? [...new Set([...m.flags, flagId])] : m.flags.filter((f) => f !== flagId);
     return { pid, before: snap(m), after: mkLabel(m.label, flags, m.made_of) };
@@ -1674,12 +1690,32 @@ function ofInfo(v) {
   const c = classById.get(v);
   return c ? { name: c.name, plural: c.plural || (c.name.toLowerCase() + (c.name.endsWith('s') ? '' : 's')), key: c.key, color: c.color } : { name: v, plural: v, key: '', color: '#888' };
 }
+/** A quick string hash (for a repeatable shuffle). */
+function hashStr(t) { let x = 2166136261; for (let i = 0; i < t.length; i++) { x ^= t.charCodeAt(i); x = Math.imul(x, 16777619); } return x >>> 0; }
+/** Flags limited to some classes (Hollow, Chain): does this one apply to that class? */
+const flagFor = (f, clsId) => !f.for || !f.for.length || f.for.includes(clsId);
+const flagById = (id) => scheme.flags.find((f) => f.id === id);
+const keepFlags = (flags, clsId) => flags.filter((id) => { const f = flagById(id); return !f || flagFor(f, clsId); });
+/** The second-level choices for a class: its limited flags (e.g. Hollow for columns, Chain for aggregates). */
+const extraFlags = (clsId) => scheme.flags.filter((f) => f.for && f.for.length && f.for.includes(clsId));
+/** Flags not already said by labelText (Hollow/Chain are part of the label's name). */
+const otherFlags = (m) => m.flags.filter((id) => !extraFlags(m.label).some((f) => f.id === id));
+const forText = (f) => (f.for || []).map((id) => ofInfo(id).plural).join(', ');
 /** "Aggregate of plates", or just the class name. */
 function labelText(m, short = false) {
   const c = m && classById.get(m.label);
   if (!c) return m ? m.label : '';
-  if (!m.made_of) return c.name;
-  return short ? `${c.name} · ${ofInfo(m.made_of).plural}` : `${c.name} of ${ofInfo(m.made_of).plural}`;
+  const extra = extraFlags(c.id).filter((f) => m.flags && m.flags.includes(f.id)).map((f) => f.name.toLowerCase());
+  const base = !m.made_of ? c.name : short ? `${c.name} · ${ofInfo(m.made_of).plural}` : `${c.name} of ${ofInfo(m.made_of).plural}`;
+  return extra.length ? `${base} (${extra.join(', ')})` : base;
+}
+/** Toggle buttons for a class's second-level flags (Hollow, Chain) on these particles. */
+function extraFlagBtns(cls, pids, after) {
+  return extraFlags(cls.id).map((f) => {
+    const on = pids.length && pids.every((pid) => labels.mine.get(pid)?.flags.includes(f.id));
+    return h('button', { class: 'ofbtn oftoggle' + (on ? ' on' : ''), 'aria-pressed': String(!!on), title: `${f.desc} (${f.key.toUpperCase()})`,
+      onclick: () => { toggleFlagPids(f.id, pids); after(); } }, h('kbd', {}, f.key.toUpperCase()), (on ? '✓ ' : '') + f.name);
+  });
 }
 let ofAsk = null;   // {cls, pids, pos} while asking what the just-classified particles are made of
 function askMadeOf(clsId, pids, pos) {
@@ -1688,11 +1724,13 @@ function askMadeOf(clsId, pids, pos) {
   const bar = $('#ofbar'); if (!bar) return;
   bar.innerHTML = ''; bar.dataset.mode = 'ask'; bar.classList.remove('edit');
   bar.style.setProperty('--c', c.color);
-  bar.append(
+  const ex = extraFlagBtns(c, pids, () => askMadeOf(clsId, pids, pos));
+  bar.append(...[
     h('span', { class: 'oftitle' }, h('b', {}, `${c.name}${pids.length > 1 ? ` (${pids.length})` : ''} of…`)),
     ...c.of.map((v) => { const o = ofInfo(v); return h('button', { class: 'ofbtn', style: { '--c': o.color }, title: `${c.name} of ${o.plural}`, onclick: () => answerMadeOf(v) }, o.key ? h('kbd', {}, o.key.toUpperCase()) : null, o.name); }),
+    ex.length ? h('span', { class: 'ofsep' }) : null, ...ex,
     h('span', { class: 'grow' }),
-    h('button', { class: 'btn ghost small', title: 'Leave it as just ' + c.name + ' (Esc)', onclick: () => answerMadeOf(null) }, 'Skip', h('kbd', {}, 'Esc')));
+    h('button', { class: 'btn ghost small', title: 'Leave it as just ' + c.name + ' (Esc)', onclick: () => answerMadeOf(null) }, 'Skip', h('kbd', {}, 'Esc'))].filter(Boolean));
   bar.hidden = false;
 }
 function closeOfBar() { ofAsk = null; const bar = $('#ofbar'); if (bar) { bar.hidden = true; bar.innerHTML = ''; bar.dataset.mode = ''; } }
@@ -1703,20 +1741,22 @@ function updateOfEditBar() {
   const pids = targets().map((p) => D.pid(order[p]));
   const ms = pids.map((pid) => labels.mine.get(pid)).filter(Boolean);
   const cls = ms.length && ms.length === pids.length && ms.every((m) => m.label === ms[0].label) ? classById.get(ms[0].label) : null;
-  if (!cls || !cls.of) { if (bar.dataset.mode === 'edit') { bar.hidden = true; bar.innerHTML = ''; bar.dataset.mode = ''; } return; }
+  if (!cls || (!cls.of && !extraFlags(cls.id).length)) { if (bar.dataset.mode === 'edit') { bar.hidden = true; bar.innerHTML = ''; bar.dataset.mode = ''; } return; }
   const cur = ms.every((m) => m.made_of === ms[0].made_of) ? ms[0].made_of : undefined;
-  const key = cls.id + '|' + pids.join(',') + '|' + cur;
+  const key = cls.id + '|' + pids.join(',') + '|' + cur + '|' + ms.map((m) => m.flags.join(',')).join(';');
   if (bar.dataset.mode === 'edit' && bar.dataset.key === key && !bar.hidden) return;
   bar.dataset.mode = 'edit'; bar.dataset.key = key;
   bar.innerHTML = '';
   bar.style.setProperty('--c', cls.color);
   bar.classList.add('edit');
-  bar.append(
-    h('span', { class: 'oftitle' }, `${cls.name}${pids.length > 1 ? ` (${pids.length})` : ''}, made of:`),
-    ...cls.of.map((v) => { const o = ofInfo(v); return h('button', { class: 'ofbtn' + (cur === v ? ' on' : ''), style: { '--c': o.color }, title: `Shift+${(o.key || '').toUpperCase()}`, onclick: () => setMadeOf(v, pids) },
+  const ex = extraFlagBtns(cls, pids, () => {});
+  bar.append(...[
+    h('span', { class: 'oftitle' }, `${cls.name}${pids.length > 1 ? ` (${pids.length})` : ''}${cls.of ? ', made of:' : ':'}`),
+    ...(cls.of || []).map((v) => { const o = ofInfo(v); return h('button', { class: 'ofbtn' + (cur === v ? ' on' : ''), style: { '--c': o.color }, title: `Shift+${(o.key || '').toUpperCase()}`, onclick: () => setMadeOf(v, pids) },
       o.key ? h('kbd', {}, o.key.toUpperCase()) : null, o.name); }),
+    ex.length && cls.of ? h('span', { class: 'ofsep' }) : null, ...ex,
     h('span', { class: 'grow' }),
-    cur ? h('button', { class: 'btn ghost small', onclick: () => setMadeOf(null, pids) }, 'Clear') : h('span', { class: 'muted small' }, 'Shift + key also works'));
+    !cls.of ? null : cur ? h('button', { class: 'btn ghost small', onclick: () => setMadeOf(null, pids) }, 'Clear') : h('span', { class: 'muted small ofhint' }, 'Shift + key also works')].filter(Boolean));
   bar.hidden = false;
 }
 function answerMadeOf(v) {
@@ -1954,43 +1994,81 @@ const fixDlg = h('dialog', { class: 'dlg fixdlg', 'aria-label': 'Change classifi
 document.body.append(fixDlg);
 fixDlg.addEventListener('close', () => { fixPid = null; });
 fixDlg.addEventListener('click', (e) => { if (e.target === fixDlg) fixDlg.close(); });
-function openFixer(pid) {
+/** Change one particle's classification in a dialog. Works for particles on the Classify page
+ *  and for any other particle (the Guide), given its image URL. opts: {img(pid), list: [pid], info(pid)} */
+let fixOpts = {};
+function openFixer(pid, opts = {}) {
   if (!needUser()) return;
-  fixPid = pid;
+  fixPid = pid; fixOpts = opts;
   refreshFixer();
   if (!fixDlg.open) fixDlg.showModal();
 }
+fixDlg.addEventListener('keydown', (e) => {
+  if (!fixPid || e.metaKey || e.ctrlKey || e.altKey) return;
+  const list = (typeof fixOpts.list === 'function' ? fixOpts.list() : fixOpts.list) || [];
+  const i = list.indexOf(fixPid);
+  if ((e.key === 'ArrowRight' || e.key === 'ArrowLeft') && list.length > 1) {
+    e.preventDefault(); e.stopPropagation();
+    fixPid = list[(i + (e.key === 'ArrowRight' ? 1 : -1) + list.length) % list.length]; refreshFixer();
+  } else if (e.key === 'z' || e.key === 'Z') { e.preventDefault(); e.stopPropagation(); if (e.shiftKey) redo(); else undo(); }
+  else {
+    const lk = e.key.toLowerCase();
+    const c = classByKey.get(lk), f = flagByKey.get(lk);
+    const m = labels.mine.get(fixPid);
+    if (c && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); fixSet(mkLabel(c.id, keepFlags(m ? m.flags.slice() : [], c.id), m && m.label === c.id ? m.made_of : null), `1 particle → ${c.name}`); }
+    else if (f && m && flagFor(f, m.label)) { e.preventDefault(); e.stopPropagation(); const on = !m.flags.includes(f.id); fixSet(mkLabel(m.label, on ? [...m.flags, f.id] : m.flags.filter((x) => x !== f.id), m.made_of), `${f.name} ${on ? 'added' : 'removed'}`); }
+  }
+});
+function fixSet(after, desc) { setLabelForPid(fixPid, after, desc); }
 function refreshFixer() {
-  if (!fixPid || !D) return;
-  const g = D.index.get(fixPid);
+  if (!fixPid) return;
+  const inD = D && D.index.has(fixPid);
+  if (!inD && !fixOpts.img) return;
   const m = labels.mine.get(fixPid);
   const c = m && classById.get(m.label);
-  const w = D.col.w[g], hh = D.col.h[g];
-  const sc = Math.min(300 / w, 220 / hh, 4);
+  let pic;
+  if (inD) {
+    const g = D.index.get(fixPid);
+    const w = D.col.w[g], hh = D.col.h[g];
+    const sc = Math.min(300 / w, 220 / hh, 4);
+    pic = h('img', { src: D.img(g), alt: '', width: Math.round(w * sc), height: Math.round(hh * sc) });
+  } else {
+    pic = h('img', { src: fixOpts.img(fixPid), alt: '', class: 'fix-free' });
+    pic.addEventListener('load', () => { const sc = Math.min(300 / pic.naturalWidth, 220 / pic.naturalHeight, 4); pic.width = Math.round(pic.naturalWidth * sc); pic.height = Math.round(pic.naturalHeight * sc); });
+  }
+  const list = (typeof fixOpts.list === 'function' ? fixOpts.list() : fixOpts.list) || [];
+  const i = list.indexOf(fixPid);
+  const go = (d) => { fixPid = list[(i + d + list.length) % list.length]; refreshFixer(); };
+  const info = fixOpts.info ? fixOpts.info(fixPid) : null;
   fixDlg.innerHTML = '';
   fixDlg.append(h('div', { class: 'dlg-inner' },
     h('div', { class: 'fix-top' },
-      h('div', { class: 'insp-pic' }, h('div', { class: 'single-pic' }, h('img', { src: D.img(g), alt: '', width: Math.round(w * sc), height: Math.round(hh * sc) }))),
+      h('div', { class: 'insp-pic' }, h('div', { class: 'single-pic' }, pic)),
       h('div', {},
         h('h3', {}, 'Change classification'),
         h('div', { class: 'insp-id' }, fixPid),
-        h('p', { class: 'fix-now' }, c ? [h('span', { class: 'dot', style: { background: c.color } }), ' You said ', h('b', {}, labelText(m))] : h('span', { class: 'muted' }, 'You haven’t classified this one.')))),
+        info ? h('div', { class: 'muted small' }, info) : null,
+        h('p', { class: 'fix-now' }, c ? [h('span', { class: 'dot', style: { background: c.color } }), ' You said ', h('b', {}, labelText(m))] : h('span', { class: 'muted' }, 'You haven’t classified this one.')),
+        list.length > 1 ? h('div', { class: 'fix-nav' },
+          h('button', { class: 'btn small', onclick: () => go(-1), 'aria-label': 'Previous' }, '‹ Previous'),
+          h('span', { class: 'muted small' }, `${i + 1} of ${list.length}`),
+          h('button', { class: 'btn small', onclick: () => go(1), 'aria-label': 'Next' }, 'Next ›')) : null)),
     h('div', { class: 'fix-classes' }, scheme.classes.map((k) => h('button', {
       class: 'cls' + (m && m.label === k.id ? ' current' : ''), style: { '--c': k.color },
-      onclick: () => { setLabelForPid(fixPid, mkLabel(k.id, m ? m.flags.slice() : [], m && m.label === k.id ? m.made_of : null), `1 particle → ${k.name}`); hitBin(k.id); },
+      onclick: () => { fixSet(mkLabel(k.id, keepFlags(m ? m.flags.slice() : [], k.id), m && m.label === k.id ? m.made_of : null), `1 particle → ${k.name}`); hitBin(k.id); },
     }, h('kbd', {}, k.key.toUpperCase()), h('span', { class: 'nm' }, k.name)))),
     c && c.of ? h('div', { class: 'fix-of' }, h('span', { class: 'muted small' }, `${c.name} of:`),
       c.of.map((v) => { const o = ofInfo(v); return h('button', { class: 'ofbtn' + (m.made_of === v ? ' on' : ''), style: { '--c': o.color },
-        onclick: () => setLabelForPid(fixPid, mkLabel(m.label, m.flags.slice(), m.made_of === v ? null : v), m.made_of === v ? `${c.name}: made of cleared` : `1 particle → ${c.name} of ${o.plural}`) }, o.name); })) : null,
-    h('div', { class: 'palette-flags fix-flags' }, scheme.flags.map((f) => h('button', {
-      class: 'flag', 'aria-pressed': String(!!m && m.flags.includes(f.id)), disabled: !m,
+        onclick: () => fixSet(mkLabel(m.label, m.flags.slice(), m.made_of === v ? null : v), m.made_of === v ? `${c.name}: made of cleared` : `1 particle → ${c.name} of ${o.plural}`) }, o.name); })) : null,
+    h('div', { class: 'palette-flags fix-flags' }, scheme.flags.filter((f) => !m || flagFor(f, m.label)).map((f) => h('button', {
+      class: 'flag', 'aria-pressed': String(!!m && m.flags.includes(f.id)), disabled: !m, title: f.desc,
       onclick: () => {
         const on = !m.flags.includes(f.id);
-        setLabelForPid(fixPid, mkLabel(m.label, on ? [...m.flags, f.id] : m.flags.filter((x) => x !== f.id), m.made_of), `${f.name} ${on ? 'added' : 'removed'}`);
+        fixSet(mkLabel(m.label, on ? [...m.flags, f.id] : m.flags.filter((x) => x !== f.id), m.made_of), `${f.name} ${on ? 'added' : 'removed'}`);
       },
     }, h('kbd', {}, f.key.toUpperCase()), f.name))),
     h('div', { class: 'dlg-actions' },
-      h('button', { class: 'btn ghost danger', disabled: !m, onclick: () => setLabelForPid(fixPid, null, 'Removed 1 label') }, 'Remove my label'),
+      h('button', { class: 'btn ghost danger', disabled: !m, onclick: () => fixSet(null, 'Removed 1 label') }, 'Remove my label'),
       h('span', { style: { flex: 1 } }),
       h('button', { class: 'btn ghost', onclick: undo, disabled: !undoStack.length }, 'Undo'),
       h('button', { class: 'btn primary', onclick: () => fixDlg.close() }, 'Done'))));
@@ -2040,7 +2118,7 @@ function onKey(e) {
     if (c && fixPid && !e.metaKey && !e.ctrlKey) {
       e.preventDefault();
       const m = labels.mine.get(fixPid);
-      setLabelForPid(fixPid, mkLabel(c.id, m ? m.flags.slice() : [], m && m.label === c.id ? m.made_of : null), `1 particle → ${c.name}`);
+      setLabelForPid(fixPid, mkLabel(c.id, keepFlags(m ? m.flags.slice() : [], c.id), m && m.label === c.id ? m.made_of : null), `1 particle → ${c.name}`);
     }
     return;
   }
@@ -2062,6 +2140,8 @@ function onKey(e) {
     else if ((lk === 'x' || k === 'Enter') && of.includes('unknown')) v = 'unknown';
     if (v) { e.preventDefault(); answerMadeOf(v); return; }
     if (k === 'Escape') { e.preventDefault(); answerMadeOf(null); return; }
+    const fk = flagByKey.get(lk);
+    if (fk && !ck) { e.preventDefault(); const a = ofAsk; toggleFlagPids(fk.id, a.pids); if (ofAsk === a) askMadeOf(a.cls, a.pids, a.pos); return; }
     if (ck) closeOfBar();     // another class: change your mind about this particle
   }
   // Shift + a habit's key: "made of" that habit, for particles already classified
@@ -2208,16 +2288,21 @@ function practiceCard() {
     h('h2', {}, server.demo ? 'Your classifications in this demonstration' : 'Practice classifications in this browser'),
     h('p', { class: 'muted' }, n
       ? `${fmtInt(n)} particle${n === 1 ? '' : 's'} classified. These stay in this browser and are not in the database. Save them to a file so they can’t be lost` + (server.demo ? '; the file can be added to the database later.' : '; or sign in and keep them under your name.')
-      : 'Nothing yet. Classify some particles on the Classify page; they’ll be counted here.'),
+      : 'Nothing yet. Classify some particles on the Classify page; they’ll be counted here. Saved some to a file before? Continue from it below.'),
     n ? h('div', { class: 'hbars' }, scheme.classes.filter((c) => by.has(c.id)).map((c) => h('div', { class: 'hbar' },
       h('span', {}, c.name), h('div', { class: 'track' }, h('div', { class: 'fill', style: { width: (100 * by.get(c.id) / max) + '%', background: c.color } })),
       h('span', { class: 'v' }, fmtInt(by.get(c.id)))))) : null,
-    n ? h('div', { class: 'row', style: { marginTop: '14px', flexWrap: 'wrap' } },
-      h('button', { class: 'btn' + (unsavedCount() ? ' primary' : ''), onclick: openDownload }, 'Save to a file'),
-      h('button', { class: 'btn ghost danger', onclick: () => { if (confirm(`Clear all ${n} practice classifications from this browser?`)) { practice.clear(); refreshLabels().then(() => route()); } } }, 'Clear them'),
-      !server.demo && server.reachable !== false ? h('button', { class: 'btn', onclick: () => openAuth() }, 'Sign in to save them') : null) : null,
+    h('div', { class: 'row', style: { marginTop: '14px', flexWrap: 'wrap' } },
+      n ? h('button', { class: 'btn' + (unsavedCount() ? ' primary' : ''), onclick: openDownload }, 'Save to a file') : null,
+      h('button', { class: 'btn' + (n ? '' : ' primary'), title: 'Load classifications you saved to a file earlier, and carry on from there', onclick: continueFromFile }, 'Continue from a file'),
+      n ? h('button', { class: 'btn ghost danger', onclick: () => { if (confirm(`Clear all ${n} practice classifications from this browser?`)) { practice.clear(); refreshLabels().then(() => route()); } } }, 'Clear them') : null,
+      n && !server.demo && server.reachable !== false ? h('button', { class: 'btn', onclick: () => openAuth() }, 'Sign in to save them') : null),
     n ? savedLine() : null);
   return card;
+}
+/** Load a saved session file into this browser and carry on. */
+function continueFromFile() {
+  openContinue(async () => { spot = null; try { sessionStorage.removeItem(SPOT_KEY); } catch { /* ignore */ } await refreshLabels(); updateSaveState(); route(); });
 }
 function savedLine() {
   const m = practiceMeta.load();
@@ -2292,7 +2377,8 @@ async function viewProgress(root) {
       h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
         h('a', { class: 'btn', href: api.exportUrl('csv', true) }, 'My classifications (CSV)'),
         server.user.is_admin ? h('a', { class: 'btn primary', href: api.exportUrl('csv') }, 'Everyone (CSV)') : null,
-        server.user.is_admin ? h('a', { class: 'btn', href: api.exportUrl('json') }, 'Everyone (JSON)') : null)));
+        server.user.is_admin ? h('a', { class: 'btn', href: api.exportUrl('json') }, 'Everyone (JSON)') : null,
+        h('a', { class: 'btn ghost', title: 'Every classification with the date it was made, including ones later changed, so changes of mind can be followed', href: api.exportUrl('csv', !server.user.is_admin, true) }, server.user.is_admin ? 'Full history (CSV)' : 'My full history (CSV)'))));
   }
   const sb = sessBits.filter(Boolean);
   if (sb.length) inner.append(h('div', { class: 'cards sesscards', style: { marginTop: '32px' } }, ...sb));
@@ -2302,71 +2388,231 @@ async function viewProgress(root) {
 async function viewGuide(root) {
   root.className = 'page'; root.style.display = '';
   root.innerHTML = '';
-  const inner = h('div', { class: 'page-inner' });
+  const inner = h('div', { class: 'page-inner guide-page' });
   root.append(inner);
   inner.append(h('h1', {}, 'How to classify'), h('p', { class: 'page-lede' }, scheme.help || ''));
-  // examples from everyone's classifications in the database, for the instruments ticked
-  const classesBox = h('div', { class: 'guide-classes' });
-  const instBox = h('div', { class: 'guide-inst' });
-  const exNote = h('span', { class: 'muted small' });
-  let seed = '';
+  // The order to ask the questions in: the same particle should end up in the same class whoever classifies it
+  const chip = (id) => { const c = classById.get(id); return c ? h('span', { class: 'flowcls', style: { '--c': c.color } }, h('kbd', {}, c.key.toUpperCase()), c.name) : null; };
+  const fchip = (id) => { const f = flagById(id); return f ? h('span', { class: 'flowcls flowflag' }, h('kbd', {}, f.key.toUpperCase()), f.name) : null; };
+  const has = (...ids) => ids.some((id) => classById.has(id));
+  const steps = [
+    has('artefact') && ['Is it a cloud particle at all?', 'Streaks, shattering debris, smudges, a stuck particle or an empty image:', [chip('artefact')]],
+    has('droplet') && ['Is it a liquid drop?', 'A near-perfect circle with a smooth edge, often with a bright spot or ring in the middle:', [chip('droplet')]],
+    has('small', 'unusable') && ['Can you judge it?', 'Fewer than about 15 pixels across (≈35 µm on a CPI), or out of focus, overlapping or unclear:', [chip('small'), chip('unusable')]],
+    has('aggregate') && ['Several crystals stuck together?', 'Then say what of; tick Chain if they’re linked end to end:', [chip('aggregate'), fchip('chain')]],
+    has('fragment') && ['A broken piece of a bigger crystal?', 'Say what of, if you can tell:', [chip('fragment')]],
+    has('graupel') && ['So rimed you can’t tell what it was?', 'If you can still tell, carry on and add Rimed instead:', [chip('graupel'), fchip('rimed')]],
+    ['One crystal: which habit?', 'Think of the 3D shape (plates can be seen edge-on). Hollow or hollowed? Add Hollow:',
+      [...['column', 'needle', 'plate', 'dendrite', 'rosette', 'bullet', 'capped', 'sideplane', 'scroll', 'sphere'].map(chip), fchip('hollow')]],
+    has('irregular') && ['Nothing fits?', 'Ice with no recognisable habit:', [chip('irregular')]],
+  ].filter(Boolean);
+  inner.append(h('details', { class: 'card flowcard', open: lsGet('cpi.flowOpen', true), ontoggle: (e) => lsSet('cpi.flowOpen', e.currentTarget.open) },
+    h('summary', {}, h('b', {}, 'How to decide'), h('span', { class: 'muted small' }, ' – ask these in order, and stop at the first yes')),
+    h('ol', { class: 'flow' }, steps.map(([q, d, chips]) => h('li', {}, h('b', {}, q), ' ', h('span', { class: 'muted' }, d), h('div', { class: 'flowchips' }, chips.filter(Boolean))))),
+    h('p', { class: 'muted small' }, 'Not sure? Give your best guess and add Unsure (U). Can’t decide between two habits? Pick the more common one for the temperature and add Unsure.')));
+
+  // ---- which examples: everyone's agreed ones or my own; instruments; project; size; scale
+  if (!['agreed', 'mine'].includes(S.guideWho)) S.guideWho = 'agreed';
+  if (!['fit', 'true'].includes(S.guideScale)) S.guideScale = 'fit';
+  S.guideSize = Math.max(50, Math.min(400, +S.guideSize || 80));
+  S.guidePer = [8, 16, 32, 60].includes(+S.guidePer) ? +S.guidePer : 8;
+  const flights = visibleFlights();
   const instFlights = new Map();
-  for (const f of visibleFlights()) { const k = instrumentKey(f); if (!instFlights.has(k)) instFlights.set(k, []); instFlights.get(k).push(f.id); }
+  for (const f of flights) { const k = instrumentKey(f); if (!instFlights.has(k)) instFlights.set(k, []); instFlights.get(k).push(f.id); }
   const keysShown = [...new Set([...INSTRUMENTS, ...instFlights.keys()])];
   if (!Array.isArray(S.guideInst)) S.guideInst = keysShown.filter((k) => instFlights.has(k));
-  for (const k of keysShown) {
-    const n = instFlights.get(k)?.length || 0;
-    instBox.append(h('label', { class: 'check' + (n ? '' : ' dim'), title: n ? `${n} flight${n === 1 ? '' : 's'}` : 'No flights from this instrument yet' },
-      h('input', { type: 'checkbox', checked: S.guideInst.includes(k), disabled: !n, onchange: (e) => {
-        S.guideInst = e.target.checked ? [...new Set([...S.guideInst, k])] : S.guideInst.filter((x) => x !== k); savePrefs(); loadExamples();
-      } }), k, h('small', { class: 'muted' }, n ? ` (${n})` : '')));
-  }
+  const projects = [...new Set(flights.map((f) => f.campaign).filter(Boolean))].sort();
+  if (S.guideProj && !projects.includes(S.guideProj)) S.guideProj = '';
+  const pxUm = new Map(flights.map((f) => [f.id, f.pixel_um || 2.3]));
+  const flightOf = new Map(flights.map((f) => [f.id, f]));
   const exUrl = (pid) => { const [fid, stem, idx] = pid.split(':'); return `data/flights/${encodeURIComponent(fid)}/img/${encodeURIComponent(stem)}/${idx}.png`; };
-  async function loadExamples() {
-    const fl = S.guideInst.flatMap((k) => instFlights.get(k) || []);
-    let ex = {};
-    if (fl.length && server.reachable && !server.demo) {
-      exNote.textContent = 'Loading examples…';
-      try { ex = (await api.fetchExamples(fl, 10, seed)).examples || {}; } catch { ex = {}; }
+  const pxPerUm = () => S.guideSize / 250;     // same-scale mode: the slider sets screen px per µm
+
+  let ex = {};            // group -> [{pid, made_of, n, t, me}]
+  let seed = '';
+  const classesBox = h('div', { class: 'guide-classes' });
+  const exNote = h('p', { class: 'muted small guide-note' });
+  const scaleBar = h('span', { class: 'scalebar guide-scalebar' });
+  const chosenFlights = () => S.guideInst.flatMap((k) => instFlights.get(k) || []).filter((id) => !S.guideProj || flightOf.get(id)?.campaign === S.guideProj);
+  const set = (patch, reload = true) => { Object.assign(S, patch); savePrefs(); if (reload) loadExamples(); else draw(); };
+
+  const instBox = h('div', { class: 'guide-inst' }, keysShown.map((k) => {
+    const n = instFlights.get(k)?.length || 0;
+    return h('label', { class: 'check' + (n ? '' : ' dim'), title: n ? `${n} flight${n === 1 ? '' : 's'}` : 'No flights from this instrument yet' },
+      h('input', { type: 'checkbox', checked: S.guideInst.includes(k), disabled: !n, onchange: (e) => {
+        set({ guideInst: e.target.checked ? [...new Set([...S.guideInst, k])] : S.guideInst.filter((x) => x !== k) });
+      } }), k, h('small', { class: 'muted' }, n ? ` (${n})` : ''));
+  }));
+  const seg = (items, cur, onPick) => h('div', { class: 'seg' }, items.map(([v, l, t]) => h('button', { 'aria-pressed': String(v === cur), title: t || '', onclick: (e) => {
+    e.currentTarget.parentNode.querySelectorAll('button').forEach((b) => b.setAttribute('aria-pressed', String(b === e.currentTarget))); onPick(v);
+  } }, l)));
+  const sizeIn = h('input', { type: 'range', min: '50', max: '400', step: '10', value: String(S.guideSize), 'aria-label': 'Picture size',
+    oninput: (e) => { S.guideSize = +e.target.value; resize(); }, onchange: () => savePrefs() });
+  const bar = h('div', { class: 'guide-bar' },
+    h('div', { class: 'guide-barrow' },
+      seg([['agreed', 'Agreed by most', 'Particles most of the people who classified them agree on'], ['mine', 'Mine', 'Your own classifications: click one to change it, or drag it to another class']], S.guideWho, (v) => set({ guideWho: v })),
+      projects.length > 1 ? h('select', { 'aria-label': 'Project', onchange: (e) => set({ guideProj: e.target.value }) },
+        h('option', { value: '' }, 'All projects'), projects.map((p) => h('option', { value: p, selected: p === S.guideProj }, p))) : null,
+      h('label', { class: 'inline', title: 'Picture size' }, h('svg', { class: 'zoomicon', viewBox: '0 0 24 24', 'aria-hidden': 'true', html: '<path d="M10 3a7 7 0 0 1 5.6 11.2l5.1 5.1-1.4 1.4-5.1-5.1A7 7 0 1 1 10 3zm0 2a5 5 0 1 0 0 10 5 5 0 0 0 0-10zm-1 2h2v2h2v2h-2v2H9v-2H7V9h2V7z"/>' }), sizeIn),
+      seg([['fit', 'Fit', 'Each picture fills its square'], ['true', 'Same scale', 'Every particle at the same µm per screen pixel, so sizes compare']], S.guideScale, (v) => set({ guideScale: v }, false)),
+      scaleBar,
+      h('select', { 'aria-label': 'How many per class', title: 'How many per class', onchange: (e) => set({ guidePer: +e.target.value }) },
+        [8, 16, 32, 60].map((n) => h('option', { value: String(n), selected: n === S.guidePer }, `${n} per class`))),
+      h('button', { class: 'btn small', title: 'Show different examples', onclick: () => { seed = String(Math.random()).slice(2, 8); loadExamples(); } }, 'Other examples')),
+    h('div', { class: 'guide-barrow' }, h('span', { class: 'muted small' }, 'Instruments:'), instBox));
+  inner.append(h('div', { class: 'sec-h' }, h('h2', {}, 'Classes')), bar, exNote, classesBox);
+
+  /** My classifications from this browser (practice mode), grouped like the server does. */
+  function practiceExamples(fl) {
+    const keep = new Set(fl);
+    const out = {};
+    const all = Object.entries(practice.load()).filter(([pid]) => keep.has(pid.split(':')[0]));
+    all.sort((x, y) => (hashStr(x[0] + seed) - hashStr(y[0] + seed)));
+    for (const [pid, [label, flags, , madeOf]] of all) {
+      const e = { pid, made_of: madeOf || null, n: 1, t: 1, me: [label, flags || '', madeOf || null] };
+      for (const g of madeOf ? [label, `${label}:${madeOf}`] : [label]) {
+        out[g + '#count'] = (out[g + '#count'] || 0) + 1;
+        (out[g] = out[g] || []).length < S.guidePer && out[g].push(e);
+      }
     }
-    exNote.textContent = fl.length ? 'Examples are particles that most of the people who classified them agree on.' : 'Tick an instrument to see examples.';
+    return out;
+  }
+  async function loadExamples() {
+    const fl = chosenFlights();
+    ex = {};
+    const mine = S.guideWho === 'mine';
+    if (!fl.length) exNote.textContent = 'Tick an instrument to see examples.';
+    else if (mine && practice.on) { ex = practiceExamples(fl); exNote.textContent = 'Your practice classifications in this browser.'; }
+    else if (server.reachable && !server.demo) {
+      exNote.textContent = 'Loading…';
+      try { ex = (await api.fetchExamples(fl, S.guidePer, seed, mine)).examples || {}; } catch { ex = {}; }
+      exNote.textContent = mine ? '' : 'Particles that most of the people who classified them agree on.';
+    }
+    exNote.append(h('span', {}, ' Click a picture to change your classification, or drag it onto another class.'));
+    // what I said about each one, so changes start from the right place
+    for (const [g, list] of Object.entries(ex)) {
+      if (!Array.isArray(list)) continue;
+      for (const e of list) if (e.me && !labels.mine.has(e.pid)) labels.mine.set(e.pid, mkLabel(e.me[0], e.me[1] ? e.me[1].split(',') : [], e.me[2]));
+    }
+    draw();
+  }
+  // after a change: in "Mine", move the particle to its new class; otherwise just redraw its badge
+  onLabelsChanged = (pids) => {
+    if (!classesBox.isConnected) { onLabelsChanged = null; return; }
+    if (S.guideWho === 'mine') {
+      for (const pid of pids) {
+        let entry = null;
+        for (const [g, list] of Object.entries(ex)) {
+          if (!Array.isArray(list)) continue;
+          const i = list.findIndex((e) => e.pid === pid);
+          if (i >= 0) { entry = entry || list[i]; list.splice(i, 1); ex[g + '#count'] = Math.max(0, (ex[g + '#count'] || 1) - 1); }
+        }
+        const m = labels.mine.get(pid);
+        if (!m) continue;
+        const e = Object.assign({}, entry || { pid, n: 1, t: 1 }, { made_of: m.made_of || null });
+        for (const g of m.made_of ? [m.label, `${m.label}:${m.made_of}`] : [m.label]) { (ex[g] = ex[g] || []).unshift(e); ex[g + '#count'] = (ex[g + '#count'] || 0) + 1; }
+      }
+    }
+    draw();
+  };
+
+  const openChip = new Map();     // class id -> chosen "made of" chip
+  let dragPid = null;
+  function thumb(e, c, key) {
+    const m = labels.mine.get(e.pid);
+    const mc = m && classById.get(m.label);
+    const fid = e.pid.split(':')[0];
+    const f = flightOf.get(fid);
+    const img = h('img', { src: exUrl(e.pid), alt: `${c.name} example`, loading: 'lazy', draggable: 'false',
+      onerror: (ev) => ev.target.closest('.exthumb')?.remove(), onload: (ev) => sizeImg(ev.target) });
+    img.dataset.um = String(pxUm.get(fid) || 2.3);
+    const disagree = S.guideWho === 'agreed' && m && m.label !== c.id;
+    const t = h('div', { class: 'exthumb' + (disagree ? ' differs' : ''), role: 'button', tabindex: '0', draggable: 'true', 'data-pid': e.pid,
+      onkeydown: (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); ev.currentTarget.click(); } },
+      title: [S.guideWho === 'agreed' ? `${labelText({ label: c.id, flags: [], made_of: e.made_of })} · ${e.n} of ${e.t} ${e.t === 1 ? 'person' : 'people'}` : null,
+        m ? `You said: ${labelText(m)}` : 'You haven’t classified this one', f ? `${f.campaign ? f.campaign + ' · ' : ''}${f.label || f.id}` : fid, 'Click to change, or drag to another class'].filter(Boolean).join('\n'),
+      onclick: () => openFixer(e.pid, { img: exUrl, list: () => [...classesBox.querySelectorAll('.exthumb')].map((x) => x.dataset.pid).filter((x, i, a) => a.indexOf(x) === i),
+        info: (pid) => { const ff = flightOf.get(pid.split(':')[0]); return ff ? `${ff.campaign ? ff.campaign + ' · ' : ''}${ff.label || ff.id}` : ''; } }),
+      ondragstart: (ev) => { dragPid = e.pid; ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', e.pid); document.body.classList.add('dragging'); },
+      ondragend: () => { dragPid = null; document.body.classList.remove('dragging'); classesBox.querySelectorAll('.over').forEach((x) => x.classList.remove('over')); } },
+    img,
+    e.made_of && key === c.id ? h('span', { class: 'excap' }, ofInfo(e.made_of).name) : null,
+    m && S.guideWho === 'agreed' ? h('span', { class: 'exme', style: { '--c': mc?.color || '#888' }, title: `You said: ${labelText(m)}` }, disagree ? `You: ${labelText(m, true)}` : '✓') : null);
+    return t;
+  }
+  function sizeImg(img) {
+    if (!img.naturalWidth) return;
+    if (S.guideScale === 'true') {
+      const k = (+img.dataset.um || 2.3) * pxPerUm();
+      img.style.width = Math.round(img.naturalWidth * k) + 'px'; img.style.height = Math.round(img.naturalHeight * k) + 'px';
+    } else { img.style.width = ''; img.style.height = ''; }
+  }
+  function resize() {
+    classesBox.style.setProperty('--ex', S.guideSize + 'px');
+    classesBox.classList.toggle('same-scale', S.guideScale === 'true');
+    classesBox.querySelectorAll('.exthumb img').forEach(sizeImg);
+    if (S.guideScale === 'true') {
+      const k = pxPerUm();
+      const um = [10, 20, 50, 100, 200, 500, 1000].find((u) => u * k >= 40) || 1000;
+      scaleBar.innerHTML = ''; scaleBar.append(h('i', { style: { width: Math.round(um * k) + 'px' } }), `${um} µm`); scaleBar.hidden = false;
+    } else scaleBar.hidden = true;
+  }
+  /** Drop a particle on a class (or one of its "made of" chips): that's now your classification. */
+  function dropOn(el, clsId, madeOf = null) {
+    el.addEventListener('dragover', (ev) => { if (!dragPid) return; ev.preventDefault(); ev.stopPropagation(); ev.dataTransfer.dropEffect = 'move'; el.classList.add('over'); });
+    el.addEventListener('dragleave', (ev) => { if (!el.contains(ev.relatedTarget)) el.classList.remove('over'); });
+    el.addEventListener('drop', (ev) => {
+      ev.preventDefault(); ev.stopPropagation(); el.classList.remove('over');
+      const pid = dragPid || ev.dataTransfer.getData('text/plain'); if (!pid || !needUser()) return;
+      const m = labels.mine.get(pid);
+      const c = classById.get(clsId);
+      const mo = madeOf || (m && m.label === clsId ? m.made_of : null);
+      const after = mkLabel(clsId, keepFlags(m ? m.flags.slice() : [], clsId), mo);
+      const desc = `1 particle → ${labelText(after)}`;
+      if (same(snap(m), after)) return;
+      setLabelForPid(pid, after, desc);
+      toast(desc, 3500, { label: 'Undo', run: undo });
+      if (c) { const card = classesBox.querySelector(`.guide-cls[data-cls="${clsId}"]`); card?.classList.remove('hit'); void card?.offsetWidth; card?.classList.add('hit'); }
+    });
+  }
+  function draw() {
     classesBox.innerHTML = '';
+    const mine = S.guideWho === 'mine';
     for (const c of scheme.classes) {
       const strip = h('div', { class: 'guide-ex' });
-      const show = (key) => {
-        strip.innerHTML = '';
-        const list = ex[key] || [];
-        if (!list.length) { strip.append(h('span', { class: 'muted small' }, 'No agreed examples yet.')); return; }
-        for (const e of list.slice(0, 8)) {
-          strip.append(h('a', { class: 'exthumb', href: exUrl(e.pid), target: '_blank', rel: 'noopener',
-            title: `${e.made_of ? `${c.name} of ${ofInfo(e.made_of).plural}` : c.name} · ${e.n} of ${e.t} ${e.t === 1 ? 'person' : 'people'} · ${e.pid}` },
-          h('img', { src: exUrl(e.pid), alt: `${c.name} example`, loading: 'lazy', onerror: (ev) => ev.target.closest('.exthumb')?.remove() }),
-          e.made_of && key === c.id ? h('span', { class: 'excap' }, ofInfo(e.made_of).name) : null));
-        }
-      };
-      const chips = (c.of || []).filter((v) => ex[`${c.id}:${v}`]?.length);
+      const key = openChip.get(c.id) && ex[`${c.id}:${openChip.get(c.id)}`]?.length ? `${c.id}:${openChip.get(c.id)}` : c.id;
+      const list = ex[key] || [];
+      if (!list.length) strip.append(h('span', { class: 'muted small' }, mine ? 'None yet.' : 'No agreed examples yet.'));
+      for (const e of list) strip.append(thumb(e, c, key));
+      const chips = (c.of || []).filter((v) => ex[`${c.id}:${v}`]?.length || mine);
       const chipBox = chips.length ? h('div', { class: 'exchips' },
-        h('button', { class: 'exchip on', onclick: (e) => { pick(e, c.id); } }, 'All'),
-        chips.map((v) => h('button', { class: 'exchip', onclick: (e) => { pick(e, `${c.id}:${v}`); } }, `of ${ofInfo(v).plural}`))) : null;
-      function pick(e, key) { chipBox.querySelectorAll('.exchip').forEach((b) => b.classList.toggle('on', b === e.currentTarget)); show(key); }
-      show(c.id);
+        h('button', { class: 'exchip' + (key === c.id ? ' on' : ''), onclick: () => { openChip.delete(c.id); draw(); } }, 'All'),
+        chips.map((v) => {
+          const b = h('button', { class: 'exchip' + (key === `${c.id}:${v}` ? ' on' : ''), title: `${c.name} of ${ofInfo(v).plural}. Drop a particle here to make it one.`,
+            onclick: () => { openChip.set(c.id, v); draw(); } }, `of ${ofInfo(v).plural}`, ex[`${c.id}:${v}#count`] ? h('small', {}, ` ${fmtInt(ex[`${c.id}:${v}#count`])}`) : null);
+          dropOn(b, c.id, v);
+          return b;
+        })) : null;
       const total = ex[c.id + '#count'] || 0;
-      classesBox.append(h('div', { class: 'guide-cls', style: { '--c': c.color } },
-        h('kbd', { class: '', style: { background: c.color } }, c.key.toUpperCase()),
-        h('div', {}, h('b', {}, c.name), total ? h('span', { class: 'muted small excount' }, ` ${fmtInt(total)} agreed`) : null),
+      const extra = extraFlags(c.id);
+      const card = h('div', { class: 'guide-cls', 'data-cls': c.id, style: { '--c': c.color } },
+        h('kbd', { style: { background: c.color } }, c.key.toUpperCase()),
+        h('div', {}, h('b', {}, c.name), total ? h('span', { class: 'muted small excount' }, ` ${fmtInt(total)} ${mine ? 'by you' : 'agreed'}`) : null),
         h('p', {}, c.desc),
         c.of ? h('p', { class: 'muted small' }, 'Made of: ' + c.of.map((v) => ofInfo(v).plural).join(', ')) : null,
-        chipBox, strip));
+        extra.length ? h('p', { class: 'muted small' }, 'Also: ' + extra.map((f) => `${f.name} (${f.key.toUpperCase()})`).join(', ')) : null,
+        chipBox, strip);
+      dropOn(card, c.id);
+      classesBox.append(card);
     }
+    resize();
   }
-  inner.append(h('div', { class: 'sec-h' }, h('h2', {}, 'Classes'), h('span', { class: 'grow' }),
-      h('button', { class: 'btn small', title: 'Show different examples', onclick: () => { seed = String(Math.random()).slice(2, 8); loadExamples(); } }, 'Other examples')),
-    h('div', { class: 'guide-instrow' }, h('span', { class: 'muted small' }, 'Examples from:'), instBox), exNote, classesBox);
+  draw();
   loadExamples();
   inner.append(h('h2', { style: { marginTop: '28px' } }, 'Flags'),
-    h('p', { class: 'muted' }, 'Flags add detail to a class. Press a flag key before the class key to include it, or press it after classifying to add or remove it.'),
-    h('div', { class: 'guide-classes' }, scheme.flags.map((f) => h('div', { class: 'guide-cls', style: { '--c': 'var(--accent)' } },
-      h('kbd', { class: 'k' }, f.key.toUpperCase()), h('b', {}, f.name), h('p', {}, f.desc)))));
+    h('p', { class: 'muted' }, 'Flags add detail to a class. Press a flag key before the class key to include it, or press it after classifying to add or remove it. Hollow and Chain only apply to some classes, and also appear beside them as a second choice.'),
+    h('div', { class: 'guide-classes guide-flags' }, scheme.flags.map((f) => h('div', { class: 'guide-cls', style: { '--c': 'var(--accent)' } },
+      h('kbd', { class: 'k' }, f.key.toUpperCase()), h('b', {}, f.name), h('p', {}, f.desc), f.for ? h('p', { class: 'muted small' }, `Only for ${forText(f)}.`) : null))));
   const keys = [
     ['← →', 'Previous / next particle'], ['↑ ↓', 'Row above / below (grid)'], ['Space', 'Select or deselect (grid); next particle (one at a time)'],
     ['Click, Shift-click, ⌘/Ctrl-click', 'Select one, a run, or add to the selection'], ['⌘/Ctrl A', 'Select everything shown'],

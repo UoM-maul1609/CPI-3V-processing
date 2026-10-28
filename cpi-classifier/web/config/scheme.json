@@ -1,32 +1,220 @@
 {
-  "version": "habit-v3",
+  "version": "habit-v5",
   "title": "Ice crystal habit",
-  "help": "Pick the habit that best describes the particle. For aggregates, fragments and graupel, also say what it is made of, if you can tell. Add flags for extra features. If you can't tell, use 'Can't tell' rather than guessing.",
+  "help": "Classify the 3D crystal you think it is, not the 2D outline: a plate seen edge-on looks like a thin column, a short column seen end-on looks like a hexagon. For aggregates, fragments and graupel, also say what it is made of, if you can tell. Hollow and Chain appear beside the classes they apply to; Rimed works on any class. If you're not sure, give your best guess with Unsure, or use Can't tell rather than guessing.",
   "classes": [
-    {"id": "droplet",   "name": "Droplet",            "key": "d", "color": "#14a3b8", "desc": "Liquid drop: a near-perfect circle with a smooth edge, usually with a bright spot or ring in the middle where it focuses the light."},
-    {"id": "sphere",    "name": "Quasi-sphere",       "key": "1", "color": "#8ecae6", "desc": "Round but not quite a perfect circle, no bright centre: frozen drop or small quasi-spherical ice."},
-    {"id": "column",    "name": "Column",             "key": "2", "color": "#4f9dde", "plural": "columns", "desc": "Hexagonal prism longer than wide, flat ends, solid or hollow."},
-    {"id": "needle",    "name": "Needle",             "key": "3", "color": "#2b6cb0", "plural": "needles", "desc": "Very long thin column (aspect ratio above about 5)."},
-    {"id": "plate",     "name": "Plate",              "key": "4", "color": "#3fb68b", "plural": "plates", "desc": "Thin hexagonal plate or sectored plate."},
-    {"id": "dendrite",  "name": "Stellar / dendrite", "key": "5", "color": "#1e8f5a", "plural": "stellars / dendrites", "desc": "Six-armed star, fern-like branches."},
-    {"id": "rosette",   "name": "Bullet rosette",     "key": "6", "color": "#e0a526", "plural": "bullet rosettes", "desc": "Several columns or bullets radiating from one centre."},
-    {"id": "bullet",    "name": "Bullet",             "key": "t", "color": "#c98a12", "desc": "A single bullet: one arm broken off a bullet rosette (a column with one pointed end)."},
-    {"id": "capped",    "name": "Capped column",      "key": "7", "color": "#d97a29", "plural": "capped columns", "desc": "Column with plates on one or both ends."},
-    {"id": "aggregate", "name": "Aggregate",          "key": "8", "color": "#c2507a", "plural": "aggregates", "desc": "Several crystals stuck together. Say what of, if you can tell.",
-      "of": ["rosette", "plate", "column", "dendrite", "needle", "capped", "mixed", "unknown"]},
-    {"id": "fragment",  "name": "Fragment",           "key": "f", "color": "#a0522d", "desc": "A broken piece of a larger crystal. Say what of, if you can tell.",
-      "of": ["dendrite", "plate", "column", "rosette", "aggregate", "unknown"]},
-    {"id": "graupel",   "name": "Graupel / rimed",    "key": "9", "color": "#8d5fd3", "desc": "Heavily rimed; lumpy outline. Say what the rimed crystal was, if you can tell.",
-      "of": ["plate", "dendrite", "column", "rosette", "aggregate", "unknown"]},
-    {"id": "irregular", "name": "Irregular",          "key": "0", "color": "#8a8f98", "desc": "Ice with no recognisable habit."},
-    {"id": "small",     "name": "Too small to tell",  "key": "s", "color": "#b8bcc4", "desc": "Only a few pixels across; habit can't be judged."},
-    {"id": "unusable",  "name": "Can't tell / blurred","key": "x", "color": "#5c6370", "desc": "Out of focus, overlapping, or otherwise unclassifiable."},
-    {"id": "artefact",  "name": "Artefact",           "key": "a", "color": "#e5484d", "desc": "Not a cloud particle: shattering debris, streaks, smudges, stuck particle, empty ROI."}
+    {
+      "id": "droplet",
+      "name": "Droplet",
+      "key": "d",
+      "color": "#14a3b8",
+      "desc": "Liquid drop: a near-perfect circle with a smooth edge, usually with a bright spot or ring in the middle where it focuses the light."
+    },
+    {
+      "id": "sphere",
+      "name": "Quasi-sphere",
+      "key": "1",
+      "color": "#8ecae6",
+      "desc": "Round but not quite a perfect circle, no bright centre: frozen drop or small quasi-spherical ice.",
+      "plural": "quasi-spheres"
+    },
+    {
+      "id": "column",
+      "name": "Column",
+      "key": "2",
+      "color": "#4f9dde",
+      "plural": "columns",
+      "desc": "Hexagonal prism longer than wide, flat ends; a short column seen end-on looks like a hexagon. Length about equal to width: call it a column if the ends look flat and sharp, a plate if it looks thin. Hollow? Tick Hollow (H)."
+    },
+    {
+      "id": "needle",
+      "name": "Needle",
+      "key": "3",
+      "color": "#2b6cb0",
+      "plural": "needles",
+      "desc": "Very long thin column (aspect ratio above about 5)."
+    },
+    {
+      "id": "plate",
+      "name": "Plate",
+      "key": "4",
+      "color": "#3fb68b",
+      "plural": "plates",
+      "desc": "Thin hexagonal plate or sectored plate, including tilted and edge-on plates (thin, straight-sided). Thicker than wide? That's a column. Hollowed (skeletal)? Tick Hollow (H)."
+    },
+    {
+      "id": "dendrite",
+      "name": "Stellar / dendrite",
+      "key": "5",
+      "color": "#1e8f5a",
+      "plural": "stellars / dendrites",
+      "desc": "Six-armed star, fern-like branches."
+    },
+    {
+      "id": "rosette",
+      "name": "Bullet rosette",
+      "key": "6",
+      "color": "#e0a526",
+      "plural": "bullet rosettes",
+      "desc": "Several columns or bullets radiating from one centre."
+    },
+    {
+      "id": "sideplane",
+      "name": "Side planes / polycrystal",
+      "key": "p",
+      "color": "#7d8f3a",
+      "plural": "side-plane crystals",
+      "desc": "Crystal with plates growing out of it at different angles (side planes), or an irregular polycrystal made of several crystals grown together rather than stuck together. Common at about −20 to −40 °C."
+    },
+    {
+      "id": "bullet",
+      "name": "Bullet",
+      "key": "t",
+      "color": "#c98a12",
+      "desc": "A single bullet: one arm broken off a bullet rosette (a column with one pointed end).",
+      "plural": "bullets"
+    },
+    {
+      "id": "capped",
+      "name": "Capped column",
+      "key": "7",
+      "color": "#d97a29",
+      "plural": "capped columns",
+      "desc": "Column with plates on one or both ends. Rimed? Add the Rimed flag (R)."
+    },
+    {
+      "id": "scroll",
+      "name": "Scroll / sheath",
+      "key": "l",
+      "color": "#5b8fb9",
+      "plural": "scrolls",
+      "desc": "Thin sheet of ice curled into a hollow, open-sided column (scroll), or a long hollow sheath."
+    },
+    {
+      "id": "aggregate",
+      "name": "Aggregate",
+      "key": "8",
+      "color": "#c2507a",
+      "plural": "aggregates",
+      "desc": "Several crystals stuck together. Say what of, if you can tell, and tick Chain (N) if they're linked end to end.",
+      "of": [
+        "rosette",
+        "sideplane",
+        "plate",
+        "column",
+        "dendrite",
+        "needle",
+        "capped",
+        "bullet",
+        "sphere",
+        "mixed",
+        "unknown"
+      ]
+    },
+    {
+      "id": "fragment",
+      "name": "Fragment",
+      "key": "f",
+      "color": "#a0522d",
+      "desc": "A broken piece of a larger crystal. Say what of, if you can tell.",
+      "of": [
+        "dendrite",
+        "plate",
+        "column",
+        "capped",
+        "rosette",
+        "sideplane",
+        "aggregate",
+        "unknown"
+      ]
+    },
+    {
+      "id": "graupel",
+      "name": "Graupel",
+      "key": "9",
+      "color": "#8d5fd3",
+      "desc": "So heavily rimed that the original crystal can't be made out: lumpy, rounded outline. If you can still tell the habit, use that class with the Rimed flag (R) instead. Say what it was, if you can tell.",
+      "of": [
+        "plate",
+        "dendrite",
+        "column",
+        "capped",
+        "rosette",
+        "sideplane",
+        "aggregate",
+        "unknown"
+      ]
+    },
+    {
+      "id": "irregular",
+      "name": "Irregular",
+      "key": "0",
+      "color": "#8a8f98",
+      "desc": "Ice with no recognisable habit, and not side planes or a polycrystal."
+    },
+    {
+      "id": "small",
+      "name": "Too small to tell",
+      "key": "s",
+      "color": "#b8bcc4",
+      "desc": "Fewer than about 15 pixels across (roughly 35 µm on a CPI): too few pixels to judge the habit."
+    },
+    {
+      "id": "unusable",
+      "name": "Can't tell / blurred",
+      "key": "x",
+      "color": "#5c6370",
+      "desc": "Out of focus, overlapping, or otherwise unclassifiable."
+    },
+    {
+      "id": "artefact",
+      "name": "Artefact",
+      "key": "a",
+      "color": "#e5484d",
+      "desc": "Not a cloud particle: shattering debris, streaks, smudges, stuck particle, empty ROI."
+    }
   ],
   "flags": [
-    {"id": "rimed",    "name": "Rimed",          "key": "r", "desc": "Some riming visible on the crystal."},
-    {"id": "hollow",   "name": "Hollow",         "key": "h", "desc": "Hollow or skeletal (bright interior)."},
-    {"id": "cutoff",   "name": "Cut off",        "key": "c", "desc": "Particle runs off the edge of the image."},
-    {"id": "unsure",   "name": "Unsure",         "key": "u", "desc": "Your best guess, but you're not confident."}
+    {
+      "id": "rimed",
+      "name": "Rimed",
+      "key": "r",
+      "desc": "Some riming visible, but you can still tell what the crystal is (e.g. a rimed capped column). If riming hides the shape, use Graupel."
+    },
+    {
+      "id": "hollow",
+      "name": "Hollow",
+      "key": "h",
+      "desc": "Hollow column, or hollowed (skeletal) plate: a bright, empty-looking interior.",
+      "for": [
+        "column",
+        "needle",
+        "plate",
+        "bullet",
+        "capped",
+        "rosette"
+      ]
+    },
+    {
+      "id": "chain",
+      "name": "Chain",
+      "key": "n",
+      "desc": "Crystals linked end to end in a chain, rather than a clump.",
+      "for": [
+        "aggregate"
+      ]
+    },
+    {
+      "id": "cutoff",
+      "name": "Cut off",
+      "key": "c",
+      "desc": "Particle runs off the edge of the image."
+    },
+    {
+      "id": "unsure",
+      "name": "Unsure",
+      "key": "u",
+      "desc": "Your best guess, but you're not confident."
+    }
   ]
 }
