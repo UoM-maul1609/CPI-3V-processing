@@ -16,7 +16,7 @@ from convertDataToHouseSA import convertDataToHouseSA
 from detectHousekeeping import detect_housekeeping
 from convertDataToImageSA import convertDataToImageSA
 from convertDataToROISA import convertDataToROISA
-from fullBackgrounds import fullBackgrounds
+from recordedBackgrounds import scan_recorded_backgrounds, image_times_by_offset
 from io_utils import atomic_savemat, normalise_directory, parse_bool
 from postProcess import postProcess
 
@@ -192,19 +192,31 @@ def mult_job(path1, filename1, dt, process_sweep1_if_exist, cpiv1):
     print("done")
 
     print("Getting backgrounds...")
-    FULL_BG1 = fullBackgrounds(ROI_N, cpiv1)
-    if len(FULL_BG1["Time"]):
-        FULL_BG1 = _as_matlab_struct(FULL_BG1)
-        existing = len(FULL_BG["IMAGE"][0, 0])
+    stamps = image_times_by_offset(raw_bytes, I, IMAGE1["Time1"])
+    records, bg_inventory = scan_recorded_backgrounds(raw_bytes, stamps)
+    print(f"Frames: {bg_inventory['frames']}; background flags: "
+          f"{bg_inventory['background_flags']}; decoded: {bg_inventory['decoded']}; "
+          f"invalid: {bg_inventory['invalid_backgrounds']}")
+    # A background with no recognised timestamp cannot be safely associated
+    # with particles. Never invent acquisition times.
+    matched = [(im, ts) for _, im, ts in records if ts is not None]
+    if len(matched) != len(records):
+        print(f"WARNING: {len(records)-len(matched)} backgrounds missing frame timestamps")
+    if matched:
+        FULL_BG1 = _as_matlab_struct({
+            'Time': np.array([ts for im, ts in matched], dtype=np.float64),
+            'IMAGE': [{'BG': im} for im, ts in matched],
+        })
+        existing = len(FULL_BG['IMAGE'][0, 0])
         if existing > 0:
-            FULL_BG["IMAGE"][0, 0] = np.append(
-                FULL_BG["IMAGE"][0, 0], FULL_BG1["IMAGE"][0, 0], axis=1
-            )
-            FULL_BG["Time"][0, 0] = np.append(
-                FULL_BG["Time"][0, 0], FULL_BG1["Time"][0, 0], axis=0
-            )
+            FULL_BG['IMAGE'][0, 0] = np.append(
+                FULL_BG['IMAGE'][0, 0], FULL_BG1['IMAGE'][0, 0], axis=1)
+            FULL_BG['Time'][0, 0] = np.append(
+                FULL_BG['Time'][0, 0], FULL_BG1['Time'][0, 0], axis=0)
         else:
             FULL_BG = FULL_BG1
+    else:
+        print('no usable recorded backgrounds in this file')
     print("done")
 
     if ROI_N["Time"].size == 0:

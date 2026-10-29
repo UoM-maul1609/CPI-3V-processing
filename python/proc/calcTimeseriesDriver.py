@@ -29,7 +29,7 @@ def _frame_size_px(path1, cpiv1):
             return int(frame.shape[0]), int(frame.shape[1])
     except Exception:
         pass
-    return (1024, 1022) if cpiv1 else (1280, 1024)
+    raise ValueError("No full-frame background to establish sensor dimensions; concentration unsafe. Supply a verified geometry before computing timeseries.")
 
 
 def _processing_pixel_um(dat):
@@ -86,7 +86,6 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
         "conc2ar": np.zeros((nt, nl, na), dtype=float),
     }
 
-    image_type_value = 33857 if cpiv1 else 89
 
     processed_files = 0
     missing_mat_files = []
@@ -103,6 +102,9 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
         HOUSE = data["HOUSE"]
         IMAGE1 = data["IMAGE1"]
         dat = data["dat"]
+        from instrumentProfile import from_mat_data
+        cpiv1 = from_mat_data(data)
+        image_type_value = 33857 if cpiv1 else 89
 
         # New files carry imageType in dat, avoiding the very large ROI_N image
         # structure.  Fall back for already-processed legacy MAT files.
@@ -132,7 +134,8 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
         # Dead time.  The CPIV1 clock can be put directly on the MATLAB-day
         # time base, so this path is vectorized.  Retain the legacy interpolation
         # for the older clock representation.
-        if cpiv1:
+        hk_format = str(np.asarray(HOUSE['format'][0, 0]).ravel()[0]).strip() if 'format' in _field_names(HOUSE) else ('legacy' if cpiv1 else '3v83')
+        if hk_format == 'legacy':
             if image_times.size:
                 house_raw = np.asarray(HOUSE["Time"][0, 0][0, :], dtype=float)
                 house_time = (

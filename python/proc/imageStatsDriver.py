@@ -145,6 +145,8 @@ def mult_job(path1, filename1, find_particle_edges, cpiv1, position, lock, edge_
     HOUSE = data["HOUSE"]
     IMAGE1 = data["IMAGE1"]
     BG = data["BG"]
+    from instrumentProfile import from_mat_roi
+    cpiv1 = from_mat_roi(ROI_N)
 
     bank = None
     if edge_options and '"transmittance"' in str(edge_options) and '"bg_check": false' not in str(edge_options):

@@ -118,6 +118,8 @@ def exportImages(pathname,filenames,foc_crit,size_thresh,MAP,cpiv1,classifier, \
         dataload=sio.loadmat(os.path.join(pathname, filenames[l].replace('.roi', '.mat')),
                            variable_names=['ROI_N','dat','BG','BG_USED'])
         ROI_N=dataload['ROI_N']
+        from instrumentProfile import from_mat_roi
+        cpiv1 = from_mat_roi(ROI_N)
         dat=dataload['dat']
         if 'BG' not in dataload:
             raise ValueError('Missing BG in '+filenames[l]+': cannot normalise exports')

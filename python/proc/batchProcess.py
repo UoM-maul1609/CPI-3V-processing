@@ -136,7 +136,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--only-stats", action="store_true",
                         help="only redo particle statistics on already-converted MAT files "
                              "(run it on a copy of a processed directory to compare edge methods)")
-    parser.add_argument("--cpiv1", action="store_true", help="CPI 1.0 data (image type 33857)")
     parser.add_argument("--no-images", action="store_true",
                         help="skip exporting particle images (the slow PNG/montage step)")
     parser.add_argument("--no-timeseries", action="store_true", help="skip the concentration time series")
@@ -185,6 +184,8 @@ def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = F
              cpi_v1: bool = None, images: bool = None, timeseries: bool = None,
              backgrounds: str = None, max_cutoff: float = None, grayscale: bool = False, background_level: float = 180.) -> None:
     edge = dict(edge_options, **(edge or {}))
+    if classifier:
+        raise NotImplementedError("Auto instrument profiles are not yet supported by the classifier timeseries path")
     use_v1 = cpiv1 if cpi_v1 is None else cpi_v1
     path1 = normalise_directory(path1)
     if not os.path.isdir(path1):
@@ -350,7 +351,7 @@ if __name__ == "__main__":
         if not 0.5 <= args.pixel_um <= 20:
             raise SystemExit(f"--pixel-um {args.pixel_um}: expected a pixel size in µm (about 2-3 for the CPI)")
         edge["pixel_um"] = args.pixel_um
-    run_jobs(args.path, args.cores, edge=edge, only_stats=args.only_stats, cpi_v1=True if args.cpiv1 else None,
+    run_jobs(args.path, args.cores, edge=edge, only_stats=args.only_stats, cpi_v1=None,
              images=False if args.no_images else None, timeseries=False if args.no_timeseries else None,
              backgrounds=args.backgrounds, max_cutoff=args.max_cutoff, grayscale=args.grayscale,
              background_level=args.background_level)
