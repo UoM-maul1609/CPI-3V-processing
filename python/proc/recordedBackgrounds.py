@@ -3,7 +3,8 @@
 CPIview scan_image_block.pro: ImageType bit 0 = image present,
 bit 1 = background, bit 2 = full frame.  read_backgnd.pro reads a
 frame header followed by an image/ROI header and its pixel payload.
-Only well-formed, bounded, full-sensor records are accepted here.
+Only well-formed, bounded records are accepted here.  CPIview identifies
+backgrounds by bit 1, without requiring the full-frame bit (bit 2).
 """
 from __future__ import annotations
 
@@ -57,7 +58,7 @@ def scan_recorded_backgrounds(raw_bytes, frame_times=None, *, max_pixels=20_000_
         if img_type & 3 != 3:
             continue
         stats['background_flags'] += 1
-        if not (img_type & 4 and nroi == 1 and
+        if not (nroi == 1 and
                 raw_bytes[first_roi:first_roi+2] == _ROI):
             stats['invalid_backgrounds'] += 1
             continue
@@ -66,12 +67,14 @@ def scan_recorded_backgrounds(raw_bytes, frame_times=None, *, max_pixels=20_000_
         pixel_bytes = struct.unpack_from('<h', raw_bytes, first_roi+16)[0]
         w, h = ex-sx+1, ey-sy+1
         payload_length = w*h*abs(pixel_bytes)
+        # ROIInfoSize is the image HEADER size, not the pixel-inclusive record size.
+        # The pixel-inclusive total belongs to frameheader.TotROIsSize.
         if not (roi_ver == 25 and 0 <= sx <= ex < 10000 and
                 0 <= sy <= ey < 10000 and abs(pixel_bytes) in (1, 2, 4) and
                 0 < w*h <= max_pixels and
-                roi_size >= _ROI_HEADER_SIZE+payload_length and
-                roi_size <= roi_total and
-                first_roi+_ROI_HEADER_SIZE+payload_length <= total):
+                roi_size == _ROI_HEADER_SIZE and
+                roi_total == roi_size + payload_length and
+                first_roi + roi_total <= total):
             stats['invalid_backgrounds'] += 1
             continue
         dtype = {1:'u1', 2:'<i2', 4:'<i4'}[abs(pixel_bytes)]
