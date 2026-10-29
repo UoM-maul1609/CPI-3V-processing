@@ -18,7 +18,8 @@ def convertDataToHouseSA(bytes1, ushort, order, house, cpiv1):
         # CPIView HKver20 has an 11-word header and 38 readings (98 bytes).
         # HKver25 has 13 header words and 40 readings (106 bytes).
         # CPIv1 A1D7 version 30 has 13 header words and 40 readings (106 bytes).
-        layouts = {20: (98, 11, 38), 25: (106, 13, 40), 30: (118, 13, 46)}
+        layouts = {20: {98: (11, 38)}, 25: {106: (13, 40)},
+                   30: {106: (13, 40), 118: (13, 46)}}
         dtype = [
             ('BlockNum', 'uint16'), ('ulItemSize', 'uint32'),
             ('usVersion', 'uint16'), ('ulXtraData', 'uint32'),
@@ -43,17 +44,16 @@ def convertDataToHouseSA(bytes1, ushort, order, house, cpiv1):
                 rejected += 1
                 continue
             ver = int(ushort[pos + 3])
-            layout = layouts.get(ver)
+            # CPIview's HKver30 defines 46 readings (118 bytes), but
+            # ACCACIA demonstrably stores a 40-reading, 106-byte version-30
+            # packet. Recognise the layout from BOTH version and item size.
+            declared_size = _u32_from_words(ushort[pos + 2], ushort[pos + 1])
+            layout = layouts.get(ver, {}).get(declared_size)
             if layout is None:
                 rejected += 1
                 continue
-            item_size, header_words, nreadings = layout
+            header_words, nreadings = layout
             if pos + header_words + nreadings > boundary:
-                rejected += 1
-                continue
-            # CPIView ItemSize is a 32-bit byte length for versions 20, 25, 30.
-            declared_size = _u32_from_words(ushort[pos + 2], ushort[pos + 1])
-            if declared_size != item_size:
                 rejected += 1
                 continue
             rec = np.zeros((), dtype=dtype)

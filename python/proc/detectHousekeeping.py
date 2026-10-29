@@ -7,7 +7,7 @@ per ROI file to preserve the existing homogeneous H dtype.
 import numpy as np
 
 _LEGACY_MARKERS = (0xA1D6, 0xA2D6, 0xA1D7, 0xA1D8)
-_LEGACY_LAYOUT = {20: 98, 25: 106, 30: 118}
+_LEGACY_LAYOUT = {20: (98,), 25: (106,), 30: (106, 118)}
 
 
 def detect_housekeeping(words, order):
@@ -26,7 +26,7 @@ def detect_housekeeping(words, order):
             continue
         version = int(words[p+3])
         size = int(words[p+1]) | (int(words[p+2]) << 16)
-        if _LEGACY_LAYOUT.get(version) == size and p + size//2 <= end:
+        if size in _LEGACY_LAYOUT.get(version, ()) and p + size//2 <= end:
             legacy.append(p)
     # Keep a single, highest-confidence family. No valid HK: empty modern
     # so the postprocessor safely produces empty arrays in either mode.
