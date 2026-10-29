@@ -310,7 +310,7 @@ if __name__ == "__main__":
         from exportParticles import export
         export(args.path, args.png_dir, args.project, args.flight_csv,
                args.min_size_um, args.min_focus, overwrite=args.overwrite_png, grayscale=args.grayscale,
-               background_level=args.background_level)
+               background_level=args.background_level, cores=args.cores)
         sys.exit(0)
     edge = {}
     if args.edge_method:
@@ -360,4 +360,4 @@ if __name__ == "__main__":
         from exportParticles import export
         export(args.path, args.png_dir, args.project, args.flight_csv,
                args.min_size_um, args.min_focus, overwrite=args.overwrite_png, grayscale=args.grayscale,
-               background_level=args.background_level)
+               background_level=args.background_level, cores=args.cores)

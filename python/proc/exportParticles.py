@@ -8,6 +8,7 @@ indices rather than filtered export order, so lowering thresholds fills gaps.
 from __future__ import annotations
 import argparse
 import csv
+from concurrent.futures import ProcessPoolExecutor
 from datetime import datetime, timedelta
 import json
 import math
@@ -189,8 +190,77 @@ def _write_png(img, target):
         if os.path.exists(tmp):
             os.unlink(tmp)
 
+def _export_mat(task):
+    """One MAT file per worker; return rows in original MAT/ROI order."""
+    mat, root, project, project_dir, rows, min_size_um, min_focus, skip_existing, overwrite, grayscale, background_level = task
+    catalogue=[]
+    errors=[]
+    written=existing=filtered=0
+    per_flight={}
+    try:
+        data=loadmat(mat,variable_names=['ROI_N','dat','BG','BG_USED'])
+        if 'BG' not in data:
+            raise ValueError('Missing BG: cannot export background-normalised ROIs')
+        bg, bg_used = data['BG'], data.get('BG_USED')
+        rois=np.asarray(_field(data['ROI_N'],'IMAGE')).reshape(-1)
+        times=np.asarray(_field(data['ROI_N'],'Time')).reshape(-1)
+        dat=data['dat']
+        sizes=np.asarray(_field(dat,'len')).reshape(-1)
+        focus=np.asarray(_field(_field(dat,'foc'),'focus')).reshape(-1)
+        if not (len(rois)==len(times)==len(sizes)==len(focus)):
+            raise ValueError(f'inconsistent ROI/stat counts: {len(rois)}, {len(times)}, {len(sizes)}, {len(focus)}')
+        try:
+            opts=_field(dat,'proc_options')
+            opts=str(_single(opts))
+        except (KeyError,TypeError):
+            opts=''
+        normalization_options = options_from_dat(dat)
+    except Exception as exc:
+        errors.append({'file':mat.name,'error':str(exc)})
+        print(f'WARNING: skipping {mat.name}: {exc}',flush=True)
+        return catalogue, errors, written, existing, filtered, per_flight
+    # The existing CPI statistics are one detection per recorded ROI.
+    for i in range(len(rois)):
+        source_id=f'{_safe(project)}_{_safe(mat.stem)}_roi{i+1:07d}_p01'
+        dt=_dt_from_matlab(times[i]); date=dt.date().isoformat() if dt else 'undated'
+        flight=_choose_flight(dt,mat.stem,rows)
+        fdate=_flight_date(flight,rows,date)
+        folder=project_dir / (_safe(fdate)+'_'+_safe(flight) if flight else _safe(date))
+        png=folder/(source_id+'.png')
+        size=_scalar_float(sizes[i])
+        foc=_scalar_float(focus[i])
+        eligible=(math.isfinite(size) and size>=min_size_um and
+                  (min_focus is None or (math.isfinite(foc) and foc>=min_focus)))
+        status='filtered' if not eligible else 'pending'
+        error=''
+        if eligible:
+            if png.exists() and skip_existing and not overwrite:
+                status='exists';existing+=1
+            else:
+                try:
+                    # MAT currently holds only one particle contour per ROI. No overlay
+                    # is added unless the source explicitly stores multiple detections.
+                    arr=corrected_roi(rois[i],bg,bg_used,i,normalization_options,background_level=background_level); img=_encode_image(arr,None,grayscale=grayscale)
+                    _write_png(img,png)
+                    status='exported';written+=1
+                except Exception as exc:
+                    status='error';error=str(exc)
+        else:
+            filtered+=1
+        if eligible:
+            per_flight[flight or f'(no flight) {date}']=per_flight.get(flight or f'(no flight) {date}',0)+1
+        catalogue.append(dict(source_id=source_id,project=project,flight=flight,date=date,
+             timestamp=dt.isoformat(timespec='milliseconds') if dt else '',source_mat=mat.name,
+             source_roi=mat.stem+'.roi',roi_index=i+1,particle_index=1,
+             size_um=size if math.isfinite(size) else '',focus=foc if math.isfinite(foc) else '',
+             eligible=int(eligible),export_status=status,
+             png_relative_path=png.relative_to(root).as_posix() if status in ('exported','exists') else '',
+             processing_options=opts,error=error))
+    print(f'{mat.name}: {len(rois)} ROIs',flush=True)
+    return catalogue, errors, written, existing, filtered, per_flight
+
 def export(source, output, project=None, flight_csv=None, min_size_um=0., min_focus=None,
-           skip_existing=True, overwrite=False, grayscale=False, background_level=180):
+           skip_existing=True, overwrite=False, grayscale=False, background_level=180, cores=1):
     source=Path(source).resolve()
     if not source.is_dir():
         raise NotADirectoryError(source)
@@ -210,67 +280,25 @@ def export(source, output, project=None, flight_csv=None, min_size_um=0., min_fo
     catalogue=[]
     errors=[]
     written=existing=filtered=0
-    for mat in mat_files:
-        try:
-            data=loadmat(mat,variable_names=['ROI_N','dat','BG','BG_USED'])
-            if 'BG' not in data:
-                raise ValueError('Missing BG: cannot export background-normalised ROIs')
-            bg, bg_used = data['BG'], data.get('BG_USED')
-            rois=np.asarray(_field(data['ROI_N'],'IMAGE')).reshape(-1)
-            times=np.asarray(_field(data['ROI_N'],'Time')).reshape(-1)
-            dat=data['dat']
-            sizes=np.asarray(_field(dat,'len')).reshape(-1)
-            focus=np.asarray(_field(_field(dat,'foc'),'focus')).reshape(-1)
-            if not (len(rois)==len(times)==len(sizes)==len(focus)):
-                raise ValueError(f'inconsistent ROI/stat counts: {len(rois)}, {len(times)}, {len(sizes)}, {len(focus)}')
-            try:
-                opts=_field(dat,'proc_options')
-                opts=str(_single(opts))
-            except (KeyError,TypeError):
-                opts=''
-            normalization_options = options_from_dat(dat)
-        except Exception as exc:
-            errors.append({'file':mat.name,'error':str(exc)})
-            print(f'WARNING: skipping {mat.name}: {exc}',flush=True)
-            continue
-        # The existing CPI statistics are one detection per recorded ROI.
-        for i in range(len(rois)):
-            source_id=f'{_safe(project)}_{_safe(mat.stem)}_roi{i+1:07d}_p01'
-            dt=_dt_from_matlab(times[i]); date=dt.date().isoformat() if dt else 'undated'
-            flight=_choose_flight(dt,mat.stem,rows)
-            fdate=_flight_date(flight,rows,date)
-            folder=project_dir / (_safe(fdate)+'_'+_safe(flight) if flight else _safe(date))
-            png=folder/(source_id+'.png')
-            size=_scalar_float(sizes[i])
-            foc=_scalar_float(focus[i])
-            eligible=(math.isfinite(size) and size>=min_size_um and
-                      (min_focus is None or (math.isfinite(foc) and foc>=min_focus)))
-            status='filtered' if not eligible else 'pending'
-            error=''
-            if eligible:
-                if png.exists() and skip_existing and not overwrite:
-                    status='exists';existing+=1
-                else:
-                    try:
-                        # MAT currently holds only one particle contour per ROI. No overlay
-                        # is added unless the source explicitly stores multiple detections.
-                        arr=corrected_roi(rois[i],bg,bg_used,i,normalization_options,background_level=background_level); img=_encode_image(arr,None,grayscale=grayscale)
-                        _write_png(img,png)
-                        status='exported';written+=1
-                    except Exception as exc:
-                        status='error';error=str(exc)
-            else:
-                filtered+=1
-            if eligible:
-                per_flight[flight or f'(no flight) {date}']=per_flight.get(flight or f'(no flight) {date}',0)+1
-            catalogue.append(dict(source_id=source_id,project=project,flight=flight,date=date,
-                 timestamp=dt.isoformat(timespec='milliseconds') if dt else '',source_mat=mat.name,
-                 source_roi=mat.stem+'.roi',roi_index=i+1,particle_index=1,
-                 size_um=size if math.isfinite(size) else '',focus=foc if math.isfinite(foc) else '',
-                 eligible=int(eligible),export_status=status,
-                 png_relative_path=png.relative_to(root).as_posix() if status in ('exported','exists') else '',
-                 processing_options=opts,error=error))
-        print(f'{mat.name}: {len(rois)} ROIs',flush=True)
+    tasks = [(mat, root, project, project_dir, rows, min_size_um, min_focus,
+              skip_existing, overwrite, grayscale, background_level) for mat in mat_files]
+    # Executor.map preserves input order independently of worker completion order.
+    # This keeps catalogue and source IDs stable with 1 or many workers.
+    if int(cores) > 1 and len(tasks) > 1:
+        with ProcessPoolExecutor(max_workers=min(int(cores), len(tasks))) as pool:
+            results = pool.map(_export_mat, tasks)
+            for part_rows, part_errors, nw, ne, nf, part_flights in results:
+                catalogue.extend(part_rows); errors.extend(part_errors)
+                written += nw; existing += ne; filtered += nf
+                for k, v in part_flights.items():
+                    per_flight[k] = per_flight.get(k, 0) + v
+    else:
+        for task in tasks:
+            part_rows, part_errors, nw, ne, nf, part_flights = _export_mat(task)
+            catalogue.extend(part_rows); errors.extend(part_errors)
+            written += nw; existing += ne; filtered += nf
+            for k, v in part_flights.items():
+                per_flight[k] = per_flight.get(k, 0) + v
     project_dir.mkdir(parents=True,exist_ok=True)
     catalog_path=project_dir/'particle_catalogue.csv'
     fd,tmp=tempfile.mkstemp(prefix='.catalogue_',suffix='.csv',dir=project_dir)
@@ -297,6 +325,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('path',help='Directory of previously processed ROI MAT files')
     p.add_argument('--png-dir',required=True,help='PNG output root')
+    p.add_argument('--cores',type=int,default=1,help='Parallel MAT-file workers (default: 1)')
     p.add_argument('--project',help='Campaign name (default: input directory name)')
     p.add_argument('--flight-csv',help='Flight list CSV: project,flight,date[,start_datetime,end_datetime] '
                    '(default: flights.csv in the MAT folder, if there is one)')
@@ -312,7 +341,7 @@ def main():
         p.error('--background-level must be > 0 and <= 255')
     if args.min_size_um < 0 or (args.min_focus is not None and not math.isfinite(args.min_focus)):
         p.error('Invalid size/focus threshold')
-    export(args.path,args.png_dir,args.project,args.flight_csv,args.min_size_um,args.min_focus,overwrite=args.overwrite,grayscale=args.grayscale,background_level=args.background_level)
+    export(args.path,args.png_dir,args.project,args.flight_csv,args.min_size_um,args.min_focus,overwrite=args.overwrite,grayscale=args.grayscale,background_level=args.background_level,cores=args.cores)
 
 if __name__ == '__main__':
     main()
