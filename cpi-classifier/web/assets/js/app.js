@@ -550,23 +550,27 @@ async function loadMlSets(force = false) {
   try { mlSets = ((await api.adminGet('ml_sets')).sets || []).filter((x) => x.status === 'ready'); } catch { mlSets = []; }
   return mlSets;
 }
-async function ensureMl() {
+async function ensureMl(onProgress) {
   if (!D || !server.user?.is_admin || !S.mlSet) { mlPred = null; return; }
   const key = S.mlSet + '|' + Dkey;
   if (mlPred && mlPred.key === key) return;
-  let p = {};
-  try { p = (await api.adminGet('ml_predictions', { set: String(S.mlSet), flights: D.flights.map((f) => f.id).join(',') })).predictions || {}; } catch (e) { toast(e.message, 4000); }
   const lab = new Int16Array(D.n).fill(-1), lab2 = new Int16Array(D.n).fill(-1), prob = new Float32Array(D.n).fill(NaN), prob2 = new Float32Array(D.n).fill(NaN);
   const extra = new Map();      // g -> [riming flag id or null, [other flags]] (only where the model gave any)
   const ix = new Map(); mlClasses = [];
   const ci = (c) => { if (!c) return -1; if (!ix.has(c)) { ix.set(c, mlClasses.length); mlClasses.push(c); } return ix.get(c); };
-  let n = 0;
-  for (const [pid, [l, pr, l2, pr2, rim, fl]] of Object.entries(p)) {
-    const g = D.index.get(pid); if (g === undefined) continue;
-    lab[g] = ci(l); prob[g] = pr; lab2[g] = ci(l2); prob2[g] = pr2 == null ? NaN : pr2; n++;
+  let n = 0, failed = null, done = 0;
+  // one flight at a time (a few at once), streamed as text: a set can hold millions of particles
+  const ids = D.flights.map((f) => f.id);
+  const one = (fid) => api.adminLines('ml_pred_flight', { set: String(S.mlSet), flight: fid }, (line) => {
+    const [k, l, pr, l2, pr2, rim, fl] = line.split('\t');
+    const g = D.index.get(fid + ':' + k); if (g === undefined) return;
+    lab[g] = ci(l); prob[g] = +pr; lab2[g] = ci(l2); prob2[g] = pr2 === '' || pr2 === undefined ? NaN : +pr2; n++;
     if (rim || fl) extra.set(g, [rim || null, fl ? fl.split(',').filter(Boolean) : []]);
-  }
-  mlPred = { set: S.mlSet, key, lab, prob, lab2, prob2, extra, n };
+  }).catch((e) => { failed = e; }).finally(() => { done++; onProgress?.(done, ids.length); });
+  const queue = ids.slice();
+  await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => { while (queue.length) await one(queue.shift()); }));
+  if (failed) toast(`Couldn’t load all the model’s results: ${failed.message}`, 8000);
+  mlPred = { set: S.mlSet, key, lab, prob, lab2, prob2, extra, n, failed: failed?.message || null };
 }
 const mlAt = (g) => {
   if (!mlPred || mlPred.lab[g] < 0) return null;
@@ -586,7 +590,7 @@ async function viewClassify(root) {
   if (want) note.textContent = `Loading ${fmtInt(want)} particles…`;
   try {
     await ensureData((done, total) => { if (total > 1) note.textContent = `Loading ${fmtInt(want)} particles… (${done} of ${total} flights)`; });
-    if (server.user?.is_admin) { await loadMlSets(); if (S.mlSet && !mlSets.some((x) => x.id === S.mlSet)) S.mlSet = null; await ensureMl(); }
+    if (server.user?.is_admin) { await loadMlSets(); if (S.mlSet && !mlSets.some((x) => x.id === S.mlSet)) S.mlSet = null; note.textContent = 'Loading the model’s results…'; await ensureMl((d, t) => { note.textContent = `Loading the model’s results… (${d} of ${t} flights)`; }); }
   } catch (e) { root.innerHTML = ''; root.append(h('div', { class: 'empty' }, h('h2', {}, 'Could not load the particles'), h('p', {}, e.message))); return; }
   root.innerHTML = '';
 
@@ -743,7 +747,8 @@ function buildSidebar() {
         savePrefs(); await ensureMl(); route();
       } }, h('option', { value: '' }, 'Don’t show a model'),
         mlSets.map((x) => h('option', { value: String(x.id), selected: x.id === S.mlSet }, `${x.name || 'Set ' + x.id} (${fmtInt(x.n)})`))),
-      mlPred ? h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, `${fmtInt(mlPred.n)} of these ${fmtInt(D.n)} particles have the model’s class. Only administrators see it.`) : null));
+      mlPred ? h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, `${fmtInt(mlPred.n)} of these ${fmtInt(D.n)} particles have the model’s class. Only administrators see it.`) : null,
+      mlPred?.failed ? h('p', { class: 'small', style: { margin: '6px 0 0', color: 'var(--danger, #c33)' } }, `Some results couldn’t be loaded: ${mlPred.failed}`) : null));
   }
 
   // filters

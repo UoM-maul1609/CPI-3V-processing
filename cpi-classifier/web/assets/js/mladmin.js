@@ -85,7 +85,7 @@ function jobsCard() {
         if (p.epochs) { frac = ((p.epoch || 0) - (p.batch ? 1 : 0) + (p.batch ? 0.5 : 0)) / p.epochs; what = `Epoch ${p.epoch} of ${p.epochs}` + (p.val_accuracy != null ? ` · test accuracy ${pct(p.val_accuracy)}` : ''); }
         if (p.stage === 'reading') what = 'Reading the classified particles…';
         if (p.stage === 'testing') what = 'Testing on the held-back flights…';
-      } else if (p.total) { frac = (p.done || 0) / p.total; what = `${C.fmtInt(p.done || 0)} of ${C.fmtInt(p.total)} particles`; }
+      } else if (p.total) { frac = (p.done || 0) / p.total; what = `${C.fmtInt(p.done || 0)} of ${C.fmtInt(p.total)} particles` + (p.flight ? ` · ${p.flight}` : ''); }
       if (j.status === 'done') { frac = 1; what = j.kind === 'train' ? 'Finished: see Versions below' : 'Finished: see Classification sets below'; }
       if (j.status === 'queued') what = 'Waiting for the GPU (another job is running)';
       const title = j.kind === 'train' ? `Training (${C.fmtInt(j.n_labels || 0)} particles, ${j.flights} flight${j.flights === 1 ? '' : 's'})` : `Classifying: ${j.name || ''}`;

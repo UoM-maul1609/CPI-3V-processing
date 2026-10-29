@@ -375,6 +375,8 @@ function ml_action(string $action, array $u): void {
         $st->execute([$sid]);
         $name = $st->fetchColumn();
         if ($name === false) fail(404, 'No such set');
+        @set_time_limit(0);
+        if (!is_sqlite()) db()->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);   // millions of rows: don't hold them all
         header('Content-Type: text/csv; charset=utf-8');
         header('Content-Disposition: attachment; filename="cpi-model-set-' . $sid . '.csv"');
         $fh = fopen('php://output', 'w');
@@ -385,6 +387,31 @@ function ml_action(string $action, array $u): void {
             preg_match(PID_RE, $r['pid'], $m);
             fputcsv($fh, [$r['pid'], $r['flight_id'], $m[2] ?? '', $m[3] ?? '', $r['label'], $r['prob'], $r['label2'], $r['prob2'], $r['riming'], $r['riming_prob'], $r['flags']]);
         }
+        exit;
+
+    case 'admin_ml_pred_flight':
+        // one flight's results as text, streamed row by row so even millions of particles need
+        // little memory: lines "stem:index<TAB>label<TAB>prob<TAB>label2<TAB>prob2<TAB>riming<TAB>flags"
+        $sid = (int)($_GET['set'] ?? 0);
+        $fid = (string)($_GET['flight'] ?? '');
+        if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/', $fid)) fail(400, 'Bad flight id');
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();   // let the next flight's request run alongside
+        @set_time_limit(0);
+        $pdo = db();
+        if (!is_sqlite()) $pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+        $q = $pdo->prepare('SELECT pid, label, prob, label2, prob2, riming, flags FROM ml_predictions WHERE set_id = ? AND flight_id = ?');
+        $q->execute([$sid, $fid]);
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Cache-Control: no-store');
+        if (extension_loaded('zlib') && !ini_get('zlib.output_compression') && str_contains($_SERVER['HTTP_ACCEPT_ENCODING'] ?? '', 'gzip')) ob_start('ob_gzhandler', 1 << 20);
+        $cut = strlen($fid) + 1;
+        $buf = '';
+        while (($r = $q->fetch(PDO::FETCH_NUM)) !== false) {
+            $buf .= substr($r[0], $cut) . "\t" . $r[1] . "\t" . round((float)$r[2], 4) . "\t" . ($r[3] ?? '') . "\t"
+                  . ($r[4] === null ? '' : round((float)$r[4], 4)) . "\t" . ($r[5] ?? '') . "\t" . ($r[6] ?? '') . "\n";
+            if (strlen($buf) > 65536) { echo $buf; $buf = ''; }
+        }
+        echo $buf;
         exit;
 
     case 'admin_ml_predictions':

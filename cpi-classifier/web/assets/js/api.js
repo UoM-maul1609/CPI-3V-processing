@@ -84,6 +84,27 @@ export const updateProfile = (body) => call('profile_update', { body });
 // admin actions (admin page only)
 export const adminGet = (action, params) => call('admin_' + action, { params });
 export const adminPost = (action, body) => call('admin_' + action, { body });
+/** Read a text response line by line as it arrives (for very long answers). */
+export async function adminLines(action, params, onLine) {
+  const res = await fetch(BASE + '?' + new URLSearchParams({ a: 'admin_' + action, ...params }), { credentials: 'same-origin', headers: { ...HDR } });
+  if (!res.ok) {
+    let msg = `Server error (${res.status})`;
+    try { msg = (await res.json()).error || msg; } catch { /* not JSON */ }
+    throw new Error(msg);
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let rest = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const text = rest + dec.decode(value, { stream: true });
+    let a = 0, b;
+    while ((b = text.indexOf('\n', a)) >= 0) { onLine(text.slice(a, b)); a = b + 1; }
+    rest = text.slice(a);
+  }
+  if (rest) onLine(rest);
+}
 export const adminUrl = (action, params = {}) => BASE + '?' + new URLSearchParams({ a: 'admin_' + action, ...params });
 export function exportUrl(format = 'csv', mine = false, history = false) {
   return BASE + '?' + new URLSearchParams({ a: 'export', format, ...(mine ? { mine: '1' } : {}), ...(history ? { history: '1' } : {}) });

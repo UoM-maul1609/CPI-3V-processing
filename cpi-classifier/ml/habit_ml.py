@@ -583,8 +583,9 @@ def predict_job(job):
     for fid in job.get("flights", []):
         try:
             F = load_flight(job["data_dir"], fid)
-        except OSError:
-            log(f"  {fid}: not found, skipped"); continue
+        except (OSError, ValueError, KeyError) as e:
+            log(f"  {fid}: can't read its particle list in {os.path.join(job['data_dir'], 'flights', fid)} ({e}); skipped")
+            continue
         work.append((fid, list(F["pid_at"].keys())))
     total = sum(len(p) for _, p in work)
     log(f"{total:,} particles in {len(work)} flight(s)")
@@ -594,10 +595,17 @@ def predict_job(job):
         w = csv.writer(fh)
         w.writerow(["pid", "flight_id", "label", "prob", "label2", "prob2", "riming", "riming_prob", "flags"])
         for fid, pids in work:
+            progress(stage="reading", flight=fid, done=done, total=total)
             rows = particle_rows(job["data_dir"], pids)
             keep = [(p, r) for p, r in zip(pids, rows) if r is not None and os.path.exists(r[0])]
+            unknown = sum(r is None for r in rows)
+            noimg = len(pids) - len(keep) - unknown
+            if unknown or noimg:
+                eg = next((r[0] for r in rows if r is not None and not os.path.exists(r[0])), None)
+                log(f"  {fid}: {noimg:,} particles without an image" + (f" (e.g. {eg})" if eg else "")
+                    + (f", {unknown:,} not in the flight's particle list" if unknown else ""))
             if not keep:
-                done += len(pids); continue
+                log(f"  {fid}: nothing to classify"); done += len(pids); continue
             X, _ = feature_matrix([r[1] for _, r in keep], info["feature_stats"])
             for s in range(0, len(keep), 20000):                # in chunks, so millions of particles fit in memory
                 chunk = keep[s:s + 20000]
@@ -618,6 +626,11 @@ def predict_job(job):
                 progress(stage="classifying", flight=fid, done=done + s + len(chunk), total=total)
             done += len(pids)
             log(f"  {fid}: {len(keep):,} particles")
+    if not written:
+        os.remove(tmp)
+        log(f"Classified nothing: none of the {total:,} particles had an image the model could read (see above)."
+            " Check the flights' img folders exist and the web server can read them.")
+        sys.exit(1)
     os.replace(tmp, job["out_csv"])
     log(f"Classified {written:,} particles")
     progress(stage="done", done=written, total=total)
