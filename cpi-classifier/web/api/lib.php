@@ -78,6 +78,7 @@ function ensure_schema(): void {
         ['labels', 'session_id', 'INTEGER NULL'],
         ['users', 'prefs', 'TEXT NULL'],
         ['labels', 'made_of', 'VARCHAR(32) NULL'], ['label_log', 'made_of', 'VARCHAR(32) NULL'],
+        ['ml_predictions', 'riming', 'VARCHAR(32) NULL'], ['ml_predictions', 'riming_prob', 'FLOAT NULL'], ['ml_predictions', 'flags', 'VARCHAR(200) NULL'],
     ];
     foreach ($cols as [$table, $col, $type]) {
         try { db()->query("SELECT $col FROM $table LIMIT 1"); }
@@ -243,6 +244,18 @@ function flag_for_map(array $sch): array {
     $m = [];
     foreach ($sch['flags'] ?? [] as $f) if (!empty($f['for']) && is_array($f['for'])) $m[$f['id']] = array_map('strval', $f['for']);
     return $m;
+}
+/** Flags in a group (riming degrees) are exclusive: keep only the last one given from each group. */
+function one_per_group(array $sch, array $flags): array {
+    $grp = [];
+    foreach ($sch['flags'] ?? [] as $f) if (!empty($f['group'])) $grp[$f['id']] = $f['group'];
+    $seen = [];
+    $out = [];
+    foreach (array_reverse($flags) as $f) {
+        if (isset($grp[$f])) { if (isset($seen[$grp[$f]])) continue; $seen[$grp[$f]] = 1; }
+        $out[] = $f;
+    }
+    return array_reverse($out);
 }
 /** Drop flags that don't apply to this label (e.g. Chain on a plate). */
 function flag_applies(array $forMap, string $flag, string $label): bool {

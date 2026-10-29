@@ -199,7 +199,7 @@ case 'save':
             if ($okLabels && !in_array($label, $okLabels, true)) continue;
             $flags = array_values(array_filter((array)($it['flags'] ?? []),
                 fn($f) => is_string($f) && (!$okFlags || in_array($f, $okFlags, true)) && flag_applies($forMap, $f, $label)));
-            $flagStr = implode(',', $flags);
+            $flagStr = implode(',', one_per_group($sch, $flags));
             $note = isset($it['note']) ? mb_substr((string)$it['note'], 0, 500) : null;
             $mo = clean_made_of($ofMap, $label, $it['made_of'] ?? null);
             $ins->execute([$u['id'], $pid, $m[1], $label, $flagStr, $note, $ver, $now, $now, $mo]);

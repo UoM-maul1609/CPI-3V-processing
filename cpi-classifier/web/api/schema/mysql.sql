@@ -81,3 +81,31 @@ CREATE TABLE IF NOT EXISTS remember_tokens (
   agent       VARCHAR(200) NULL,
   KEY ix_rt_user (user_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Machine learning: each run of a model over some particles is a "classification set".
+CREATE TABLE IF NOT EXISTS ml_sets (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  model_id    VARCHAR(40)  NOT NULL,
+  model_name  VARCHAR(80)  NULL,
+  name        VARCHAR(120) NULL,
+  scope       TEXT NULL,
+  n           INT          NOT NULL DEFAULT 0,
+  status      VARCHAR(16)  NOT NULL DEFAULT 'running',
+  created_at  DATETIME     NOT NULL,
+  created_by  VARCHAR(32)  NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS ml_predictions (
+  set_id      INT UNSIGNED NOT NULL,
+  pid         VARCHAR(200) NOT NULL,
+  flight_id   VARCHAR(64)  NOT NULL,
+  label       VARCHAR(32)  NOT NULL,
+  prob        FLOAT        NOT NULL,
+  label2      VARCHAR(32)  NULL,
+  prob2       FLOAT        NULL,
+  riming      VARCHAR(32)  NULL,
+  riming_prob FLOAT        NULL,
+  flags       VARCHAR(200) NULL,
+  PRIMARY KEY (set_id, pid),
+  KEY ix_pred_flight (set_id, flight_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

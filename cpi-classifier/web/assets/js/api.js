@@ -47,8 +47,8 @@ export async function whoAmI() {
   return server.user;
 }
 
-export async function login(username, password) {
-  const d = await call('login', { body: { username, password } });
+export async function login(username, password, remember = false) {
+  const d = await call('login', { body: { username, password, remember } });
   server.user = d.user;
   return d.user;
 }
@@ -84,6 +84,7 @@ export const updateProfile = (body) => call('profile_update', { body });
 // admin actions (admin page only)
 export const adminGet = (action, params) => call('admin_' + action, { params });
 export const adminPost = (action, body) => call('admin_' + action, { body });
+export const adminUrl = (action, params = {}) => BASE + '?' + new URLSearchParams({ a: 'admin_' + action, ...params });
 export function exportUrl(format = 'csv', mine = false, history = false) {
   return BASE + '?' + new URLSearchParams({ a: 'export', format, ...(mine ? { mine: '1' } : {}), ...(history ? { history: '1' } : {}) });
 }

@@ -1,0 +1,5 @@
+# For ml/habit_ml.py (Admin → Machine learning). Install in its own environment:
+#   python3.11 -m venv /var/www/cpi/venv-ml && /var/www/cpi/venv-ml/bin/pip install -r requirements.txt
+tensorflow[and-cuda]>=2.16
+keras>=3.0
+numpy

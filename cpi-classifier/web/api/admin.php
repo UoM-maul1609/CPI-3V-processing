@@ -232,6 +232,10 @@ function admin_action(string $action): void {
         require __DIR__ . '/projects.php';
         project_action($action, $u);
     }
+    if (str_starts_with($action, 'admin_ml_')) {
+        require __DIR__ . '/ml.php';
+        ml_action($action, $u);
+    }
     switch ($action) {
 
     case 'admin_check':
@@ -631,6 +635,8 @@ print(json.dumps(r))') . ' 2>&1'));
                         $item['of'] = array_values(array_unique(array_filter(array_map('strval', $c['of']), fn($x) => preg_match('/^[a-z0-9_]{1,40}$/', $x))));
                 }
                 // a flag that only applies to some classes (e.g. Chain for aggregates)
+                if ($kind === 'flags' && !empty($c['group']) && preg_match('/^[a-z0-9_]{1,40}$/', (string)$c['group'])) $item['group'] = (string)$c['group'];
+                if ($kind === 'flags' && !empty($c['beside'])) $item['beside'] = true;
                 if ($kind === 'flags' && !empty($c['for']) && is_array($c['for']))
                     $item['for'] = array_values(array_unique(array_filter(array_map('strval', $c['for']), fn($x) => preg_match('/^[a-z0-9_]{1,40}$/', $x))));
                 $clean[$kind][] = $item;

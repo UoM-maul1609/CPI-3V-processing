@@ -80,8 +80,8 @@ const S = Object.assign({}, DEFAULTS, lsGet('cpi.prefs', {}));
 if ((S.prefsV || 1) < 2) { S.cmap = 'blues'; S.prefsV = 2; lsSet('cpi.prefs', S); }    // Blues_r became the default colour map
 // Display settings also travel with your account, so they follow you to other computers
 // (and between the tunnel address and the campus address, which browsers keep apart).
-const SYNCED = ['cmap', 'brightness', 'contrast', 'outline', 'outlineColor', 'overlays', 'sizeField', 'scale', 'zoom', 'bigTile', 'tile',
-  'view', 'order', 'sizeBins', 'hideEdge', 'inspector', 'exportOpts', 'flights', 'projOpen', 'show', 'guideInst', 'guideWho', 'guideScale', 'guideSize', 'guidePer', 'prefsV'];
+const SYNCED = ['cmap', 'brightness', 'contrast', 'autoContrast', 'outline', 'outlineColor', 'overlays', 'sizeField', 'scale', 'zoom', 'bigTile', 'tile',
+  'view', 'order', 'sizeBins', 'hideEdge', 'inspector', 'exportOpts', 'flights', 'projOpen', 'show', 'mlSet', 'guideInst', 'guideWho', 'guideScale', 'guideSize', 'guidePer', 'prefsV'];
 let prefsTimer = null, prefsSent = '';
 const savePrefs = () => {
   lsSet('cpi.prefs', S);
@@ -128,7 +128,7 @@ const SPOT_KEY = 'cpi.spot';
 let spot = null;
 let stageView = '';           // the view the stage was last drawn in
 function spotSig() {
-  return JSON.stringify([Dkey, S.show, S.order, S.seed, S.ranges, S.hideEdge, S.sizeField, S.sizeBins || null, S.extraDims,
+  return JSON.stringify([Dkey, S.show, S.order, S.seed, S.ranges, S.hideEdge, S.sizeField, S.sizeBins || null, S.extraDims, S.mlSet || null,
     server.user?.id || server.user?.username || '', practice.on]);
 }
 function rememberSpot() {
@@ -307,6 +307,15 @@ function offerPracticeKeep() {
 }
 
 // ------------------------------------------------------------------ change password
+/** Ask the browser to save a username and password (Chrome and Edge, on https or localhost;
+ *  other browsers offer by themselves when a sign-in form is submitted). */
+function offerToSaveLogin(id, password, name) {
+  try {
+    if (window.PasswordCredential && navigator.credentials?.store) {
+      navigator.credentials.store(new window.PasswordCredential({ id, password, name: name || id })).catch(() => {});
+    }
+  } catch { /* not available here */ }
+}
 function openChangePassword(forced) {
   const d = h('dialog', { class: 'dlg pwdlg' });
   const err = h('p', { class: 'formerr', role: 'alert' });
@@ -330,6 +339,7 @@ function openChangePassword(forced) {
     if (nw.value !== rep2.value) { err.textContent = 'The two new passwords don’t match'; return; }
     try {
       await api.changePassword(cur.value, nw.value);
+      offerToSaveLogin(server.user.username, nw.value, server.user.display_name);
       d.close();
       renderUserBox();
       toast('Password changed');
@@ -338,6 +348,8 @@ function openChangePassword(forced) {
   } },
   h('h3', {}, forced ? `Welcome, ${server.user.display_name.split(' ')[0]}. Choose your own password` : 'Change your password'),
   h('p', { class: 'dlg-why' }, forced ? 'You signed in with a temporary password. Choose one that only you know. You’ll use it from now on.' : 'Your classifications are kept; only the password changes.'),
+  // tells the browser whose password this is, so it can save the new one
+  h('input', { type: 'text', name: 'username', autocomplete: 'username', value: server.user?.username || '', readonly: true, hidden: true, 'aria-hidden': 'true', tabindex: '-1' }),
   curL, newL, meter, repL, err,
   h('div', { class: 'dlg-actions' },
     forced ? h('button', { type: 'button', class: 'btn ghost', onclick: () => { d.close(); signOut(); } }, 'Sign out')
@@ -371,6 +383,8 @@ function openAuth(opts = {}) {
     ? 'This is the first account on the site, so it becomes the administrator. Use one of the admin usernames from api/config.php. You can then add other people from the Admin page.'
     : opts.why || (server.allowRegistration ? 'Sign in so your classifications are saved under your name.' : 'Sign in so your classifications are saved under your name. No account yet? Ask the administrator: they’ll give you a username and a temporary password.');
   $('#regTab').hidden = !server.allowRegistration;
+  form.password.value = '';
+  form.remember.checked = lsGet('cpi.keepSignedIn', false);
   setAuthTab(opts.setup ? 'register' : 'login');
   if (opts.setup) $('#authSubmit').textContent = 'Create the administrator account';
   dlg.showModal();
@@ -385,9 +399,12 @@ form.addEventListener('submit', async (e) => {
   $('#authErr').textContent = '';
   $('#authSubmit').disabled = true;
   try {
-    if (reg) await api.register(f); else await api.login(f.username, f.password);
+    if (!reg) lsSet('cpi.keepSignedIn', !!f.remember);
+    if (reg) await api.register(f); else await api.login(f.username, f.password, !!f.remember);
+    // let the browser offer to save the login: keep the form's values until it has looked
+    // (they're cleared the next time the form opens), and say so directly where allowed
+    if (!server.user.must_change_pw) offerToSaveLogin(f.username, f.password, server.user.display_name);
     dlg.close();
-    form.reset();
     server.setup = false;
     renderUserBox();
     if (server.user.must_change_pw) {
@@ -440,6 +457,15 @@ const views = { classify: viewClassify, flights: viewFlights, progress: viewProg
 const adminCtx = {
   h, $, $$, toast, fmtInt, server, api, display,
   selectOnly: (id) => { S.flights = [id]; savePrefs(); },
+  flights: () => visibleFlights(),
+  showSet: (set) => {
+    // open the Classify page on a classification set's flights, least sure first
+    const ids = new Set(visibleFlights().map((f) => f.id));
+    const fl = (set.flights || set.scope?.flights || []).filter((f) => ids.has(f));
+    if (fl.length) S.flights = fl;
+    S.mlSet = set.id; S.show = 'mlany'; S.order = 'ml-unsure';
+    mlSets = null; savePrefs(); location.hash = '#/classify';
+  },
   getScheme: () => scheme,
   setScheme: (sch) => setScheme(sch),
   onDataChanged: async () => {
@@ -512,6 +538,44 @@ async function ensureData(onProgress = null) {
 }
 const BIG_N = 3e6;
 
+// ---- machine learning (administrators): a model's classification set shown alongside
+// people's classifications. Kept apart from people's labels; only admins see it, so it
+// can't sway the people whose classifications train the next model.
+let mlSets = null;            // [{id, name, ...}] (ready sets), loaded once
+let mlPred = null;            // {set, key, lab: Int16Array (class index or -1), prob, lab2, prob2: per particle g, n}
+let mlClasses = [];           // class ids in the set's predictions
+async function loadMlSets(force = false) {
+  if (!server.user?.is_admin) { mlSets = []; return mlSets; }
+  if (mlSets && !force) return mlSets;
+  try { mlSets = ((await api.adminGet('ml_sets')).sets || []).filter((x) => x.status === 'ready'); } catch { mlSets = []; }
+  return mlSets;
+}
+async function ensureMl() {
+  if (!D || !server.user?.is_admin || !S.mlSet) { mlPred = null; return; }
+  const key = S.mlSet + '|' + Dkey;
+  if (mlPred && mlPred.key === key) return;
+  let p = {};
+  try { p = (await api.adminGet('ml_predictions', { set: String(S.mlSet), flights: D.flights.map((f) => f.id).join(',') })).predictions || {}; } catch (e) { toast(e.message, 4000); }
+  const lab = new Int16Array(D.n).fill(-1), lab2 = new Int16Array(D.n).fill(-1), prob = new Float32Array(D.n).fill(NaN), prob2 = new Float32Array(D.n).fill(NaN);
+  const extra = new Map();      // g -> [riming flag id or null, [other flags]] (only where the model gave any)
+  const ix = new Map(); mlClasses = [];
+  const ci = (c) => { if (!c) return -1; if (!ix.has(c)) { ix.set(c, mlClasses.length); mlClasses.push(c); } return ix.get(c); };
+  let n = 0;
+  for (const [pid, [l, pr, l2, pr2, rim, fl]] of Object.entries(p)) {
+    const g = D.index.get(pid); if (g === undefined) continue;
+    lab[g] = ci(l); prob[g] = pr; lab2[g] = ci(l2); prob2[g] = pr2 == null ? NaN : pr2; n++;
+    if (rim || fl) extra.set(g, [rim || null, fl ? fl.split(',').filter(Boolean) : []]);
+  }
+  mlPred = { set: S.mlSet, key, lab, prob, lab2, prob2, extra, n };
+}
+const mlAt = (g) => {
+  if (!mlPred || mlPred.lab[g] < 0) return null;
+  const [riming, flags] = mlPred.extra.get(g) || [null, []];
+  return { label: mlClasses[mlPred.lab[g]], prob: mlPred.prob[g], label2: mlPred.lab2[g] >= 0 ? mlClasses[mlPred.lab2[g]] : null, prob2: mlPred.prob2[g], riming, flags };
+};
+/** What the model said about riming and flags, in words ("moderately rimed, hollow"). */
+const mlExtraText = (ml) => [ml.riming, ...ml.flags].map((id) => flagById(id)?.name.toLowerCase() || id).filter(Boolean).join(', ');
+
 async function viewClassify(root) {
   root.className = '';
   root.innerHTML = '';
@@ -520,7 +584,10 @@ async function viewClassify(root) {
   root.append(h('div', { class: 'empty' }, note));
   const want = selectedFlights().reduce((t, id) => t + (manifest.byId.get(id)?.n || 0), 0);
   if (want) note.textContent = `Loading ${fmtInt(want)} particles…`;
-  try { await ensureData((done, total) => { if (total > 1) note.textContent = `Loading ${fmtInt(want)} particles… (${done} of ${total} flights)`; }); } catch (e) { root.innerHTML = ''; root.append(h('div', { class: 'empty' }, h('h2', {}, 'Could not load the particles'), h('p', {}, e.message))); return; }
+  try {
+    await ensureData((done, total) => { if (total > 1) note.textContent = `Loading ${fmtInt(want)} particles… (${done} of ${total} flights)`; });
+    if (server.user?.is_admin) { await loadMlSets(); if (S.mlSet && !mlSets.some((x) => x.id === S.mlSet)) S.mlSet = null; await ensureMl(); }
+  } catch (e) { root.innerHTML = ''; root.append(h('div', { class: 'empty' }, h('h2', {}, 'Could not load the particles'), h('p', {}, e.message))); return; }
   root.innerHTML = '';
 
   classifyEl = h('div', { class: 'classify' + (S.inspector ? '' : ' no-insp') });
@@ -637,7 +704,13 @@ function buildSidebar() {
     h('option', { value: 'mine' }, 'Classified by me (review)'),
     h('optgroup', { label: 'I classified as…' }, scheme.classes.map((c) => [h('option', { value: 'cls:' + c.id }, c.name),
       (c.of || []).map((v) => h('option', { value: `cls:${c.id}:${v}` }, `\u00a0\u00a0\u00a0${c.name} of ${ofInfo(v).plural}`))])),
-    piles.list().length ? h('optgroup', { label: 'In my pile…' }, piles.list().map((p) => h('option', { value: 'pile:' + p.id }, p.name))) : null);
+    piles.list().length ? h('optgroup', { label: 'In my pile…' }, piles.list().map((p) => h('option', { value: 'pile:' + p.id }, p.name))) : null,
+    mlPred ? h('optgroup', { label: 'The model' },
+      h('option', { value: 'mlany' }, 'Classified by the model'),
+      h('option', { value: 'mldiff' }, 'The model and I disagree'),
+      h('option', { value: 'mlpeople' }, 'The model and other people disagree'),
+      scheme.classes.filter((c) => mlClasses.includes(c.id)).map((c) => h('option', { value: 'ml:' + c.id }, `The model says ${c.name}`))) : null);
+  if (S.show.startsWith('ml') && !mlPred) S.show = 'todo';
   showSel.value = S.show;
   const orderSel = h('select', { 'aria-label': 'Order', onchange: (e) => { S.order = e.target.value; savePrefs(); recompute(); updateSizeBinsPanel(); } },
     h('option', { value: 'random' }, 'Random'),
@@ -646,7 +719,10 @@ function buildSidebar() {
     h('option', { value: 'flight' }, 'By flight, then time'),
     h('option', { value: 'size-desc' }, 'Largest first'),
     h('option', { value: 'size-asc' }, 'Smallest first'),
-    h('option', { value: 'least' }, 'Fewest classifications first'));
+    h('option', { value: 'least' }, 'Fewest classifications first'),
+    mlPred ? h('option', { value: 'ml-unsure' }, 'Model least sure first') : null,
+    mlPred ? h('option', { value: 'ml-sure' }, 'Model most sure first') : null);
+  if (S.order.startsWith('ml-') && !mlPred) S.order = 'random';
   orderSel.value = S.order;
   side.append(h('section', {},
     h('div', { class: 'side-h' }, h('h3', {}, 'Show')),
@@ -656,6 +732,19 @@ function buildSidebar() {
         h('button', { class: 'btn small', title: 'New random sample', onclick: () => { S.seed = (Math.random() * 1e9) | 0; savePrefs(); if (!S.order.startsWith('random') && S.order !== 'stratified') { S.order = 'random'; orderSel.value = 'random'; } recompute(); } }, 'Shuffle')),
       sizeBinsBox(),
       h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: S.hideEdge, onchange: (e) => { S.hideEdge = e.target.checked; savePrefs(); recompute(); } }), 'Hide particles cut off at the edge'))));
+
+  // a model's classification set (administrators)
+  if (server.user?.is_admin && mlSets && mlSets.length) {
+    side.append(h('section', { class: 'mlside' },
+      h('div', { class: 'side-h' }, h('h3', {}, 'Model'), h('a', { class: 'small', href: '#/admin/ml' }, 'Machine learning')),
+      h('select', { 'aria-label': 'Classification set', onchange: async (e) => {
+        S.mlSet = e.target.value ? +e.target.value : null;
+        if (!S.mlSet && (S.show.startsWith('ml') || S.order.startsWith('ml-'))) { S.show = 'todo'; S.order = 'random'; }
+        savePrefs(); await ensureMl(); route();
+      } }, h('option', { value: '' }, 'Don’t show a model'),
+        mlSets.map((x) => h('option', { value: String(x.id), selected: x.id === S.mlSet }, `${x.name || 'Set ' + x.id} (${fmtInt(x.n)})`))),
+      mlPred ? h('p', { class: 'muted small', style: { margin: '6px 0 0' } }, `${fmtInt(mlPred.n)} of these ${fmtInt(D.n)} particles have the model’s class. Only administrators see it.`) : null));
+  }
 
   // filters
   const fsec = h('section', {}, h('div', { class: 'side-h' }, h('h3', {}, 'Filters'),
@@ -787,7 +876,7 @@ function updateZoomUi() {
 }
 function applyDisplay() {
   const baked = manifest ? manifest.flights.filter((f) => f.colormap && f.colormap !== 'gray').map((f) => f.id) : [];
-  display.applyView({ cmap: S.cmap, brightness: S.brightness, contrast: S.contrast, outline: S.outlineColor, bakedFlights: baked });
+  display.applyView({ cmap: S.cmap, brightness: S.brightness, contrast: S.contrast, outline: S.outlineColor, bakedFlights: baked, autoContrast: !!S.autoContrast });
   const chip = $('#dispChip');
   if (chip) chip.style.background = display.gradient(S.cmap);
 }
@@ -843,6 +932,8 @@ function renderDisplayPanel() {
       h('button', { class: 'btn ghost small', onclick: () => setDisplay({ brightness: 1, contrast: 1 }) }, 'Reset')),
     slider('Brightness', 'brightness', 0.4, 2, 0.02),
     slider('Contrast', 'contrast', 0.4, 3.5, 0.05),
+    h('label', { class: 'check autoc', title: 'For faint, washed-out images (e.g. stray light in the camera): each particle is stretched so its own background is white and its darkest part black' },
+      h('input', { type: 'checkbox', checked: !!S.autoContrast, onchange: (e) => setDisplay({ autoContrast: e.target.checked }) }), 'Stretch each particle’s contrast'),
     h('div', { class: 'pop-h' }, h('h3', {}, 'Outline'),
       h('label', { class: 'switch' }, h('input', { type: 'checkbox', checked: S.outline, onchange: (e) => setDisplay({ outline: e.target.checked }, true) }), h('span', {}, S.outline ? 'On' : 'Off'))),
     h('div', { class: 'swatches' }, OUTLINE_COLOURS.map(([c, n]) => h('button', {
@@ -875,7 +966,7 @@ function openKeys() {
           scheme.classes.map((c) => row([c.key.toUpperCase()], c.name)).flat(),
           row(['Del'], 'Remove your label'), row(['Shift', '4'], 'Aggregate etc. made of plates (that habit’s key)'))),
       h('div', {}, h('h4', {}, 'Flags'),
-        h('div', { class: 'keys' }, scheme.flags.map((f) => row([f.key.toUpperCase()], f.name)).flat()),
+        h('div', { class: 'keys' }, scheme.flags.map((f) => row(flagKeys(f).split(' '), f.name)).flat()),
         h('h4', {}, 'Move and select'),
         h('div', { class: 'keys' },
           row(['←', '→'], 'Previous / next'), row(['↑', '↓'], 'Row above / below'), row(['Space'], 'Select (grid)'),
@@ -905,7 +996,18 @@ function buildPalette() {
     cls.append(btn);
   }
   const fl = h('div', { class: 'palette-flags', role: 'group', 'aria-label': 'Flags' });
+  const groupsDone = new Set();
   for (const f of scheme.flags) {
+    if (f.group) {
+      if (groupsDone.has(f.group)) continue;
+      groupsDone.add(f.group);
+      const gf = groupFlags(f.group);
+      fl.append(h('button', { class: 'flag flaggroup', 'data-group': f.group, 'aria-pressed': 'false',
+        title: gf.map((x, i) => `${'⟶ '.repeat(i + 1)}${x.name}: ${x.desc}`).join('\n') + `\nPress ${(gf.find((x) => x.key)?.key || '').toUpperCase()} to step through.`,
+        onclick: () => toggleFlag(f.id) },
+      h('kbd', {}, (gf.find((x) => x.key)?.key || '').toUpperCase()), h('span', { class: 'gname' }, groupName(f.group))));
+      continue;
+    }
     fl.append(h('button', { class: 'flag', 'data-flag': f.id, 'aria-pressed': 'false', title: f.desc + (f.for ? `\nOnly for ${forText(f)}.` : ''), onclick: () => toggleFlag(f.id) },
       h('kbd', {}, f.key.toUpperCase()), f.name));
   }
@@ -955,6 +1057,31 @@ function updateSaveState() {
 }
 api.onSaveState(updateSaveState);
 
+/** Administrators: run a trained model over chosen particles (a small classification set). */
+async function classifyWithModel(pids) {
+  let models = [];
+  try { models = ((await api.adminGet('ml_models')).models || []).filter((m) => m.status === 'trained'); } catch (e) { toast(e.message, 4000); return; }
+  if (!models.length) { toast('No trained models yet: train one on Admin → Machine learning', 4000); return; }
+  const d = h('dialog', { class: 'dlg' });
+  const sel = h('select', {}, models.map((m) => h('option', { value: m.id }, `${m.name || m.id}${m.kept ? '' : ' (not kept yet)'} · ${m.accuracy == null ? '' : Math.round(100 * m.accuracy) + '% on test flights'}`)));
+  const name = h('input', { placeholder: 'optional' });
+  d.append(h('form', { class: 'dlg-inner', onsubmit: async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api.adminPost('ml_predict', { model: sel.value, pids, name: name.value });
+      d.close();
+      toast(`Classifying ${plural(pids.length, 'particle')}. When it’s done, choose the set under Model in the sidebar.`, 6000, { label: 'Watch it', run: () => { location.hash = '#/admin/ml'; } });
+      mlSets = null;
+      S.mlSet = r.set; savePrefs();
+    } catch (x) { toast(x.message, 5000); }
+  } },
+  h('h3', {}, `Classify ${plural(pids.length, 'particle')} with a model`),
+  h('label', { class: 'fld' }, h('span', {}, 'Model'), sel),
+  h('label', { class: 'fld' }, h('span', {}, 'Name of the set'), name),
+  h('div', { class: 'dlg-actions' }, h('button', { type: 'button', class: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { class: 'btn primary' }, 'Classify'))));
+  d.addEventListener('close', () => d.remove());
+  document.body.append(d); d.showModal();
+}
 function updateSelChip() {
   const st = $('#stage'); if (!st) return;
   let chip = $('#selchip');
@@ -963,6 +1090,7 @@ function updateSelChip() {
   chip.innerHTML = '';
   chip.append(h('b', {}, `${fmtInt(selection.size)} selected`), h('span', {}, 'Press a class key, click a class, or drag them onto one'),
     h('button', { class: 'btn ghost small', onclick: () => openExport(exportCtx) }, 'Download'),
+    server.user?.is_admin ? h('button', { class: 'btn ghost small', title: 'Ask a trained model what these are', onclick: () => classifyWithModel([...selection].map((p) => D.pid(order[p]))) }, 'Classify with a model') : null,
     h('button', { class: 'btn ghost small', onclick: () => { const s = [...selection]; selection.clear(); redecorate(s); refreshPaletteState(); } }, 'Clear'));
 }
 function refreshPaletteState() {
@@ -971,7 +1099,13 @@ function refreshPaletteState() {
   const g = currentG();
   const mine = g >= 0 ? labels.mine.get(D.pid(g)) : null;
   $$('#palette .cls').forEach((b) => b.classList.toggle('current', !!mine && mine.label === b.dataset.cls && (S.view === 'single' || selection.size <= 1)));
-  $$('#palette .flag').forEach((b) => {
+  $$('#palette .flaggroup').forEach((b) => {
+    const g = b.dataset.group;
+    const lv = groupLevel([...armed], g) || (S.view === 'single' && mine ? groupLevel(mine.flags, g) : 0);
+    b.setAttribute('aria-pressed', String(lv > 0));
+    b.querySelector('.gname').textContent = lv ? groupFlags(g)[lv - 1].name : groupName(g);
+  });
+  $$('#palette .flag:not(.flaggroup)').forEach((b) => {
     const f = b.dataset.flag;
     const on = armed.has(f) || (S.view === 'single' && mine && mine.flags.includes(f));
     b.setAttribute('aria-pressed', String(!!on));
@@ -1001,10 +1135,12 @@ function recompute(restore = null) {
   // id string would mean building millions of strings on a big selection
   const mineAt = new Map();
   const MINE = 1, ANY = 2, DIS = 4, PILE = 8;
+  const showMl = show.startsWith('ml:') ? mlClasses.indexOf(show.slice(3)) : null;
+  if (show.startsWith('ml') && !mlPred) { S.show = 'todo'; return recompute(restore); }
   const mark = new Uint8Array(show === 'all' ? 0 : n);
   if (show !== 'all') {
     for (const [pid, m] of labels.mine) { const g = D.index.get(pid); if (g !== undefined) { mark[g] |= MINE; mineAt.set(g, m); } }
-    if (show === 'none' || show === 'any' || show === 'disagree') {
+    if (show === 'none' || show === 'any' || show === 'disagree' || show === 'mlpeople') {
       for (const [pid, c] of labels.counts) { const g = D.index.get(pid); if (g !== undefined) { mark[g] |= ANY; if (Object.keys(c).length > 1) mark[g] |= DIS; } }
     }
     if (showPile) for (const pid of showPile) { const g = D.index.get(pid); if (g !== undefined) mark[g] |= PILE; }
@@ -1021,6 +1157,17 @@ function recompute(restore = null) {
       if (show === 'none' && (f & ANY)) continue;
       if (show === 'any' && !(f & ANY)) continue;
       if (show === 'disagree' && !(f & DIS)) continue;
+      if (mlPred && show.startsWith('ml')) {
+        const ml = mlPred.lab[g];
+        if (ml < 0) continue;
+        if (showMl !== null && ml !== showMl) continue;
+        if (show === 'mldiff') { const m = (f & MINE) ? mineAt.get(g) : null; if (!m || m.label === mlClasses[ml]) continue; }
+        if (show === 'mlpeople') {
+          if (!(f & ANY)) continue;
+          const c = labels.counts.get(D.pid(g)); const top = c && Object.entries(c).sort((a, b) => b[1] - a[1])[0][0];
+          if (!top || top === mlClasses[ml]) continue;
+        }
+      }
     }
     let fails = 0, last = -1;
     for (let k = 0; k < nd; k++) {
@@ -1066,6 +1213,12 @@ function sortOrder(arr) {
     case 'flight': return arr; // already flight by flight, chronological within each
     case 'size-desc': return arr.sort((a, b) => (size[b] || 0) - (size[a] || 0));
     case 'size-asc': return arr.sort((a, b) => (size[a] || 0) - (size[b] || 0));
+    case 'ml-unsure': case 'ml-sure': {
+      if (!mlPred) return shuffle(arr);
+      const p = mlPred.prob, sgn = S.order === 'ml-sure' ? -1 : 1;
+      shuffle(arr);
+      return arr.sort((a, b) => { const x = p[a], y = p[b]; if (!(x === x)) return 1; if (!(y === y)) return -1; return sgn * (x - y); });
+    }
     case 'least': {
       shuffle(arr);
       const v = new Map(arr.map((g) => [g, totalVotes(D.pid(g))]));
@@ -1321,6 +1474,14 @@ function decorateTile(t) {
     t.append(h('span', { class: 'tag others', style: { borderColor: top?.color || '#888' } }),
       h('span', { class: 'tagname others', title: `Other people: ${detail}` }, `${top?.name || cnt[0][0]}${cnt.length > 1 ? ' ?' : ''} · ${n}`));
   } else if (n > 0) t.append(h('span', { class: 'votes', title: `${n} classification${n === 1 ? '' : 's'} by other people` }, `${n} other${n === 1 ? '' : 's'}`));
+  t.querySelector('.mltag')?.remove();
+  const ml = mlPred ? mlAt(g) : null;
+  if (ml) {
+    const mc = classById.get(ml.label);
+    const ex = mlExtraText(ml);
+    t.append(h('span', { class: 'mltag', style: { '--c': mc?.color || '#888' }, title: `Model: ${mc?.name || ml.label} ${Math.round(100 * ml.prob)}%` + (ex ? ` (${ex})` : '') + (ml.label2 ? `, then ${classById.get(ml.label2)?.name || ml.label2} ${Math.round(100 * ml.prob2)}%` : '') },
+      `${mc?.name || ml.label} ${Math.round(100 * ml.prob)}%${ml.riming ? ' ✱' : ''}`));
+  }
   t.title = m ? `You: ${classById.get(m.label)?.name || m.label}` : '';
 }
 function tileAt(pos) { return $(`.tile[data-pos="${pos}"]`, $('#grid') || document); }
@@ -1545,6 +1706,25 @@ function renderInspector(g) {
   el.append(h('div', { class: 'insp-pic' }, pic), h('div', { class: 'insp-id row between' }, h('span', {}, pid),
     h('button', { class: 'btn ghost small', title: 'Download this image with the current download settings', onclick: () => downloadOne(g, exportCtx) }, 'Download')));
   if (yours) el.append(yours);
+  const ml = mlPred ? mlAt(g) : null;
+  if (ml) {
+    const mc = classById.get(ml.label), mc2 = ml.label2 && classById.get(ml.label2);
+    const mine = labels.mine.get(pid);
+    el.append(h('div', { class: 'yours mlyours' },
+      h('span', { class: 'dot', style: { background: mc?.color || '#888' } }),
+      h('span', { class: 'yours-txt' }, 'Model: ', h('b', {}, mc?.name || ml.label), ` ${Math.round(100 * ml.prob)}%`,
+        mlExtraText(ml) ? `, ${mlExtraText(ml)}` : '',
+        mc2 ? h('span', { class: 'muted' }, ` (then ${mc2.name} ${Math.round(100 * ml.prob2)}%)`) : null),
+      h('button', { class: 'btn small', title: 'Classify it as the model says (class, riming and flags)', onclick: () => {
+        // the model's answer; anything of yours it doesn't judge (e.g. Unsure) is kept
+        const groups = new Set(scheme.flags.filter((f) => f.group).map((f) => f.group));
+        let flags = (mine ? mine.flags : []).filter((f) => !groups.has(flagById(f)?.group) && !ml.flags.includes(f));
+        flags = keepFlags([...flags, ...(ml.riming ? [ml.riming] : []), ...ml.flags], ml.label);
+        setLabelForPid(pid, mkLabel(ml.label, flags, mine && mine.label === ml.label ? mine.made_of : null), `1 particle → ${mc?.name || ml.label} (as the model said)`);
+      } }, 'Agree')));
+  } else if (server.user?.is_admin) {
+    el.append(h('div', { class: 'row', style: { margin: '-4px 0 10px' } }, h('button', { class: 'btn ghost small', title: 'Run a trained model on this particle', onclick: () => classifyWithModel([pid]) }, 'Ask a model')));
+  }
   if (vb) el.append(vb);
   el.append(dl);
 }
@@ -1690,13 +1870,29 @@ function toggleFlag(flagId) {
   if (!needUser()) return;
   const pos = targets();
   const labelled = pos.filter((p) => labels.mine.has(D.pid(order[p])));
+  const g = flagById(flagId)?.group;
   if (!labelled.length) {
-    // nothing classified yet: arm the flag for the next class key
-    if (armed.has(flagId)) armed.delete(flagId); else armed.add(flagId);
+    // nothing classified yet: arm the flag for the next class key (a group steps to its next degree)
+    if (g) { const now = nextGroupFlags([...armed], g); armed.clear(); now.forEach((f) => armed.add(f)); }
+    else if (armed.has(flagId)) armed.delete(flagId); else armed.add(flagId);
     refreshPaletteState();
     return;
   }
-  toggleFlagPids(flagId, labelled.map((p) => D.pid(order[p])));
+  if (g) cycleGroupPids(g, labelled.map((p) => D.pid(order[p])));
+  else toggleFlagPids(flagId, labelled.map((p) => D.pid(order[p])));
+}
+/** Step a group (riming) to its next degree on these particles: if they differ, all go to the first degree. */
+function cycleGroupPids(g, allPids) {
+  if (!needUser()) return;
+  const pids = allPids.filter((pid) => { const m = labels.mine.get(pid); return m && groupFlags(g).some((f) => flagFor(f, m.label)); });
+  if (!pids.length) return;
+  const levels = pids.map((pid) => groupLevel(labels.mine.get(pid).flags, g));
+  const next = levels.every((l) => l === levels[0]) ? (levels[0] + 1) % (groupFlags(g).length + 1) : 1;
+  const changes = pids.map((pid) => { const m = labels.mine.get(pid); return { pid, before: snap(m), after: mkLabel(m.label, setGroupLevel(m.flags, g, next), m.made_of) }; });
+  const what = next ? groupFlags(g)[next - 1].name : `${groupName(g)} removed`;
+  commit(changes, `${what}: ${plural(changes.length, 'particle')}`);
+  toast(what, 1400);
+  afterChange(changes.map((c) => c.pid));
 }
 /** Add or remove a flag on these particles (only where it applies to their class). */
 function toggleFlagPids(flagId, allPids) {
@@ -1708,7 +1904,8 @@ function toggleFlagPids(flagId, allPids) {
   const fname = fl?.name;
   const changes = pids.map((pid) => {
     const m = labels.mine.get(pid);
-    const flags = turnOn ? [...new Set([...m.flags, flagId])] : m.flags.filter((f) => f !== flagId);
+    let flags = turnOn ? [...new Set([...m.flags, flagId])] : m.flags.filter((f) => f !== flagId);
+    if (turnOn && fl?.group) flags = flags.filter((f) => f === flagId || flagById(f)?.group !== fl.group);    // one degree at a time
     return { pid, before: snap(m), after: mkLabel(m.label, flags, m.made_of) };
   });
   commit(changes, `${fname} ${turnOn ? 'added to' : 'removed from'} ${plural(changes.length, 'particle')}`);
@@ -1730,11 +1927,34 @@ function hashStr(t) { let x = 2166136261; for (let i = 0; i < t.length; i++) { x
 const flagFor = (f, clsId) => !f.for || !f.for.length || f.for.includes(clsId);
 const flagById = (id) => scheme.flags.find((f) => f.id === id);
 const keepFlags = (flags, clsId) => flags.filter((id) => { const f = flagById(id); return !f || flagFor(f, clsId); });
-/** The second-level choices for a class: its limited flags (e.g. Hollow for columns, Chain for aggregates). */
-const extraFlags = (clsId) => scheme.flags.filter((f) => f.for && f.for.length && f.for.includes(clsId));
+/** The second-level choices shown beside a class (Hollow for columns, Chain for aggregates): flags marked
+ *  "beside" (older class lists: any flag limited to some classes). */
+const extraFlags = (clsId) => {
+  const marked = scheme.flags.some((f) => 'beside' in f);
+  return scheme.flags.filter((f) => (marked ? f.beside : f.for && f.for.length) && flagFor(f, clsId));
+};
+/** Flags in a group are degrees of one thing (riming: lightly, moderately): at most one is set, and the
+ *  group's key steps through them: none → first → second → none. */
+const groupFlags = (g) => scheme.flags.filter((f) => f.group === g);
+const groupName = (g) => g.charAt(0).toUpperCase() + g.slice(1);
+const groupLevel = (flags, g) => { const ids = groupFlags(g).map((f) => f.id); const i = ids.findIndex((id) => flags.includes(id)); return i + 1; };
+function setGroupLevel(flags, g, level) {
+  const ids = groupFlags(g).map((f) => f.id);
+  const out = flags.filter((f) => !ids.includes(f));
+  if (level > 0) out.push(ids[level - 1]);
+  return out;
+}
+const nextGroupFlags = (flags, g) => setGroupLevel(flags, g, (groupLevel(flags, g) + 1) % (groupFlags(g).length + 1));
 /** Flags not already said by labelText (Hollow/Chain are part of the label's name). */
 const otherFlags = (m) => m.flags.filter((id) => !extraFlags(m.label).some((f) => f.id === id));
-const forText = (f) => (f.for || []).map((id) => ofInfo(id).plural).join(', ');
+/** The key(s) for a flag: its own, or its group's key pressed once per degree (R, R R). */
+const flagKeys = (f) => f.key ? f.key.toUpperCase() : f.group ? Array(groupFlags(f.group).findIndex((x) => x.id === f.id) + 1).fill((groupFlags(f.group).find((x) => x.key)?.key || '').toUpperCase()).join(' ') : '';
+const forText = (f) => {
+  const ids = f.for || [];
+  const not = scheme.classes.filter((c) => !ids.includes(c.id));
+  if (ids.length > scheme.classes.length / 2 && not.length) return 'everything except ' + not.map((c) => ofInfo(c.id).plural).join(', ');
+  return ids.map((id) => ofInfo(id).plural).join(', ');
+};
 /** "Aggregate of plates", or just the class name. */
 function labelText(m, short = false) {
   const c = m && classById.get(m.label);
@@ -2050,6 +2270,7 @@ fixDlg.addEventListener('keydown', (e) => {
     const c = classByKey.get(lk), f = flagByKey.get(lk);
     const m = labels.mine.get(fixPid);
     if (c && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); fixSet(mkLabel(c.id, keepFlags(m ? m.flags.slice() : [], c.id), m && m.label === c.id ? m.made_of : null), `1 particle → ${c.name}`); }
+    else if (f && m && f.group) { e.preventDefault(); e.stopPropagation(); fixSet(mkLabel(m.label, nextGroupFlags(m.flags, f.group), m.made_of), groupName(f.group)); }
     else if (f && m && flagFor(f, m.label)) { e.preventDefault(); e.stopPropagation(); const on = !m.flags.includes(f.id); fixSet(mkLabel(m.label, on ? [...m.flags, f.id] : m.flags.filter((x) => x !== f.id), m.made_of), `${f.name} ${on ? 'added' : 'removed'}`); }
   }
 });
@@ -2098,9 +2319,11 @@ function refreshFixer() {
       class: 'flag', 'aria-pressed': String(!!m && m.flags.includes(f.id)), disabled: !m, title: f.desc,
       onclick: () => {
         const on = !m.flags.includes(f.id);
-        fixSet(mkLabel(m.label, on ? [...m.flags, f.id] : m.flags.filter((x) => x !== f.id), m.made_of), `${f.name} ${on ? 'added' : 'removed'}`);
+        let flags = on ? [...m.flags, f.id] : m.flags.filter((x) => x !== f.id);
+        if (on && f.group) flags = flags.filter((x) => x === f.id || flagById(x)?.group !== f.group);
+        fixSet(mkLabel(m.label, flags, m.made_of), `${f.name} ${on ? 'added' : 'removed'}`);
       },
-    }, h('kbd', {}, f.key.toUpperCase()), f.name))),
+    }, h('kbd', {}, flagKeys(f)), f.name))),
     h('div', { class: 'dlg-actions' },
       h('button', { class: 'btn ghost danger', disabled: !m, onclick: () => fixSet(null, 'Removed 1 label') }, 'Remove my label'),
       h('span', { style: { flex: 1 } }),
@@ -2175,7 +2398,7 @@ function onKey(e) {
     if (v) { e.preventDefault(); answerMadeOf(v); return; }
     if (k === 'Escape') { e.preventDefault(); answerMadeOf(null); return; }
     const fk = flagByKey.get(lk);
-    if (fk && !ck) { e.preventDefault(); const a = ofAsk; toggleFlagPids(fk.id, a.pids); if (ofAsk === a) askMadeOf(a.cls, a.pids, a.pos); return; }
+    if (fk && !ck) { e.preventDefault(); const a = ofAsk; if (fk.group) cycleGroupPids(fk.group, a.pids); else toggleFlagPids(fk.id, a.pids); if (ofAsk === a) askMadeOf(a.cls, a.pids, a.pos); return; }
     if (ck) closeOfBar();     // another class: change your mind about this particle
   }
   // Shift + a habit's key: "made of" that habit, for particles already classified
@@ -2427,7 +2650,7 @@ async function viewGuide(root) {
   inner.append(h('h1', {}, 'How to classify'), h('p', { class: 'page-lede' }, scheme.help || ''));
   // The order to ask the questions in: the same particle should end up in the same class whoever classifies it
   const chip = (id) => { const c = classById.get(id); return c ? h('span', { class: 'flowcls', style: { '--c': c.color } }, h('kbd', {}, c.key.toUpperCase()), c.name) : null; };
-  const fchip = (id) => { const f = flagById(id); return f ? h('span', { class: 'flowcls flowflag' }, h('kbd', {}, f.key.toUpperCase()), f.name) : null; };
+  const fchip = (id) => { const f = flagById(id); return f ? h('span', { class: 'flowcls flowflag' }, h('kbd', {}, flagKeys(f)), f.name) : null; };
   const has = (...ids) => ids.some((id) => classById.has(id));
   const steps = [
     has('artefact') && ['Is it a cloud particle at all?', 'Streaks, shattering debris, smudges, a stuck particle or an empty image:', [chip('artefact')]],
@@ -2435,7 +2658,7 @@ async function viewGuide(root) {
     has('small', 'unusable') && ['Can you judge it?', 'Fewer than about 15 pixels across (≈35 µm on a CPI), or out of focus, overlapping or unclear:', [chip('small'), chip('unusable')]],
     has('aggregate') && ['Several crystals stuck together?', 'Then say what of; tick Chain if they’re linked end to end:', [chip('aggregate'), fchip('chain')]],
     has('fragment') && ['A broken piece of a bigger crystal?', 'Say what of, if you can tell:', [chip('fragment')]],
-    has('graupel') && ['So rimed you can’t tell what it was?', 'If you can still tell, carry on and add Rimed instead:', [chip('graupel'), fchip('rimed')]],
+    has('graupel') && ['So rimed you can’t tell what it was?', 'Then it’s Graupel. If you can still tell, carry on and give the riming degree (R: lightly, R R: moderately):', [chip('graupel'), fchip('rimed'), fchip('rime_moderate')]],
     ['One crystal: which habit?', 'Think of the 3D shape (plates can be seen edge-on). Hollow or hollowed? Add Hollow:',
       [...['column', 'needle', 'plate', 'dendrite', 'rosette', 'bullet', 'capped', 'sideplane', 'scroll', 'sphere'].map(chip), fchip('hollow')]],
     has('irregular') && ['Nothing fits?', 'Ice with no recognisable habit:', [chip('irregular')]],
@@ -2634,7 +2857,7 @@ async function viewGuide(root) {
         h('div', {}, h('b', {}, c.name), total ? h('span', { class: 'muted small excount' }, ` ${fmtInt(total)} ${mine ? 'by you' : 'agreed'}`) : null),
         h('p', {}, c.desc),
         c.of ? h('p', { class: 'muted small' }, 'Made of: ' + c.of.map((v) => ofInfo(v).plural).join(', ')) : null,
-        extra.length ? h('p', { class: 'muted small' }, 'Also: ' + extra.map((f) => `${f.name} (${f.key.toUpperCase()})`).join(', ')) : null,
+        extra.length ? h('p', { class: 'muted small' }, 'Also: ' + extra.map((f) => `${f.name} (${flagKeys(f)})`).join(', ')) : null,
         chipBox, strip);
       dropOn(card, c.id);
       classesBox.append(card);
@@ -2646,7 +2869,7 @@ async function viewGuide(root) {
   inner.append(h('h2', { style: { marginTop: '28px' } }, 'Flags'),
     h('p', { class: 'muted' }, 'Flags add detail to a class. Press a flag key before the class key to include it, or press it after classifying to add or remove it. Hollow and Chain only apply to some classes, and also appear beside them as a second choice.'),
     h('div', { class: 'guide-classes guide-flags' }, scheme.flags.map((f) => h('div', { class: 'guide-cls', style: { '--c': 'var(--accent)' } },
-      h('kbd', { class: 'k' }, f.key.toUpperCase()), h('b', {}, f.name), h('p', {}, f.desc), f.for ? h('p', { class: 'muted small' }, `Only for ${forText(f)}.`) : null))));
+      h('kbd', { class: 'k' }, flagKeys(f)), h('b', {}, f.name), h('p', {}, f.desc), f.for ? h('p', { class: 'muted small' }, `Only for ${forText(f)}.`) : null))));
   const keys = [
     ['← →', 'Previous / next particle'], ['↑ ↓', 'Row above / below (grid)'], ['Space', 'Select or deselect (grid); next particle (one at a time)'],
     ['Click, Shift-click, ⌘/Ctrl-click', 'Select one, a run, or add to the selection'], ['⌘/Ctrl A', 'Select everything shown'],

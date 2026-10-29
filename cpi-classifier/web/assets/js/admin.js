@@ -1,6 +1,8 @@
 // Admin page: import flights from MAT files that live on the server, watch
 // imports run, and hide or remove flights. Only shown to administrators.
 
+import { mlView, leaveMl } from './mladmin.js';
+
 let C = null;          // context from app.js: {h, $, $$, toast, fmtInt, server, api, display, onDataChanged}
 let pollTimer = null;
 let lastJobs = new Map();
@@ -18,12 +20,13 @@ export async function viewAdmin(root, ctx) {
     return;
   }
   const tab = location.hash.split('/')[2] || 'flights';
-  const tabs = [['flights', 'Flights and imports'], ['people', 'People'], ['classes', 'Classes']];
+  const tabs = [['flights', 'Flights and imports'], ['people', 'People'], ['classes', 'Classes'], ['ml', 'Machine learning']];
   inner.append(h('h1', {}, 'Admin'),
     h('nav', { class: 'admintabs', 'aria-label': 'Admin sections' }, tabs.map(([k, l]) =>
       h('a', { href: `#/admin/${k}`, 'aria-current': k === tab ? 'page' : null }, l))));
   if (tab === 'people') return peopleView(inner);
   if (tab === 'classes') return classesView(inner);
+  if (tab === 'ml') return mlView(inner, C);
   inner.append(
     h('p', { class: 'page-lede', id: 'adminLede' }, 'Import a folder of MAT files once to make its particles available for classifying. Importing reads the MAT files and saves small images and a table of particle properties for the page; the MAT files themselves are not changed.'),
     h('section', { id: 'checkBox' }),
@@ -119,6 +122,15 @@ function suggestUsername(name) {
   if (!parts.length) return '';
   return (parts.length > 1 ? parts[0][0] + parts[parts.length - 1] : parts[0]).slice(0, 32);
 }
+const PW_WORDS = ('frost rime plate column needle dendrite rosette graupel crystal sleet hail cloud vapour droplet prism sector bullet '
+  + 'cirrus stratus nimbus cumulus anvil halo glory corona dew mist haze breeze gust squall storm thunder snow flake ice glacier '
+  + 'tundra polar boreal aurora comet orbit pebble harbour meadow willow maple cedar falcon otter heron lantern compass ember').split(' ');
+/** e.g. "rime-falcon-meadow-472": three words and a number, easy to read out or type. Only for the first sign-in. */
+function suggestPassword() {
+  const r = new Uint32Array(4);
+  crypto.getRandomValues(r);
+  return [0, 1, 2].map((i) => PW_WORDS[r[i] % PW_WORDS.length]).join("-") + "-" + (100 + (r[3] % 900));
+}
 function addPersonDialog(done) {
   const { h } = C;
   const d = h('dialog', { class: 'dlg' });
@@ -127,13 +139,15 @@ function addPersonDialog(done) {
   const user = h('input', { name: 'username', required: true, autocomplete: 'off', placeholder: 'e.g. jsmith' });
   const email = h('input', { name: 'email', type: 'email', autocomplete: 'off' });
   const admin = h('input', { type: 'checkbox' });
+  // a temporary password that's easy to read out or type; they choose their own when they first sign in
+  const pw = h('input', { name: 'temp', autocomplete: 'off', class: 'mono', value: suggestPassword(), spellcheck: 'false' });
   let touched = false;
   user.addEventListener('input', () => { touched = true; });
   name.addEventListener('input', () => { if (!touched) user.value = suggestUsername(name.value); });
   d.append(h('form', { class: 'dlg-inner', onsubmit: async (e) => {
     e.preventDefault(); err.textContent = '';
     try {
-      const r = await C.api.adminPost('user_add', { display_name: name.value.trim(), username: user.value.trim(), email: email.value.trim(), is_admin: admin.checked });
+      const r = await C.api.adminPost('user_add', { display_name: name.value.trim(), username: user.value.trim(), email: email.value.trim(), is_admin: admin.checked, password: pw.value.trim() });
       d.close(); credentialsDialog(r, true); done && done();
     } catch (x) { err.textContent = x.message; }
   } },
@@ -142,6 +156,8 @@ function addPersonDialog(done) {
   h('label', { class: 'fld' }, h('span', {}, 'Name'), name),
   h('label', { class: 'fld' }, h('span', {}, 'Username ', h('small', {}, 'what they type to sign in')), user),
   h('label', { class: 'fld' }, h('span', {}, 'Email ', h('small', {}, '(optional, for your records)')), email),
+  h('label', { class: 'fld' }, h('span', {}, 'Temporary password ', h('small', {}, 'suggested; change it if you like. They’ll be asked to choose their own when they first sign in')),
+    h('span', { class: 'pwrow' }, pw, h('button', { type: 'button', class: 'btn ghost small', title: 'Suggest another', onclick: () => { pw.value = suggestPassword(); } }, 'Another'))),
   h('label', { class: 'check', style: { margin: '4px 0 12px' } }, admin, 'Administrator (can add people, edit classes and import flights)'),
   err,
   h('div', { class: 'dlg-actions' }, h('button', { type: 'button', class: 'btn ghost', onclick: () => d.close() }, 'Cancel'), h('button', { class: 'btn primary' }, 'Add'))));
@@ -291,7 +307,7 @@ async function classesView(inner) {
   }
 }
 
-export function leaveAdmin() { clearTimeout(pollTimer); pollTimer = null; }
+export function leaveAdmin() { clearTimeout(pollTimer); pollTimer = null; leaveMl(); }
 
 // ------------------------------------------------------------------ server check
 async function loadChecks() {

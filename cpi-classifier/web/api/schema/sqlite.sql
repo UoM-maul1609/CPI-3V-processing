@@ -73,3 +73,31 @@ CREATE TABLE IF NOT EXISTS remember_tokens (
   last_used   TEXT NULL,
   agent       TEXT NULL
 );
+
+-- Machine learning: each run of a model over some particles is a "classification set".
+CREATE TABLE IF NOT EXISTS ml_sets (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  model_id    TEXT NOT NULL,
+  model_name  TEXT NULL,
+  name        TEXT NULL,
+  scope       TEXT NULL,
+  n           INTEGER NOT NULL DEFAULT 0,
+  status      TEXT NOT NULL DEFAULT 'running',
+  created_at  TEXT NOT NULL,
+  created_by  TEXT NULL
+);
+
+CREATE TABLE IF NOT EXISTS ml_predictions (
+  set_id      INTEGER NOT NULL,
+  pid         TEXT NOT NULL,
+  flight_id   TEXT NOT NULL,
+  label       TEXT NOT NULL,
+  prob        REAL NOT NULL,
+  label2      TEXT NULL,
+  prob2       REAL NULL,
+  riming      TEXT NULL,
+  riming_prob REAL NULL,
+  flags       TEXT NULL,
+  PRIMARY KEY (set_id, pid)
+);
+CREATE INDEX IF NOT EXISTS ix_pred_flight ON ml_predictions(set_id, flight_id);

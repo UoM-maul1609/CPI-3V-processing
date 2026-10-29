@@ -1047,3 +1047,61 @@ body.dragging .guide-cls { outline: 1px dashed color-mix(in srgb, var(--c) 60%, 
 #authForm.register .login-only { display: none; }
 .keepme { margin: 2px 0 10px; font-size: .9rem; flex-wrap: wrap; }
 .keepme small { width: 100%; padding-left: 24px; }
+
+/* ---------- machine learning ---------- */
+.mlpage { display: grid; gap: 16px; }
+.mlcard h2 { margin-bottom: 8px; }
+.mlcard .sec-h { display: flex; align-items: center; gap: 10px; }
+.okdot, .warndot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #2a9d5c; vertical-align: 1px; }
+.warndot { background: #d98a1c; }
+.mllog { max-height: 220px; overflow: auto; font-size: .75rem; background: var(--panel-2); padding: 8px 10px; border-radius: 6px; white-space: pre-wrap; margin: 6px 0 0; }
+.mljob { padding: 10px 0; border-top: 1px solid var(--line); }
+.mljob:first-of-type { border-top: 0; }
+.mljob-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mlbar { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; margin: 8px 0 4px; }
+.mlbar i { display: block; height: 100%; background: var(--accent); transition: width .4s; }
+.mljob.failed .mlbar i { background: #c0392b; }
+.pill.running { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.pill.failed, .pill.err { background: color-mix(in srgb, #c0392b 15%, var(--panel)); border-color: #c0392b; }
+.pill.warn { background: color-mix(in srgb, #d98a1c 18%, var(--panel)); border-color: #d98a1c; color: var(--ink); }
+.mlpicker { display: grid; gap: 2px; max-height: 340px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; margin: 8px 0 12px; background: var(--panel); }
+.mlproj > summary { cursor: pointer; padding: 3px 0; display: flex; align-items: center; gap: 4px; }
+.mlproj > summary .check { display: inline-flex; }
+.mlflights { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 2px 14px; padding: 4px 0 8px 26px; }
+.mlopts { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; margin: 4px 0 10px; font-size: .92rem; }
+.mlopts label { display: inline-flex; align-items: center; gap: 6px; }
+.mlopts input:not([type]), .mlopts input[type=number] { padding: 4px 6px; }
+.mlclasses { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 12px; }
+.mlclass { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px 3px 5px; border: 1px solid var(--line); border-left: 4px solid var(--c); border-radius: 7px; font-size: .85rem; cursor: pointer; background: var(--panel); }
+.mlclass.few { opacity: .5; }
+.mlgo { display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--line); padding-top: 12px; }
+.mlgo .grow, .mljob-head .grow { flex: 1; }
+.mltable td { vertical-align: top; }
+.mltable tr.unsaved td { background: color-mix(in srgb, #d98a1c 6%, transparent); }
+.mlacts { white-space: nowrap; text-align: right; }
+.mlacts .btn { margin-left: 4px; }
+.mlreport { width: min(1000px, calc(100vw - 24px)); max-height: calc(100vh - 32px); }
+.mlreport h4 { margin: 18px 0 6px; }
+.mlstats { display: flex; flex-wrap: wrap; gap: 14px 30px; margin: 10px 0; }
+.mlstats > div { display: grid; }
+.mlstats b { font-size: 1.6rem; font-family: var(--display); }
+.mlstats span { font-size: .8rem; color: var(--ink-3); }
+.mlcurve { color: var(--accent); }
+.mlseen { margin: 8px 0 12px; }
+.mlseen summary { cursor: pointer; font-weight: 600; }
+.mlseen img { display: block; max-width: 100%; height: auto; image-rendering: auto; border-radius: 6px; background: #fff; }
+.mlcm { border-collapse: collapse; font-size: .75rem; }
+.mlcm th { font-weight: 500; color: var(--ink-2); padding: 2px 4px; white-space: nowrap; text-align: right; }
+.mlcm thead th { height: 110px; vertical-align: bottom; }
+.mlcm thead th span { display: inline-block; writing-mode: vertical-rl; transform: rotate(180deg); }
+.mlcm td { width: 34px; height: 26px; text-align: center; background: color-mix(in srgb, #c0392b calc(var(--a) * 70%), var(--panel)); border: 1px solid var(--panel); font-variant-numeric: tabular-nums; }
+.mlcm td.diag { background: color-mix(in srgb, #2a9d5c calc(var(--a) * 80%), var(--panel)); font-weight: 700; }
+.mlmistakes { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.mlmistakes figure { margin: 0; background: var(--tile); border-radius: 6px; padding: 4px; display: grid; gap: 3px; }
+.mlmistakes img { width: 100%; height: 90px; object-fit: contain; }
+.mlmistakes figcaption { font-size: .7rem; color: var(--ink-2); text-align: center; }
+.tile .mltag { position: absolute; right: 4px; bottom: 4px; font-size: .64rem; line-height: 1; padding: 3px 5px; border-radius: 4px; background: rgb(255 255 255 / 88%); color: #222;
+  border-left: 3px solid var(--c); max-width: calc(100% - 8px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; pointer-events: none; }
+.mlyours { border-style: dashed; }
+.mlside select { width: 100%; }
+.autoc { margin: 6px 0 4px; font-size: .88rem; }

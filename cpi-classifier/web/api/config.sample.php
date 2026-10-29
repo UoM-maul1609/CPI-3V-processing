@@ -48,6 +48,12 @@ return [
     // How many imports may run at once (each loads one MAT file into memory).
     'max_jobs' => 1,
 
+    // --- Machine learning (Admin → Machine learning; see deploy/DEPLOY.md section 15)
+    // Python with TensorFlow + Keras 3 (and the GPU) for ml/habit_ml.py.
+    // 'ml_python' => '/var/www/cpi/venv-ml/bin/python',
+    // PHP on the command line, to load each run's results into the database.
+    // 'php_cli'   => '/usr/bin/php',
+
     // --- Misc -----------------------------------------------------------
     // Choices for 'level of expertise' (people's profiles and uploaded sessions).
     'expertise_levels' => ['New to ice crystal images', 'Some experience', 'Experienced', 'Expert'],

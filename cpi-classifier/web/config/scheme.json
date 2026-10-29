@@ -1,7 +1,7 @@
 {
-  "version": "habit-v5",
+  "version": "habit-v6",
   "title": "Ice crystal habit",
-  "help": "Classify the 3D crystal you think it is, not the 2D outline: a plate seen edge-on looks like a thin column, a short column seen end-on looks like a hexagon. For aggregates, fragments and graupel, also say what it is made of, if you can tell. Hollow and Chain appear beside the classes they apply to; Rimed works on any class. If you're not sure, give your best guess with Unsure, or use Can't tell rather than guessing.",
+  "help": "Classify the 3D crystal you think it is, not the 2D outline: a plate seen edge-on looks like a thin column, a short column seen end-on looks like a hexagon. For aggregates, fragments and graupel, also say what it is made of, if you can tell. Hollow and Chain appear beside the classes they apply to. Riming (R) has two degrees: lightly and moderately rimed; heavily rimed, so you can't tell what it was, is Graupel. If you're not sure, give your best guess with Unsure, or use Can't tell rather than guessing.",
   "classes": [
     {
       "id": "droplet",
@@ -17,6 +17,13 @@
       "color": "#8ecae6",
       "desc": "Round but not quite a perfect circle, no bright centre: frozen drop or small quasi-spherical ice.",
       "plural": "quasi-spheres"
+    },
+    {
+      "id": "liquidice",
+      "name": "Liquid + ice",
+      "key": "i",
+      "color": "#3aa8a0",
+      "desc": "Part liquid, part ice: a freezing drop, a drop with ice in it or on it, or ice with a liquid coat."
     },
     {
       "id": "column",
@@ -67,6 +74,14 @@
       "desc": "Crystal with plates growing out of it at different angles (side planes), or an irregular polycrystal made of several crystals grown together rather than stuck together. Common at about −20 to −40 °C."
     },
     {
+      "id": "gohei",
+      "name": "Gohei twin",
+      "key": "g",
+      "color": "#9a7b2f",
+      "plural": "Gohei twins",
+      "desc": "Two crystals (usually columns or plates) twinned at an angle to each other, like a folded paper streamer. Can be rimed, aggregated or broken."
+    },
+    {
       "id": "bullet",
       "name": "Bullet",
       "key": "t",
@@ -99,7 +114,6 @@
       "desc": "Several crystals stuck together. Say what of, if you can tell, and tick Chain (N) if they're linked end to end.",
       "of": [
         "rosette",
-        "sideplane",
         "plate",
         "column",
         "dendrite",
@@ -107,6 +121,9 @@
         "capped",
         "bullet",
         "sphere",
+        "sideplane",
+        "gohei",
+        "fragment",
         "mixed",
         "unknown"
       ]
@@ -124,16 +141,18 @@
         "capped",
         "rosette",
         "sideplane",
+        "gohei",
         "aggregate",
         "unknown"
-      ]
+      ],
+      "plural": "fragments"
     },
     {
       "id": "graupel",
       "name": "Graupel",
       "key": "9",
       "color": "#8d5fd3",
-      "desc": "So heavily rimed that the original crystal can't be made out: lumpy, rounded outline. If you can still tell the habit, use that class with the Rimed flag (R) instead. Say what it was, if you can tell.",
+      "desc": "Heavily rimed: so much rime that the original crystal can't be made out (lumpy, rounded). If you can still tell the habit, use it with the riming degree (R) instead. Say what it was, if you can tell.",
       "of": [
         "plate",
         "dendrite",
@@ -141,6 +160,7 @@
         "capped",
         "rosette",
         "sideplane",
+        "gohei",
         "aggregate",
         "unknown"
       ]
@@ -177,9 +197,17 @@
   "flags": [
     {
       "id": "rimed",
-      "name": "Rimed",
+      "name": "Lightly rimed",
       "key": "r",
-      "desc": "Some riming visible, but you can still tell what the crystal is (e.g. a rimed capped column). If riming hides the shape, use Graupel."
+      "group": "riming",
+      "desc": "A few rime droplets on it; the crystal is clear. Press R again for moderately rimed."
+    },
+    {
+      "id": "rime_moderate",
+      "name": "Moderately rimed",
+      "key": "",
+      "group": "riming",
+      "desc": "Rime clearly coats it, with gaps and hollows still showing; the habit can still be made out. (Press R twice.) Heavily rimed is Graupel."
     },
     {
       "id": "hollow",
@@ -193,7 +221,8 @@
         "bullet",
         "capped",
         "rosette"
-      ]
+      ],
+      "beside": true
     },
     {
       "id": "chain",
@@ -202,7 +231,38 @@
       "desc": "Crystals linked end to end in a chain, rather than a clump.",
       "for": [
         "aggregate"
+      ],
+      "beside": true
+    },
+    {
+      "id": "dropcoll",
+      "name": "Hit by large drop(s)",
+      "key": "w",
+      "desc": "One or a few large drops have hit it and frozen on (or are still liquid on it): separate from riming, which is many small droplets.",
+      "for": [
+        "sphere",
+        "liquidice",
+        "column",
+        "needle",
+        "plate",
+        "dendrite",
+        "rosette",
+        "sideplane",
+        "gohei",
+        "bullet",
+        "capped",
+        "scroll",
+        "aggregate",
+        "fragment",
+        "graupel",
+        "irregular"
       ]
+    },
+    {
+      "id": "breakup",
+      "name": "Breaking up",
+      "key": "k",
+      "desc": "It is coming apart in the image: pieces breaking off as it was photographed."
     },
     {
       "id": "cutoff",

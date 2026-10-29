@@ -370,3 +370,51 @@ Then **Admin → Flights and imports** should say *Server ready to import*.
 MariaDB upgrades itself during the release upgrade, and the classifications,
 data and config.php are untouched. Also check `/etc/apache2/envvars` still ends
 with `umask 002`: the upgrade may offer to replace that file.
+
+## 15. Machine learning (GPU)
+
+Admin → **Machine learning** trains habit classifiers on the GPU and runs them over
+flights. It runs `ml/habit_ml.py` (Keras 3 on TensorFlow) as the web server's user,
+in its own Python environment, separate from the importer's.
+
+**1. Python 3.11 for the web server.** TensorFlow needs Python 3.9 or newer; Ubuntu
+20.04's own is 3.8. The deadsnakes packages give a 3.11 every user can run:
+```bash
+sudo add-apt-repository ppa:deadsnakes/ppa
+sudo apt install python3.11 python3.11-venv
+```
+
+**2. TensorFlow with GPU support**, in `/var/www/cpi/venv-ml`:
+```bash
+sudo python3.11 -m venv /var/www/cpi/venv-ml
+sudo /var/www/cpi/venv-ml/bin/pip install --upgrade pip
+sudo /var/www/cpi/venv-ml/bin/pip install "tensorflow[and-cuda]>=2.16" "keras>=3.0" numpy
+```
+The `[and-cuda]` extra brings the CUDA libraries; the NVIDIA driver must be 525 or newer
+(`nvidia-smi` shows it).
+
+**3. Check, as the web server:**
+```bash
+ls -l /dev/nvidia*          # usually crw-rw-rw-: every user can use the GPU
+sudo -u www-data /var/www/cpi/venv-ml/bin/python /var/www/cpi/cpi3v/cpi-classifier/ml/habit_ml.py check
+```
+It prints the versions and `"gpus": ["/physical_device:GPU:0"]`. An empty list means
+TensorFlow can't see the GPU: the lines above it say why.
+
+**4. config.php:**
+```php
+'ml_python' => '/var/www/cpi/venv-ml/bin/python',
+'php_cli'   => '/usr/bin/php',          // loads each run's results into the database
+```
+
+**5. Pretrained weights.** Training starts from a network trained on everyday photos,
+downloaded once (about 25 MB) into `work_dir/ml/keras`. If the server can't reach
+storage.googleapis.com as www-data, fetch them once yourself:
+```bash
+sudo -u www-data env KERAS_HOME=/var/www/cpi/work/ml/keras /var/www/cpi/venv-ml/bin/python -c \
+  "import keras; keras.applications.EfficientNetV2B0(include_top=False, weights='imagenet')"
+```
+(use your `work_dir`). Without them it trains from scratch, which needs many more
+classified particles.
+
+Then press **Check the GPU** on Admin → Machine learning.

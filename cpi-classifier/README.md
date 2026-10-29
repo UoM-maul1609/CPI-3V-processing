@@ -506,7 +506,8 @@ circles with a bright centre spot. **Quasi-sphere** (key 1) is for round ice and
 frozen drops. If you have already saved your own class list on the Admin page,
 the new default doesn't replace it: add *Droplet* there, or use *Restore the
 defaults*. The same goes for the classes added later (Scroll, the Hollow and
-Chain choices, the extra *made of* options): if your Admin → Classes list was
+Chain choices, the extra *made of* options, Gohei twin, Liquid + ice, the riming
+degrees, Hit by large drop(s), Breaking up): if your Admin → Classes list was
 saved before, press *Restore the defaults* to get them (classifications already
 made are kept).
 
@@ -534,9 +535,9 @@ number until it runs out. The panel shows how many particles are in each bin.
 ## "Made of": a second classification
 
 Some classes ask what the particle is made of:
-* **Aggregate:** of bullet rosettes, plates, columns, dendrites, needles, capped columns, bullets, quasi-spheres, mixed habits, or can't tell.
-* **Fragment:** of a dendrite, plate, column, capped column, rosette or aggregate, or can't tell.
-* **Graupel:** what the rimed crystal was (including capped columns).
+* **Aggregate:** of bullet rosettes, plates, columns, dendrites, needles, capped columns, bullets, quasi-spheres, side planes, Gohei twins, fragments (key F: an *aggregate of fragments*), mixed habits, or can't tell.
+* **Fragment:** of a dendrite, plate, column, capped column, rosette, side plane, Gohei twin or aggregate, or can't tell.
+* **Graupel:** what the rimed crystal was (including capped columns and Gohei twins).
 
 Some classes also have a **second choice of their own**, which appears beside
 them (in the *made of* bar, and as a flag that only lights up for them):
@@ -549,13 +550,34 @@ them (in the *made of* bar, and as a flag that only lights up for them):
 * **Side planes / polycrystal** (key P): plates growing out at different angles,
   or several crystals grown (not stuck) together; common at about −20 to −40 °C.
   Aggregates, fragments and graupel can also be made of them.
+* **Gohei twin** (key G): a twinned crystal (two columns or plates grown at an
+  angle from a shared base). It can itself be rimed, aggregated (*Aggregate of
+  Gohei twins*) or fragmented (*Fragment of a Gohei twin*).
+* **Liquid + ice** (key I): one image holding both drops and ice (a mixed-phase
+  particle or a drop stuck to a crystal before it freezes).
+* **Riming degree** (key R, pressed again to step on): *Lightly rimed* (R),
+  *Moderately rimed* (R R: rime covers much of the crystal, hollows filled in,
+  habit still clear), then off. Heavily rimed, where you can't tell what it was,
+  is the class **Graupel**. Only one degree can be on at a time. In the flag
+  palette the degree is one *Riming* button that steps through the same way.
+* **Hit by large drop(s)** (key W): a drop has hit the crystal (a splash or
+  frozen blob, not the even coating of riming). For any ice class.
+* **Breaking up** (key K): the particle is caught coming apart (an "action"
+  flag, for anything, e.g. a dendrite shedding arms, a drop shattering).
 * **Graupel vs Rimed:** Graupel is for crystals so rimed you can't tell what they
-  were. If you can still tell, use that habit plus the Rimed flag.
+  were. If you can still tell, use that habit plus a riming degree.
 * **Too small to tell:** fewer than about 15 pixels across (≈35 µm on a CPI).
-* **Rimed** works on any class, so a rimed capped column is *Capped column* +
-  Rimed (R).
+* **Riming works on any class**, so a rimed capped column is *Capped column* +
+  Lightly rimed, and a rimed aggregate of fragments of dendrites is *Aggregate of
+  fragments* + a riming degree.
 
-These are stored as flags (`hollow`, `chain`) alongside the class and *made of*.
+These are stored as flags (`hollow`, `chain`, `rimed` = lightly, `rime_moderate`,
+`dropcoll`, `breakup`) alongside the class and *made of*. Classifications made
+earlier with *Rimed* now read as *Lightly rimed*; look through them (Show → I
+classified as… with the flag filter) if you want to move some to Moderately or
+Graupel. Flags that share a **group** (riming) are exclusive degrees: in
+**Admin → Classes** a flag can be given a group, and set up as a second choice
+beside its classes.
 In **Admin → Classes**, any flag can be limited to some classes (*For every
 class (limit it to some…)*).
 
@@ -695,6 +717,69 @@ browser, not in the database.
 * **Tick fewer flights for speed.** The page loads every particle in the ticked
   flights; above 3 million it warns you. One project at a time is a good size.
 
+## Machine learning: an automatic habit classifier
+
+**Admin → Machine learning** (administrators) trains classifiers on the server's GPU
+from the site's classifications, and runs them over particles. Setting it up (Python
+3.11 + TensorFlow for the web server, `ml_python` in config.php) is in
+`deploy/DEPLOY.md`, section 15; **Check the GPU** on that page confirms it works.
+
+* **Train:** tick the projects or flights to learn from. Each particle's class is
+  the one most people gave it (set how many people and how much agreement), classes
+  with too few examples are left out, and a few whole flights are held back for
+  testing (not random particles, which would flatter the result). The model sees the
+  image and the particle's measured size and shape, so it knows how big it is. It
+  starts from EfficientNetV2 trained on everyday photos and is fine-tuned on yours.
+  Progress (pass, test accuracy) shows on the page; you can leave it running.
+  The same model also learns the **riming degree** (none / lightly / moderately,
+  once a degree has 10 agreed examples) and the other **flags** (hollow, chain, hit
+  by a drop, breaking up, cut off: each once it has 10 agreed examples).
+* **How pictures are prepared** (Train card): each particle's picture is made
+  square without squashing it (padded with background), and the model is also given
+  its measured size and shape. Two choices, worth comparing between versions:
+  * **Turn particles to their long axis:** each particle is turned so its longest
+    direction lies left-right (from its image moments) and cropped to it, so the
+    model needn't learn every angle; this helps most with few labels. Near-round
+    particles, and ones filling their picture to its edges, aren't turned. Training
+    then adds only small random turns (and flips) rather than any angle.
+  * **Size in the picture:** *scale each to fill* (each particle enlarged or shrunk so
+    its longer side fills the picture; small ones get blurry, and every particle
+    looks the same size), or *keep instrument pixels* (every particle at the same µm
+    per pixel, so relative size shows in the picture; only particles bigger than the
+    picture are shrunk, smoothly).
+  The report says which was used, and *What the model sees* shows a sheet of
+  training particles as prepared. Classifying uses exactly the preparation the
+  version was trained with.
+* **Faint images (stray light):** some 3V-CPI and CPI 1.5 images have poor
+  contrast. Every image is stretched on its own before the model sees it (background
+  at its 95th percentile, darkest part at its 0.5th), and training adds random
+  contrast changes and noise, so the model learns shapes rather than brightness.
+  The report shows accuracy for the faintest, middle and highest-contrast thirds of
+  the test particles, so you can see whether faint images still suffer.
+* **Versions:** each training run is a version with a report: test accuracy, per
+  class precision / recall / F1, a confusion matrix, accuracy by image contrast and
+  per instrument, the riming confusion and per-flag precision / recall, and the
+  most confident mistakes (often the people's mistakes). **Keep** a version (and name
+  it) or **Delete** it.
+* **Classify with a model:** pick a version and tick projects or flights; or, on the
+  Classify page, select particles (or one particle, *Ask a model* in the details
+  panel) and choose **Classify with a model**. The results are a **classification
+  set**: look through it, download it as CSV, rename it or delete it. Deleting a set
+  never touches people's classifications.
+* **On the Classify page** (administrators only, so the model can't sway the people
+  whose classifications train it): choose a set under **Model** in the sidebar.
+  Each particle shows the model's class and how sure it is; *Show* gains *Classified
+  by the model*, *The model and I disagree*, *The model and other people disagree*
+  and *The model says …*; the order gains *Model least sure first* (the particles
+  that would teach the next version most) and *Model most sure first*. **Agree** in
+  the details panel classifies a particle as the model says (class, riming degree
+  and flags; your own other flags, e.g. *unsure*, are kept), as your own
+  classification. The set's CSV has `riming`, `riming_prob` and `flags` columns.
+
+Files: `work_dir/ml/models/<version>/` (model.keras, model.json = the report),
+`work_dir/ml/jobs/` (job logs); results in the `ml_sets` and `ml_predictions` tables.
+`ml/habit_ml.py` can also be run by hand (`check`, `train JOB.json`, `predict JOB.json`).
+
 ## Display settings
 
 * **Defaults:** the colour map is Blues (Blues_r) for greyscale images. Change it
@@ -704,6 +789,10 @@ browser, not in the database.
   your account, so they follow you to another computer, and between the
   SSH-tunnel address and the campus address (browsers keep those apart). Not
   signed in, they're remembered by that browser.
+* **Stretch each particle's contrast** (Display): for faint images (e.g. stray
+  light on 3V-CPI / CPI 1.5). Each particle is stretched on its own so its
+  background is white and its darkest part black. It only changes what you see,
+  not the stored images.
 * **Image downloads** start with the outline on or off to match the screen.
 
 ## Changing a flight's details after importing

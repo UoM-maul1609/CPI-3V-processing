@@ -34,6 +34,8 @@ case 'reset':
     $st = db()->prepare('UPDATE users SET pass_hash = ?, must_change_pw = 1, disabled = 0, is_external = 0 WHERE username = ?');
     $st->execute([password_hash($temp, PASSWORD_DEFAULT), $username]);
     if (!$st->rowCount()) { say("No user $username"); exit(1); }
+    $id = db()->prepare('SELECT id FROM users WHERE username = ?'); $id->execute([$username]);
+    remember_forget_user((int)$id->fetchColumn());     // browsers kept signed in are signed out too
     say("New temporary password for $username: $temp");
     break;
 case 'list':
