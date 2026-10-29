@@ -78,6 +78,8 @@ case 'login':
     start_session();
     session_regenerate_id(true);
     $_SESSION['uid'] = (int)$row['id'];
+    remember_forget();                                    // any older token in this browser
+    if (!empty($b['remember'])) remember_issue((int)$row['id']);
     out(['user' => current_user()]);
 
 case 'change_password':
@@ -90,6 +92,10 @@ case 'change_password':
     if ($e = password_problem($new, $u['username'])) fail(400, $e);
     if ($new === (string)$b['current']) fail(400, 'Choose a password different from the temporary one');
     db()->prepare('UPDATE users SET pass_hash = ?, must_change_pw = 0 WHERE id = ?')->execute([password_hash($new, PASSWORD_DEFAULT), $u['id']]);
+    // other browsers kept signed in with the old password are signed out; this one stays if it was
+    $kept = !empty($_COOKIE[REMEMBER_COOKIE]);
+    remember_forget_user($u['id']);
+    if ($kept) remember_issue($u['id']);
     session_regenerate_id(true);
     out(['user' => current_user(true)]);
 
@@ -125,6 +131,7 @@ case 'prefs_save':
 
 case 'logout':
     require_post();
+    remember_forget();
     start_session();
     $_SESSION = [];
     session_destroy();

@@ -61,3 +61,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   n_labels       INTEGER NOT NULL DEFAULT 0,
   created_at     TEXT NOT NULL
 );
+
+-- "Keep me signed in": one row per browser that chose it. Only a hash of the secret is kept.
+CREATE TABLE IF NOT EXISTS remember_tokens (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id     INTEGER NOT NULL,
+  selector    TEXT NOT NULL UNIQUE,
+  token_hash  TEXT NOT NULL,
+  created_at  TEXT NOT NULL,
+  expires_at  TEXT NOT NULL,
+  last_used   TEXT NULL,
+  agent       TEXT NULL
+);

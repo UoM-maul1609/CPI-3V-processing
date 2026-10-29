@@ -68,3 +68,16 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at     DATETIME     NOT NULL,
   KEY ix_sess_contrib (contributor_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- "Keep me signed in": one row per browser that chose it. Only a hash of the secret is kept.
+CREATE TABLE IF NOT EXISTS remember_tokens (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  user_id     INT UNSIGNED NOT NULL,
+  selector    CHAR(24)     NOT NULL UNIQUE,
+  token_hash  CHAR(64)     NOT NULL,
+  created_at  DATETIME     NOT NULL,
+  expires_at  DATETIME     NOT NULL,
+  last_used   DATETIME     NULL,
+  agent       VARCHAR(200) NULL,
+  KEY ix_rt_user (user_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -396,6 +396,23 @@ php web/api/tools/user.php reset jsmith                 # new temporary password
 php web/api/tools/user.php list
 ```
 
+* **Temporary passwords:** *Add a person* suggests one that's easy to read out
+  or type (e.g. `glacier-otter-halo-512`; *Another* gives a new one), and you can
+  type your own instead (at least 10 characters). They must choose their own
+  password the first time they sign in.
+* **Keep me signed in:** tick it when signing in, on your own computer, and you
+  stay signed in (for a year, renewed while you use it) until you sign out. Without
+  it you're signed out when the browser or the server forgets the session (PHP's
+  default is after about 24 minutes idle). Signing out, changing your password,
+  or an administrator resetting it or switching the account off ends it on every
+  computer. The browser holds a random token; the database keeps only its hash
+  (table `remember_tokens`, created automatically).
+* **Saving passwords in the browser:** after signing in, and after choosing a new
+  password, the page lets the browser offer to save it. Chrome and Edge ask
+  straight away on https or through an SSH tunnel (localhost); on a plain
+  http:// address browsers may not offer, or show a "not secure" warning, until
+  the site has a certificate.
+
 ## Practice and demonstration
 
 * **Practice mode:** anyone who isn't signed in can still classify, by keys,

@@ -123,8 +123,70 @@ function start_session(): void {
     session_start();
 }
 
+// ---------------------------------------------------------- "keep me signed in"
+// A long-lived cookie "<selector>:<secret>". The database keeps only a SHA-256 of the
+// secret, so a copy of the database can't be used to sign in. Signing out, changing
+// your password, or an administrator resetting it or switching the account off ends it.
+const REMEMBER_COOKIE = 'cpiremember';
+const REMEMBER_DAYS = 365;
+
+function remember_cookie(string $value, int $expires): void {
+    setcookie(REMEMBER_COOKIE, $value, [
+        'expires' => $expires, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax',
+        'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off',
+    ]);
+}
+/** After signing in with "keep me signed in": a new token for this browser. */
+function remember_issue(int $uid): void {
+    ensure_schema();
+    $sel = bin2hex(random_bytes(12));
+    $secret = bin2hex(random_bytes(32));
+    $exp = time() + REMEMBER_DAYS * 86400;
+    db()->prepare('INSERT INTO remember_tokens (user_id, selector, token_hash, created_at, expires_at, agent) VALUES (?,?,?,?,?,?)')
+        ->execute([$uid, $sel, hash('sha256', $secret), now_sql(), gmdate('Y-m-d H:i:s', $exp), mb_substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 200)]);
+    remember_cookie("$sel:$secret", $exp);
+}
+/** Forget this browser's token (signing out). */
+function remember_forget(): void {
+    $c = (string)($_COOKIE[REMEMBER_COOKIE] ?? '');
+    if ($c !== '' && strpos($c, ':') !== false) {
+        ensure_schema();
+        db()->prepare('DELETE FROM remember_tokens WHERE selector = ?')->execute([explode(':', $c, 2)[0]]);
+    }
+    if ($c !== '') remember_cookie('', time() - 3600);
+}
+/** Forget every browser for this person (password changed or reset, account switched off). */
+function remember_forget_user(int $uid): void {
+    ensure_schema();
+    db()->prepare('DELETE FROM remember_tokens WHERE user_id = ?')->execute([$uid]);
+}
+/** No session, but a valid token: sign the person straight back in. */
+function remember_resume(): void {
+    $c = (string)($_COOKIE[REMEMBER_COOKIE] ?? '');
+    if ($c === '' || !preg_match('/^([0-9a-f]{24}):([0-9a-f]{64})$/', $c, $m)) return;
+    ensure_schema();
+    $st = db()->prepare('SELECT r.id, r.user_id, r.token_hash, r.expires_at, r.last_used, u.disabled FROM remember_tokens r JOIN users u ON u.id = r.user_id WHERE r.selector = ?');
+    $st->execute([$m[1]]);
+    $r = $st->fetch();
+    if (!$r || !hash_equals((string)$r['token_hash'], hash('sha256', $m[2])) || strcmp((string)$r['expires_at'], now_sql()) < 0 || (int)$r['disabled']) {
+        if ($r && strcmp((string)$r['expires_at'], now_sql()) < 0) db()->prepare('DELETE FROM remember_tokens WHERE id = ?')->execute([$r['id']]);
+        remember_cookie('', time() - 3600);
+        return;
+    }
+    session_regenerate_id(true);
+    $_SESSION['uid'] = (int)$r['user_id'];
+    // keep it going while it's used: push the expiry on, at most once a day
+    if (!$r['last_used'] || strcmp((string)$r['last_used'], gmdate('Y-m-d H:i:s', time() - 86400)) < 0) {
+        $exp = time() + REMEMBER_DAYS * 86400;
+        db()->prepare('UPDATE remember_tokens SET last_used = ?, expires_at = ? WHERE id = ?')->execute([now_sql(), gmdate('Y-m-d H:i:s', $exp), $r['id']]);
+        db()->prepare('UPDATE users SET last_login = ? WHERE id = ?')->execute([now_sql(), $r['user_id']]);
+        remember_cookie($c, $exp);
+    }
+}
+
 function current_user(bool $fresh = false): ?array {
     start_session();
+    if (empty($_SESSION['uid'])) remember_resume();
     if (empty($_SESSION['uid'])) return null;
     static $u = false;
     if ($fresh) $u = false;

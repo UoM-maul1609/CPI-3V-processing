@@ -1044,3 +1044,6 @@ body.dragging .guide-cls { outline: 1px dashed color-mix(in srgb, var(--c) 60%, 
 .projcaret svg { transition: transform .15s; }
 .projcaret[aria-expanded="true"] svg { transform: rotate(90deg); }
 .flightrow[hidden] { display: none; }
+#authForm.register .login-only { display: none; }
+.keepme { margin: 2px 0 10px; font-size: .9rem; flex-wrap: wrap; }
+.keepme small { width: 100%; padding-left: 24px; }

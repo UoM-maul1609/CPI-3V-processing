@@ -533,7 +533,10 @@ print(json.dumps(r))') . ' 2>&1'));
         $st = db()->prepare('SELECT 1 FROM users WHERE username = ?');
         $st->execute([$username]);
         if ($st->fetch()) fail(409, "The username $username is taken");
-        $temp = temp_password();
+        // the administrator's chosen (or the page's suggested) temporary password, else a random one
+        $temp = trim((string)($b['password'] ?? ''));
+        if ($temp === '') $temp = temp_password();
+        elseif (($why = password_problem($temp, $username)) !== null) fail(400, "Temporary password: $why");
         $ex = trim((string)($b['expertise'] ?? ''));
         if ($ex !== '' && !in_array($ex, expertise_levels(), true)) $ex = '';
         db()->prepare('INSERT INTO users (username, display_name, email, pass_hash, created_at, is_admin, must_change_pw, disabled, expertise) VALUES (?,?,?,?,?,?,1,0,?)')
@@ -551,6 +554,7 @@ print(json.dumps(r))') . ' 2>&1'));
         // giving a password to someone who only had uploaded sessions turns them into a normal account
         db()->prepare('UPDATE users SET is_external = 0 WHERE id = ?')->execute([$id]);
         db()->prepare('UPDATE users SET pass_hash = ?, must_change_pw = 1 WHERE id = ?')->execute([password_hash($temp, PASSWORD_DEFAULT), $id]);
+        remember_forget_user($id);          // browsers kept signed in with the old password are signed out
         out(['username' => $row['username'], 'display_name' => $row['display_name'], 'temp_password' => $temp]);
 
     case 'admin_user_update':
@@ -574,7 +578,10 @@ print(json.dumps(r))') . ' 2>&1'));
         if ($id === $u['id'] && (isset($b['disabled']) && $b['disabled'] || isset($b['is_admin']) && !$b['is_admin']))
             fail(400, 'You can’t switch off your own account or your own administrator rights');
         if (isset($b['is_admin'])) db()->prepare('UPDATE users SET is_admin = ? WHERE id = ?')->execute([$b['is_admin'] ? 1 : 0, $id]);
-        if (isset($b['disabled'])) db()->prepare('UPDATE users SET disabled = ? WHERE id = ?')->execute([$b['disabled'] ? 1 : 0, $id]);
+        if (isset($b['disabled'])) {
+            db()->prepare('UPDATE users SET disabled = ? WHERE id = ?')->execute([$b['disabled'] ? 1 : 0, $id]);
+            if ($b['disabled']) remember_forget_user($id);
+        }
         if (array_key_exists('expertise', $b)) {
             $ex = trim((string)$b['expertise']);
             if ($ex !== '' && !in_array($ex, expertise_levels(), true)) fail(400, 'Choose a level of expertise from the list');
