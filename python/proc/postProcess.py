@@ -15,7 +15,9 @@ def parent_image_index(order_image, order_rois):
     return parent
 
 
-def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
+def postProcess(bytes1,rois,R,H,I,Header,cpiv1,housekeeping_legacy=None):
+    if housekeeping_legacy is None:
+        housekeeping_legacy = cpiv1
     # use dictionaries for storing info
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
     # image times in hk format
@@ -48,7 +50,7 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
     
 
     #++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-    if not cpiv1:
+    if not housekeeping_legacy:
         # housekeeping packet times
         # Housekeeping timestamps are three 16-bit words.  Promote before
         # shifting/multiplication so the arithmetic cannot overflow uint16.
@@ -59,11 +61,13 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1):
         Rdgs=H['Readings1']
         # Retain the legacy 3V-CPI dead time used by existing processing.
         HOUSE['deadtime']=Rdgs[:,57] /256
+        HOUSE['format'] = "3v83"
     else:
         # housekeeping packet times
         HOUSE={'Time' : H['Time'] }
         Rdgs=H['Readings']
         HOUSE['deadtime']=Rdgs[:,31]*0.000682667
+        HOUSE['format'] = 'legacy'
         
     #--------------------------------------------------------------------------
 

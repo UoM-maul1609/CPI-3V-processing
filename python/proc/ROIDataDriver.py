@@ -13,12 +13,12 @@ import scipy.io as sio
 from associateBackgrounds import associateBackgrounds
 from convertDataToHeaderSA import convertDataToHeaderSA
 from convertDataToHouseSA import convertDataToHouseSA
+from detectHousekeeping import detect_housekeeping
 from convertDataToImageSA import convertDataToImageSA
 from convertDataToROISA import convertDataToROISA
 from fullBackgrounds import fullBackgrounds
-from recordedBackgrounds import scan_recorded_backgrounds, image_times_by_offset
 from io_utils import atomic_savemat, normalise_directory, parse_bool
-from postProcess import postProcess, calc_datetime
+from postProcess import postProcess
 
 
 def _as_matlab_struct(value):
@@ -167,10 +167,9 @@ def mult_job(path1, filename1, dt, process_sweep1_if_exist, cpiv1):
     bytes1 = ushort.tobytes()
 
     print("Finding house keeping...")
-    if cpiv1:
-        house = np.flatnonzero(np.isin(ushort, (0xA1D6, 0xA2D6, 0xA1D7, 0xA1D8)))
-    else:
-        house = np.flatnonzero(ushort == int("0x484B", 0))
+    house, housekeeping_legacy = detect_housekeeping(ushort, order)
+    print(f"Housekeeping format: {'historical CPI' if housekeeping_legacy else '3V 83-word'}; "
+          f"{len(house)} valid packet(s)")
     print("done")
 
     print("Finding image data...")
@@ -185,44 +184,27 @@ def mult_job(path1, filename1, dt, process_sweep1_if_exist, cpiv1):
     Header = convertDataToHeaderSA(ushort)
     I, images = convertDataToImageSA(bytes1, ushort, order, images)
     R, rois = convertDataToROISA(bytes1, ushort, order, rois)
-    H = convertDataToHouseSA(bytes1, ushort, order, house, cpiv1)
+    H = convertDataToHouseSA(bytes1, ushort, order, house, housekeeping_legacy)
     print("done")
 
     print("Post-processing data, stage 2...")
-    ROI_N, HOUSE, IMAGE1 = postProcess(bytes1, rois, R, H, I, Header, cpiv1)
+    ROI_N, HOUSE, IMAGE1 = postProcess(bytes1, rois, R, H, I, Header, cpiv1, housekeeping_legacy=housekeeping_legacy)
     print("done")
 
-    print("Getting backgrounds (validated frame records)...")
-    # Identify backgrounds from the frame's bitmask, not exact values on
-    # particle ROIs (which can exclude background-only records entirely).
-    original_frame_times, _ = calc_datetime(
-        Header['usYear'], Header['ucMonth'], I['day'], I['hour'],
-        I['minute'], I['second'], I['msecond'])
-    stamps = image_times_by_offset(raw_bytes, I, original_frame_times)
-    records, bg_inventory = scan_recorded_backgrounds(raw_bytes, stamps)
-    print(f"Frames: {bg_inventory['frames']}; background flags: "
-          f"{bg_inventory['background_flags']}; decoded: {bg_inventory['decoded']}; "
-          f"invalid: {bg_inventory['invalid_backgrounds']}")
-    # A background with no recognised timestamp cannot be safely associated
-    # with particles. Never invent acquisition times.
-    matched = [(im, ts) for _, im, ts in records if ts is not None]
-    if len(matched) != len(records):
-        print(f"WARNING: {len(records)-len(matched)} backgrounds missing frame timestamps")
-    if matched:
-        FULL_BG1 = _as_matlab_struct({
-            'Time': np.array([ts for im, ts in matched], dtype=np.float64),
-            'IMAGE': [{'BG': im} for im, ts in matched],
-        })
-        existing = len(FULL_BG['IMAGE'][0, 0])
+    print("Getting backgrounds...")
+    FULL_BG1 = fullBackgrounds(ROI_N, cpiv1)
+    if len(FULL_BG1["Time"]):
+        FULL_BG1 = _as_matlab_struct(FULL_BG1)
+        existing = len(FULL_BG["IMAGE"][0, 0])
         if existing > 0:
-            FULL_BG['IMAGE'][0, 0] = np.append(
-                FULL_BG['IMAGE'][0, 0], FULL_BG1['IMAGE'][0, 0], axis=1)
-            FULL_BG['Time'][0, 0] = np.append(
-                FULL_BG['Time'][0, 0], FULL_BG1['Time'][0, 0], axis=0)
+            FULL_BG["IMAGE"][0, 0] = np.append(
+                FULL_BG["IMAGE"][0, 0], FULL_BG1["IMAGE"][0, 0], axis=1
+            )
+            FULL_BG["Time"][0, 0] = np.append(
+                FULL_BG["Time"][0, 0], FULL_BG1["Time"][0, 0], axis=0
+            )
         else:
             FULL_BG = FULL_BG1
-    else:
-        print('no usable recorded backgrounds in this file')
     print("done")
 
     if ROI_N["Time"].size == 0:

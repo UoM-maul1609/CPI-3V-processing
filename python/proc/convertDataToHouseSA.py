@@ -13,11 +13,12 @@ def _u32_from_words(high, low):
 
 
 def convertDataToHouseSA(bytes1, ushort, order, house, cpiv1):
+    """Decode selected packet family; caller detects the family independent of CPIv1."""
     if cpiv1:
         # CPIView HKver20 has an 11-word header and 38 readings (98 bytes).
         # HKver25 has 13 header words and 40 readings (106 bytes).
         # CPIv1 A1D7 version 30 has 13 header words and 40 readings (106 bytes).
-        layouts = {20: (98, 11, 38), 25: (106, 13, 40), 30: (106, 13, 40)}
+        layouts = {20: (98, 11, 38), 25: (106, 13, 40), 30: (118, 13, 46)}
         dtype = [
             ('BlockNum', 'uint16'), ('ulItemSize', 'uint32'),
             ('usVersion', 'uint16'), ('ulXtraData', 'uint32'),
