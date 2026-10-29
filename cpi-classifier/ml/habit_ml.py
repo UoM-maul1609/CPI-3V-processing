@@ -290,7 +290,10 @@ def build_model(n_classes, n_feats, size, base_name, weights, n_riming=0, n_flag
         base = make(include_top=False, weights=None, input_shape=(size, size, 3), pooling="avg")
         used = None
     base._name = "backbone"
-    x = base(x)
+    # a pretrained network always runs its BatchNormalization layers in inference mode, even while
+    # it is being fine-tuned: otherwise the small batches of particle images overwrite the statistics
+    # it learnt, and the test accuracy collapses as soon as fine-tuning starts
+    x = base(x, training=False) if used else base(x)
     g = layers.Dense(32, activation="relu")(f_in)
     x = layers.Concatenate()([x, g])
     x = layers.Dropout(0.3)(x)
@@ -436,7 +439,7 @@ def train_job(job):
     weights = o.get("weights", "imagenet") or None           # downloaded once into $KERAS_HOME/models
     model, base, used = build_model(len(classes), len(FEATURES), size, o.get("base", "EfficientNetV2B0"), weights,
                                     len(levels) if use_riming else 0, len(flag_list), prep["orient"])
-    head_epochs = min(3, max(1, epochs // 5)) if used else 0
+    head_epochs = min(5, max(2, epochs // 4)) if used else 0
     total = head_epochs + epochs
     hist = {}
     losses = {"habit": "sparse_categorical_crossentropy"}
@@ -447,13 +450,21 @@ def train_job(job):
     if flag_list:
         losses["flags"] = "binary_crossentropy"; lw["flags"] = 0.5; mets["flags"] = [keras.metrics.BinaryAccuracy(name="accuracy")]
 
+    # keep the epoch with the best test accuracy for the class (what the report gives; the loss can
+    # keep falling while the accuracy falls). With only the class to learn, Keras names it plain "accuracy"
+    watch = "val_habit_accuracy" if (use_riming or flag_list) else "val_accuracy"
+
     def fit(n, lr, offset, trainable):
         base.trainable = trainable
+        if trainable and used:                                # keep BatchNormalization frozen (see build_model)
+            for layer in base.layers:
+                if isinstance(layer, keras.layers.BatchNormalization):
+                    layer.trainable = False
         model.compile(optimizer=keras.optimizers.Adam(lr), loss=losses, loss_weights=lw, metrics=mets)
         cbs = [Progress(total, offset).cb]
         if trainable:
-            cbs.append(keras.callbacks.EarlyStopping(monitor="val_loss", patience=4, restore_best_weights=True))
-            cbs.append(keras.callbacks.ReduceLROnPlateau(monitor="val_loss", factor=0.3, patience=2))
+            cbs.append(keras.callbacks.EarlyStopping(monitor=watch, mode="max", patience=4, restore_best_weights=True))
+            cbs.append(keras.callbacks.ReduceLROnPlateau(monitor=watch, mode="max", factor=0.3, patience=2))
         h = model.fit(ds_tr, validation_data=ds_va, epochs=n, callbacks=cbs, verbose=0)
         for k, v in h.history.items():
             hist.setdefault(k, []).extend(float(x) for x in v)
@@ -462,7 +473,14 @@ def train_job(job):
     if head_epochs:
         log(f"First {head_epochs} epochs: only the new layers learn (the pretrained network stays as it is)")
         fit(head_epochs, 1e-3, 0, False)
-    fit(epochs, 1e-4 if used else 1e-3, head_epochs, True)
+        head_best, head_w = max(hist.get(watch, [-1.0])), model.get_weights()
+        log("Then the whole network is fine-tuned, gently")
+    fit(epochs, 1e-5 if used else 1e-3, head_epochs, True)
+    if head_epochs:
+        tuned_best = max(hist.get(watch, [-1.0])[head_epochs:] or [-1.0])
+        if tuned_best < head_best:                            # fine-tuning made it worse on the test flights
+            model.set_weights(head_w)
+            log("Fine-tuning didn't improve on the test flights, so the version from the first epochs is kept")
     train_seconds = round(time.time() - t0)
     if "val_habit_accuracy" in hist and "val_accuracy" not in hist:
         hist["val_accuracy"] = hist["val_habit_accuracy"]
