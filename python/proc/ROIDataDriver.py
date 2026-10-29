@@ -211,8 +211,12 @@ def mult_job(path1, filename1, dt, process_sweep1_if_exist, cpiv1):
         if existing > 0:
             FULL_BG['IMAGE'][0, 0] = np.append(
                 FULL_BG['IMAGE'][0, 0], FULL_BG1['IMAGE'][0, 0], axis=1)
-            FULL_BG['Time'][0, 0] = np.append(
-                FULL_BG['Time'][0, 0], FULL_BG1['Time'][0, 0], axis=0)
+            # MATLAB stores Time as a row vector (1, N); append along
+            # the same axis as IMAGE to preserve the 1:1 correspondence.
+            FULL_BG['Time'][0, 0] = np.concatenate(
+                (np.asarray(FULL_BG['Time'][0, 0]).reshape(1, -1),
+                 np.asarray(FULL_BG1['Time'][0, 0]).reshape(1, -1)),
+                axis=1)
         else:
             FULL_BG = FULL_BG1
     else:
