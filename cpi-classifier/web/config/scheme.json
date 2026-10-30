@@ -1,5 +1,5 @@
 {
-  "version": "habit-v6",
+  "version": "habit-v7",
   "title": "Ice crystal habit",
   "help": "Classify the 3D crystal you think it is, not the 2D outline: a plate seen edge-on looks like a thin column, a short column seen end-on looks like a hexagon. For aggregates, fragments and graupel, also say what it is made of, if you can tell. Hollow and Chain appear beside the classes they apply to. Riming (R) has two degrees: lightly and moderately rimed; heavily rimed, so you can't tell what it was, is Graupel. If you're not sure, give your best guess with Unsure, or use Can't tell rather than guessing.",
   "classes": [
@@ -39,7 +39,7 @@
       "key": "3",
       "color": "#2b6cb0",
       "plural": "needles",
-      "desc": "Very long thin column (aspect ratio above about 5)."
+      "desc": "Very long thin column (aspect ratio above about 5); about −4 to −6 °C. Several needles lying roughly parallel and grown together from a common base are a bundle: still Needle, tick Bundle (J). Needles stuck together at random angles are an Aggregate of needles."
     },
     {
       "id": "plate",
@@ -63,15 +63,15 @@
       "key": "6",
       "color": "#e0a526",
       "plural": "bullet rosettes",
-      "desc": "Several columns or bullets radiating from one centre."
+      "desc": "A polycrystal of several columns or bullets radiating from one centre, each a clean column with its own facets. Typically below about −40 °C (and in cirrus)."
     },
     {
       "id": "sideplane",
-      "name": "Side planes / polycrystal",
+      "name": "Side planes / other polycrystal",
       "key": "p",
       "color": "#7d8f3a",
       "plural": "side-plane crystals",
-      "desc": "Crystal with plates growing out of it at different angles (side planes), or an irregular polycrystal made of several crystals grown together rather than stuck together. Common at about −20 to −40 °C."
+      "desc": "Polycrystals without their own class (rosettes and Gohei twins have one). Side planes: one main crystal (often a column, bullet or plate) with thin, paler plate-like sheets growing out of its surfaces at odd angles, often stacked like pages, giving a ragged, layered edge: tick Side planes (E). Other polycrystals: several crystals of similar size grown out of one common centre, e.g. crossed plates or a clump of plates and columns. Common at about −20 to −40 °C."
     },
     {
       "id": "gohei",
@@ -79,7 +79,7 @@
       "key": "g",
       "color": "#9a7b2f",
       "plural": "Gohei twins",
-      "desc": "Two crystals (usually columns or plates) twinned at an angle to each other, like a folded paper streamer. Can be rimed, aggregated or broken."
+      "desc": "A twinned polycrystal: two crystals (column-like, growing in tiers) joined along a centre line at an angle, mirror-symmetric with a closed, pointed tip, like a folded Shinto paper streamer. Forms below about −20 °C. Can be rimed, aggregated or broken."
     },
     {
       "id": "bullet",
@@ -95,7 +95,7 @@
       "key": "7",
       "color": "#d97a29",
       "plural": "capped columns",
-      "desc": "Column with plates on one or both ends. Rimed? Add the Rimed flag (R)."
+      "desc": "Column with plates on one or both ends. Rimed? Give the riming degree (R)."
     },
     {
       "id": "scroll",
@@ -111,7 +111,7 @@
       "key": "8",
       "color": "#c2507a",
       "plural": "aggregates",
-      "desc": "Several crystals stuck together. Say what of, if you can tell, and tick Chain (N) if they're linked end to end.",
+      "desc": "Separate crystals that collided and stuck: parts often of different sizes or habits, touching at points or edges, with no common centre (grown from one centre is a polycrystal instead). Say what of, if you can tell, and tick Chain (N) if they're linked end to end.",
       "of": [
         "rosette",
         "plate",
@@ -170,7 +170,7 @@
       "name": "Irregular",
       "key": "0",
       "color": "#8a8f98",
-      "desc": "Ice with no recognisable habit, and not side planes or a polycrystal."
+      "desc": "Ice with no recognisable habit, and not a polycrystal or an aggregate."
     },
     {
       "id": "small",
@@ -231,6 +231,26 @@
       "desc": "Crystals linked end to end in a chain, rather than a clump.",
       "for": [
         "aggregate"
+      ],
+      "beside": true
+    },
+    {
+      "id": "sideplanes",
+      "name": "Side planes",
+      "key": "e",
+      "desc": "One main crystal with thin, paler plate-like sheets growing out of it at odd angles (rather than several similar crystals from one centre).",
+      "for": [
+        "sideplane"
+      ],
+      "beside": true
+    },
+    {
+      "id": "bundle",
+      "name": "Bundle",
+      "key": "j",
+      "desc": "Several needles lying roughly parallel, grown together from a common base (needles jumbled at random angles are an Aggregate of needles).",
+      "for": [
+        "needle"
       ],
       "beside": true
     },

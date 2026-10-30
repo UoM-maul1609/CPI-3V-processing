@@ -507,7 +507,7 @@ frozen drops. If you have already saved your own class list on the Admin page,
 the new default doesn't replace it: add *Droplet* there, or use *Restore the
 defaults*. The same goes for the classes added later (Scroll, the Hollow and
 Chain choices, the extra *made of* options, Gohei twin, Liquid + ice, the riming
-degrees, Hit by large drop(s), Breaking up): if your Admin → Classes list was
+degrees, Hit by large drop(s), Breaking up, Side planes, Bundle): if your Admin → Classes list was
 saved before, press *Restore the defaults* to get them (classifications already
 made are kept).
 
@@ -547,11 +547,22 @@ them (in the *made of* bar, and as a flag that only lights up for them):
 * **Chain** (key N): for aggregates linked end to end, e.g. *Aggregate of
   quasi-spheres (chain)*. Press N while the *Aggregate of…* bar is up, or later.
 * **Scroll / sheath** (key L) is a class of its own.
-* **Side planes / polycrystal** (key P): plates growing out at different angles,
-  or several crystals grown (not stuck) together; common at about −20 to −40 °C.
-  Aggregates, fragments and graupel can also be made of them.
-* **Gohei twin** (key G): a twinned crystal (two columns or plates grown at an
-  angle from a shared base). It can itself be rimed, aggregated (*Aggregate of
+* **Side planes / other polycrystal** (key P): polycrystals without a class of
+  their own (bullet rosettes and Gohei twins have one), common at about −20 to
+  −40 °C: several crystals of similar size grown out of one centre (crossed plates,
+  a clump of plates and columns), or one main crystal with thin, paler sheets growing
+  off it at odd angles. For the latter, tick the second-level choice **Side planes**
+  (key E), so side planes can be counted on their own while total polycrystals is
+  the class count. Aggregates, fragments and graupel can also be made of them.
+* **Needle bundles:** several needles lying roughly parallel and grown together from
+  a common base are still a Needle; tick **Bundle** (key J). Needles stuck together at
+  random angles are an *Aggregate of needles*.
+* **Polycrystal or aggregate?** A polycrystal grew from one centre; an aggregate is
+  separate crystals that collided and stuck (parts of different sizes or habits,
+  touching at points, no common centre).
+* **Gohei twin** (key G): a twinned polycrystal: two column-like crystals joined
+  along a centre line, growing in tiers, mirror-symmetric with a closed, pointed tip;
+  below about −20 °C. It can itself be rimed, aggregated (*Aggregate of
   Gohei twins*) or fragmented (*Fragment of a Gohei twin*).
 * **Liquid + ice** (key I): one image holding both drops and ice (a mixed-phase
   particle or a drop stuck to a crystal before it freezes).
@@ -572,7 +583,7 @@ them (in the *made of* bar, and as a flag that only lights up for them):
   fragments* + a riming degree.
 
 These are stored as flags (`hollow`, `chain`, `rimed` = lightly, `rime_moderate`,
-`dropcoll`, `breakup`) alongside the class and *made of*. Classifications made
+`dropcoll`, `breakup`, `sideplanes`, `bundle`) alongside the class and *made of*. Classifications made
 earlier with *Rimed* now read as *Lightly rimed*; look through them (Show → I
 classified as… with the flag filter) if you want to move some to Moderately or
 Graupel. Flags that share a **group** (riming) are exclusive degrees: in

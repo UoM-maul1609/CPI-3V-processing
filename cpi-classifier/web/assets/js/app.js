@@ -2659,13 +2659,15 @@ async function viewGuide(root) {
   const has = (...ids) => ids.some((id) => classById.has(id));
   const steps = [
     has('artefact') && ['Is it a cloud particle at all?', 'Streaks, shattering debris, smudges, a stuck particle or an empty image:', [chip('artefact')]],
-    has('droplet') && ['Is it a liquid drop?', 'A near-perfect circle with a smooth edge, often with a bright spot or ring in the middle:', [chip('droplet')]],
+    has('droplet') && ['Is it a liquid drop?', 'A near-perfect circle with a smooth edge, often with a bright spot or ring in the middle. Part liquid, part ice? Liquid + ice:', [chip('droplet'), chip('liquidice')]],
     has('small', 'unusable') && ['Can you judge it?', 'Fewer than about 15 pixels across (≈35 µm on a CPI), or out of focus, overlapping or unclear:', [chip('small'), chip('unusable')]],
-    has('aggregate') && ['Several crystals stuck together?', 'Then say what of; tick Chain if they’re linked end to end:', [chip('aggregate'), fchip('chain')]],
+    has('aggregate') && ['Separate crystals stuck together?', 'Parts of different sizes or habits touching at points, no common centre. Say what of; tick Chain if they’re linked end to end. (Needles jumbled at random angles: an aggregate of needles.)', [chip('aggregate'), fchip('chain')]],
     has('fragment') && ['A broken piece of a bigger crystal?', 'Say what of, if you can tell:', [chip('fragment')]],
     has('graupel') && ['So rimed you can’t tell what it was?', 'Then it’s Graupel. If you can still tell, carry on and give the riming degree (R: lightly, R R: moderately):', [chip('graupel'), fchip('rimed'), fchip('rime_moderate')]],
-    ['One crystal: which habit?', 'Think of the 3D shape (plates can be seen edge-on). Hollow or hollowed? Add Hollow:',
-      [...['column', 'needle', 'plate', 'dendrite', 'rosette', 'bullet', 'capped', 'sideplane', 'scroll', 'sphere'].map(chip), fchip('hollow')]],
+    has('rosette', 'gohei', 'sideplane') && ['Several crystals grown together (a polycrystal)?', 'Clean columns radiating from one centre: Bullet rosette. Two crystals joined along a centre line, tiered, with a closed pointed tip: Gohei twin. Anything else grown from one centre (crossed plates, a clump): Side planes / other polycrystal; one main crystal with thin sheets growing off it? Add Side planes:',
+      [chip('rosette'), chip('gohei'), chip('sideplane'), fchip('sideplanes')]],
+    ['One crystal: which habit?', 'Think of the 3D shape (plates can be seen edge-on). Hollow or hollowed? Add Hollow. Parallel needles grown together? Needle + Bundle:',
+      [...['column', 'needle', 'plate', 'dendrite', 'bullet', 'capped', 'scroll', 'sphere'].map(chip), fchip('hollow'), fchip('bundle')]],
     has('irregular') && ['Nothing fits?', 'Ice with no recognisable habit:', [chip('irregular')]],
   ].filter(Boolean);
   inner.append(h('details', { class: 'card flowcard', open: lsGet('cpi.flowOpen', true), ontoggle: (e) => lsSet('cpi.flowOpen', e.currentTarget.open) },
