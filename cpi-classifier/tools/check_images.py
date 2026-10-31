@@ -77,7 +77,13 @@ def main():
         c = json.load(open(os.path.join(fdir, "catalog.json"), encoding="utf-8"))
         n = int(c["n"])
         files = c["files"]
-        if "bin" in c:
+        if "colfiles" in c:
+            import numpy as np
+            T = {"u8": "<u1", "u16": "<u2", "u32": "<u4"}
+            cf = c["colfiles"]
+            col = lambda k: np.fromfile(os.path.join(fdir, cf["dir"], k + ".bin"), dtype=T[cf["cols"][k][0]], count=n)
+            fcol, icol = col("f"), col("i")
+        elif "bin" in c:
             import numpy as np
             buf = open(os.path.join(fdir, c["bin"]["file"]), "rb").read()
             col = lambda k: np.frombuffer(buf, dtype="<u4", count=n, offset=c["bin"]["cols"][k][1])

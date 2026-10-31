@@ -526,13 +526,17 @@ function selectedFlights() {
   return S.flights;
 }
 
+/** The measurements the Classify page shows and filters on: only these are downloaded up
+ *  front; the rest (shown in a particle's details, or exported) come one flight at a time. */
+const neededColumns = () => [S.sizeField, 'len', 'wid', 'aspect', 'area_ratio', 'focus', 'temp', 'alt', ...(S.extraDims || [])];
+
 async function ensureData(onProgress = null) {
   const ids = selectedFlights();
   const key = ids.join('|');
-  if (key === Dkey && D) return;
+  if (key === Dkey && D) { await D.ensure(neededColumns(), null, onProgress); return; }
   Dkey = key;
   D = null;
-  try { D = ids.length ? await combine(ids, onProgress) : null; } catch (e) { Dkey = ''; throw e; }
+  try { D = ids.length ? await combine(ids, onProgress, neededColumns()) : null; } catch (e) { Dkey = ''; throw e; }
   if (D) await refreshLabels();
   if (D && D.n > BIG_N) setTimeout(() => toast(`${fmtInt(D.n)} particles from ${ids.length} flights: the page may be slow. Tick fewer flights (or one project) for a faster page.`, 7000), 300);
 }
@@ -1667,12 +1671,18 @@ function renderInspector(g) {
   const pic = h('div', { class: 'single-pic' }, h('img', { src: D.img(g), alt: '', width: Math.round(w * sc), height: Math.round(hh * sc) }));
   if (S.outline) outlineFor(g).then((pts) => { const svg = outlineSvg(g, pts); if (svg) pic.append(svg); });
   const dl = h('dl', { class: 'kv' });
+  // the less-used measurements arrive for this particle's flight the first time it's looked at
+  const missing = Object.keys(D.fields).some((k) => !F.have.has(k) && k !== 't');
+  if (missing && F.cat?.colfiles) {
+    const myD = D;
+    D.ensure(Object.keys(D.fields), [D.fl[g]]).then((got) => { if (got && D === myD && (hoverG >= 0 ? hoverG : currentG()) === g) renderInspector(g); }).catch(() => {});
+  }
   for (const [grp, title] of GROUPS) {
     const rows = [];
     if (grp === 'position') rows.push(['Date', fmtTime(D.col.t[g], true).slice(0, 10)], ['Time (UTC)', fmtTime(D.col.t[g])]);
     for (const [k, m] of Object.entries(D.fields)) {
       if (m.group !== grp || k === 't') continue;
-      const v = D.col[k][g];
+      const v = D.col[k]?.[g];
       if (!Number.isFinite(v)) continue;
       let txt = k === 'edge_touch' ? (v ? 'yes' : 'no') : fmtNum(v, m.unit);
       if (k === 'lat' || k === 'lon') txt = v.toFixed(4) + '°';

@@ -29,7 +29,8 @@ Output (relative to --out):
 
     manifest.json                          list of all exported flights
     flights/<id>/meta.json                 metadata for one flight
-    flights/<id>/catalog.json              particle properties (column arrays)
+    flights/<id>/catalog.json              particle table header (fields, files, column types)
+    flights/<id>/cols/<name>.bin           one binary column per measurement
     flights/<id>/img/<stem>/<idx>.png      one greyscale PNG per particle
     flights/<id>/bnd/<stem>.json           particle outlines, loaded on demand
 
@@ -277,43 +278,128 @@ def col_to_list(a: np.ndarray, decimals: int):
     return out
 
 
-def write_catalog(flight_dir, fid, stems, n, fields_meta, cols):
-    """Write the particle table as catalog.json (a small header) + catalog.bin (the columns).
+COL_TYPES = {"u8": "<u1", "u16": "<u2", "u32": "<u4", "f32": "<f4", "f64": "<f8", "q16": "<u2"}
+Q_NAN = 65535
 
-    cols: name -> numpy array. f and i (file and image index) are stored as uint32,
-    t (seconds since 1970) as float64, everything else as float32 with NaN for
-    missing. The browser reads catalog.bin straight into typed arrays: far quicker
-    to load, and much smaller, than a column of JSON numbers for millions of particles."""
-    layout, parts, off = {}, [], 0
+
+def col_type(name, a):
+    """How a column is stored: whole numbers (file and image index, pixel sizes, edge flags)
+    as the smallest unsigned integer that fits, times as float64, and measurements as 16-bit
+    codes (q16, see quantise): far more precise than the images they're measured from."""
+    if name == "t":
+        return "f64"
+    a = np.asarray(a, dtype=float)
+    ok = np.isfinite(a)
+    if name in ("f", "i") or (a.size and ok.all() and (a >= 0).all() and (a == np.round(a)).all()):
+        top = float(a.max()) if a.size else 0
+        return "u8" if top < 256 else "u16" if top < 65536 else "u32"
+    return "q16"
+
+
+def quantise(a):
+    """Measurements as 16-bit codes, NaN = 65535. Wide-ranging positive ones (sizes, areas,
+    focus...) on a log scale, about 0.03% steps; the rest linear over the flight's own range,
+    1/65,534 of it (e.g. 0.05 um for sizes up to 3 mm, 15 cm in altitude over 10 km).
+    Returns (codes, params) with params {"m": "lin"|"log", "lo", "hi"} for dequantise."""
+    a = np.asarray(a, dtype=float)
+    ok = np.isfinite(a)
+    q = np.full(a.shape, Q_NAN, dtype="<u2")
+    if not ok.any():
+        return q, {"m": "lin", "lo": 0.0, "hi": 0.0}
+    v = a[ok]
+    pos = v[v > 0]
+    if (v >= 0).all() and pos.size and pos.max() / pos.min() > 50:
+        llo, lhi = float(np.log(pos.min())), float(np.log(pos.max()))
+        span = (lhi - llo) or 1.0
+        c = np.where(v > 0, np.round((np.log(np.where(v > 0, v, 1)) - llo) / span * 65533) + 1, 0)
+        q[ok] = np.clip(c, 0, 65534).astype("<u2")
+        return q, {"m": "log", "lo": llo, "hi": lhi}
+    lo, hi = float(v.min()), float(v.max())
+    q[ok] = np.clip(np.round((v - lo) / ((hi - lo) or 1.0) * 65534), 0, 65534).astype("<u2")
+    return q, {"m": "lin", "lo": lo, "hi": hi}
+
+
+def dequantise(q, p):
+    q = np.asarray(q)
+    out = np.full(q.shape, np.nan, dtype="f4")
+    ok = q != Q_NAN
+    c = q[ok].astype(float)
+    if p["m"] == "log":
+        v = np.where(c > 0, np.exp(p["lo"] + (c - 1) / 65533 * ((p["hi"] - p["lo"]) or 1.0)), 0.0)
+    else:
+        v = p["lo"] + c / 65534 * ((p["hi"] - p["lo"]) or 1.0)
+    out[ok] = v
+    return out
+
+
+def write_catalog(flight_dir, fid, stems, n, fields_meta, cols):
+    """Write the particle table as catalog.json (a small header) + one binary file per column
+    in cols/ (format 3). The browser fetches only the columns it needs: for a big project
+    that is far less to download than every measurement of every particle.
+
+    cols: name -> numpy array. Whole-number columns are stored as the smallest unsigned
+    integer type that fits, t (seconds since 1970) as float64, everything else as 16-bit
+    codes (quantise), NaN for missing."""
+    cdir = os.path.join(flight_dir, "cols")
+    os.makedirs(cdir, exist_ok=True)
+    layout = {}
     for name, a in cols.items():
-        dtype = "<u4" if name in ("f", "i") else "<f8" if name == "t" else "<f4"
-        arr = np.ascontiguousarray(np.asarray(a, dtype=float if dtype != "<u4" else np.int64).astype(dtype))
-        pad = (-off) % 8
-        if pad:
-            parts.append(b"\0" * pad); off += pad
-        layout[name] = [{"<u4": "u32", "<f8": "f64", "<f4": "f32"}[dtype], off]
-        b = arr.tobytes()
-        parts.append(b); off += len(b)
-    tmp = os.path.join(flight_dir, "catalog.bin.tmp")
-    with open(tmp, "wb") as fh:
-        for b in parts:
-            fh.write(b)
-    os.replace(tmp, os.path.join(flight_dir, "catalog.bin"))
+        t = col_type(name, a)
+        arr = np.asarray(a, dtype=float)
+        params = None
+        if t == "q16":
+            arr, params = quantise(arr)
+        else:
+            if t.startswith("u"):
+                arr = np.nan_to_num(arr, nan=0)
+            arr = arr.astype(COL_TYPES[t])
+        arr = np.ascontiguousarray(arr)
+        tmp = os.path.join(cdir, name + ".bin.tmp")
+        with open(tmp, "wb") as fh:
+            fh.write(arr.tobytes())
+        os.replace(tmp, os.path.join(cdir, name + ".bin"))
+        layout[name] = [t, int(arr.nbytes)] + ([params] if params else [])
+    for old in glob.glob(os.path.join(cdir, "*.bin")):        # columns this export no longer has
+        if os.path.splitext(os.path.basename(old))[0] not in layout:
+            os.remove(old)
     write_json(os.path.join(flight_dir, "catalog.json"),
-               {"version": 2, "flight": fid, "files": stems, "n": int(n), "fields": fields_meta,
-                "bin": {"file": "catalog.bin", "bytes": off, "cols": layout}})
+               {"version": 3, "flight": fid, "files": stems, "n": int(n), "fields": fields_meta,
+                "colfiles": {"dir": "cols", "cols": layout}})
+    old = os.path.join(flight_dir, "catalog.bin")                # format 2's single file
+    if os.path.exists(old):
+        os.remove(old)
+
+
+def read_catalog_cols(flight_dir, c=None):
+    """A flight's catalogue columns as numpy arrays, whichever format it was written in."""
+    if c is None:
+        with open(os.path.join(flight_dir, "catalog.json"), encoding="utf-8") as fh:
+            c = json.load(fh)
+    n = int(c["n"])
+    if "colfiles" in c:
+        cf = c["colfiles"]
+        out = {}
+        for k, spec in cf["cols"].items():
+            raw = np.fromfile(os.path.join(flight_dir, cf["dir"], k + ".bin"), dtype=COL_TYPES[spec[0]], count=n)
+            out[k] = dequantise(raw, spec[2]) if spec[0] == "q16" else raw
+        return out
+    if "bin" in c:
+        buf = open(os.path.join(flight_dir, c["bin"]["file"]), "rb").read()
+        return {k: np.frombuffer(buf, dtype=COL_TYPES[t], count=n, offset=off) for k, (t, off) in c["bin"]["cols"].items()}
+    return {k: np.array([np.nan if v is None else v for v in vals], dtype=float) for k, vals in c["cols"].items()}
 
 
 def convert_catalogs(data_dir):
-    """Rewrite older catalog.json files (JSON columns) in the binary form, in place."""
+    """Rewrite catalogues in older formats (JSON columns, or one catalog.bin) as one file per column."""
     done = 0
     for cj in sorted(glob.glob(os.path.join(data_dir, "flights", "*", "catalog.json"))):
         with open(cj, encoding="utf-8") as fh:
             c = json.load(fh)
-        if "cols" not in c:
+        if "colfiles" in c and not any(v[0] == "f32" for v in c["colfiles"]["cols"].values()):
             continue
-        cols = {k: np.array([np.nan if v is None else v for v in vals], dtype=float) for k, vals in c["cols"].items()}
-        write_catalog(os.path.dirname(cj), c["flight"], c["files"], c["n"], c["fields"], cols)
+        fdir = os.path.dirname(cj)
+        cols = {k: np.array(v, dtype=float) for k, v in read_catalog_cols(fdir, c).items()}
+        write_catalog(fdir, c["flight"], c["files"], c["n"], c["fields"], cols)
         done += 1
         log(f"  {c['flight']}: {c['n']} particles")
     log(f"Converted {done} catalogue(s)")
@@ -801,9 +887,18 @@ def read_catalogue(project_dir, name=CATALOGUE_NAME, keep_rows=True):
         ip, iflt, idate, imat, iroi, isid, iproj = (ix[k] for k in need)
         get = lambda r, i: r[i] if i is not None and i < len(r) else ""
 
+        size = max(1, os.path.getsize(path))
+        upto = max(i for i in ix.values() if i is not None) + 1   # columns beyond these aren't needed
+
         def lines():
-            # plain lines split on commas (fast); only lines with quotes go through the csv parser
+            # plain lines split on commas (fast, and only as far as the columns used); only lines
+            # with quotes go through the csv parser. Reports how far through the file it is.
+            nread, k = 0, 0
             for line in fh:
+                k += 1
+                nread += len(line)
+                if k % 500000 == 0:
+                    progress(stage="catalogue", done=nread, total=size)
                 if '"' in line:
                     while line.count('"') % 2:                # a quoted field running onto the next line
                         more = fh.readline()
@@ -812,7 +907,7 @@ def read_catalogue(project_dir, name=CATALOGUE_NAME, keep_rows=True):
                         line += more
                     yield next(csv.reader([line]))
                 else:
-                    yield line.rstrip("\r\n").split(",")
+                    yield line.rstrip("\r\n").split(",", upto)
         for r in lines():
             # most rows are particles that weren't exported (no PNG): skip them as cheaply as possible
             rel = r[ip].strip() if ip < len(r) else ""

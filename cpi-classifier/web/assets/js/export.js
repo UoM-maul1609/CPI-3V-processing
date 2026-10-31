@@ -317,6 +317,8 @@ export function openExport(C) {
     progress.hidden = false;
     const bar = progress.querySelector('i'), txt = progress.querySelector('span');
     const zip = new Zip();
+    txt.textContent = 'Loading the measurements…';
+    await D.ensure(Object.keys(D.fields), [...new Set(gs.map((g) => D.fl[g]))]).catch(() => {});
     const fields = ['len', 'wid', 'deq', 'len_feret', 'shadow_deq', 'area', 'perimeter', 'aspect', 'area_ratio', 'round', 'orientation', 'focus', 'T_min', 'edge_touch', 'cutoff_pct', 'lat', 'lon', 'alt', 'temp', 'x0', 'y0', 'w', 'h']
       .filter((f) => D.col[f]);
     const rows = [['file', 'pid', 'source_id', 'flight', 'project', 'mat_file', 'index', 'class', 'flags', 'votes', 'time_utc', ...fields.map((f) => (D.fields[f]?.unit ? `${f}_${D.fields[f].unit.replace('µ', 'u').replace('²', '2').replace('°', 'deg').replace('%', 'pct')}` : f)), 'pixel_um', 'frame_clipped']];

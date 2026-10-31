@@ -331,7 +331,7 @@ async function loadChecks() {
 }
 
 // ------------------------------------------------------------------ jobs
-const STAGE = { loading: 'Reading', images: 'Making images', navigation: 'Adding position and temperature' };
+const STAGE = { catalogue: 'Reading the particle catalogue', loading: 'Reading', images: 'Making images', navigation: 'Adding position and temperature' };
 async function loadJobs() {
   let jobs = [];
   try { jobs = (await C.api.adminGet('jobs')).jobs; } catch (e) { /* shown elsewhere */ }
@@ -368,7 +368,8 @@ function renderJobs() {
       const files = p.files || 1, f = (p.file || 1) - 1;
       const within = p.stage === 'images' && p.total ? p.done / p.total : p.stage === 'navigation' ? 1 : 0;
       pct = Math.min(99, ((f + within) / files) * 100);
-      what = p.stage ? `${STAGE[p.stage] || p.stage}${p.stem ? ` ${p.stem}.mat` : ''}${p.stage === 'images' && p.total ? `: ${fmtInt(p.done)} of ${fmtInt(p.total)}` : ''}${files > 1 ? ` (file ${p.file} of ${files})` : ''}` : 'Starting';
+      if (p.stage === 'catalogue') { pct = 0; what = `Reading the particle catalogue (${Math.min(100, Math.round((100 * (p.done || 0)) / (p.total || 1)))}%) before the first MAT file`; }
+      else what = p.stage ? `${STAGE[p.stage] || p.stage}${p.stem ? ` ${p.stem}.mat` : ''}${p.stage === 'images' && p.total ? `: ${fmtInt(p.done)} of ${fmtInt(p.total)}` : ''}${files > 1 ? ` (file ${p.file} of ${files})` : ''}` : 'Starting';
     } else if (j.status === 'done') { pct = 100; what = 'Finished'; }
     else if (j.status === 'failed') what = j.error || 'Failed: see the log below';
     else if (j.status === 'cancelled') what = 'Cancelled';

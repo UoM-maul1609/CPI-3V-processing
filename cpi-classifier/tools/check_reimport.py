@@ -37,13 +37,35 @@ import sys
 import numpy as np
 
 
+def _dequantise(q, p):
+    """16-bit measurement codes (the exporter's quantise) back to float32; 65535 = missing."""
+    import numpy as np
+    q = np.asarray(q)
+    out = np.full(q.shape, np.nan, dtype="f4")
+    ok = q != 65535
+    c = q[ok].astype(float)
+    if p["m"] == "log":
+        out[ok] = np.where(c > 0, np.exp(p["lo"] + (c - 1) / 65533 * ((p["hi"] - p["lo"]) or 1.0)), 0.0)
+    else:
+        out[ok] = p["lo"] + c / 65534 * ((p["hi"] - p["lo"]) or 1.0)
+    return out
+
+
 def load_catalog(flight_dir):
     with open(os.path.join(flight_dir, "catalog.json"), encoding="utf-8") as fh:
         c = json.load(fh)
     n = int(c["n"])
-    if "bin" in c:
+    T = {"u8": "<u1", "u16": "<u2", "u32": "<u4", "f64": "<f8", "f32": "<f4", "q16": "<u2"}
+    if "colfiles" in c:
+        cf = c["colfiles"]["cols"]
+
+        def col(k):
+            if k not in cf:
+                return None
+            raw = np.fromfile(os.path.join(flight_dir, c["colfiles"]["dir"], k + ".bin"), dtype=T[cf[k][0]], count=n)
+            return _dequantise(raw, cf[k][2]) if cf[k][0] == "q16" else raw
+    elif "bin" in c:
         buf = open(os.path.join(flight_dir, c["bin"]["file"]), "rb").read()
-        T = {"u32": "<u4", "f64": "<f8", "f32": "<f4"}
         col = lambda k: np.frombuffer(buf, dtype=T[c["bin"]["cols"][k][0]], count=n, offset=c["bin"]["cols"][k][1]) if k in c["bin"]["cols"] else None
     else:
         col = lambda k: np.array([np.nan if v is None else v for v in c["cols"][k]], dtype=float) if k in c["cols"] else None

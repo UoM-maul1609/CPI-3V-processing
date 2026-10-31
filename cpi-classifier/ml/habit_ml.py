@@ -63,6 +63,20 @@ def log(*a):
 
 
 # ---------------------------------------------------------------- the site's data
+def _dequantise(q, p):
+    """16-bit measurement codes (the exporter's quantise) back to float32; 65535 = missing."""
+    import numpy as np
+    q = np.asarray(q)
+    out = np.full(q.shape, np.nan, dtype="f4")
+    ok = q != 65535
+    c = q[ok].astype(float)
+    if p["m"] == "log":
+        out[ok] = np.where(c > 0, np.exp(p["lo"] + (c - 1) / 65533 * ((p["hi"] - p["lo"]) or 1.0)), 0.0)
+    else:
+        out[ok] = p["lo"] + c / 65534 * ((p["hi"] - p["lo"]) or 1.0)
+    return out
+
+
 def load_flight(data_dir, fid, _cache={}):
     """A flight's particles: stems, file index, ROI number and measurements, as numpy arrays."""
     import numpy as np
@@ -73,10 +87,15 @@ def load_flight(data_dir, fid, _cache={}):
         c = json.load(fh)
     n = int(c["n"])
     cols = {}
-    if "bin" in c:
+    T = {"u8": "<u1", "u16": "<u2", "u32": "<u4", "f64": "<f8", "f32": "<f4", "q16": "<u2"}
+    if "colfiles" in c:                                       # format 3: one file per column
+        cf = c["colfiles"]
+        for k, spec in cf["cols"].items():
+            raw = np.fromfile(os.path.join(fdir, cf["dir"], k + ".bin"), dtype=T[spec[0]], count=n)
+            cols[k] = _dequantise(raw, spec[2]) if spec[0] == "q16" else raw
+    elif "bin" in c:
         with open(os.path.join(fdir, c["bin"]["file"]), "rb") as fh:
             buf = fh.read()
-        T = {"u32": "<u4", "f64": "<f8", "f32": "<f4"}
         for k, (t, off) in c["bin"]["cols"].items():
             cols[k] = np.frombuffer(buf, dtype=T[t], count=n, offset=off)
     else:

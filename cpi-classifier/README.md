@@ -708,14 +708,30 @@ browser, not in the database.
 
 ## Big projects (millions of particles)
 
-* **Particle tables are stored in a binary form** (`catalog.bin` beside each
-  flight's `catalog.json`). The browser reads it straight into memory, which is
-  many times quicker than a JSON table for millions of particles, and the page no
-  longer sorts every value or builds a text id for every particle when it opens.
-  On a 2-million-particle test: about 2 s to open the Classify page instead of
-  11 s, and under 1 s to come back to it instead of 10 s.
-* **Flights imported before this** still work. To convert them (no re-export
-  needed), as the user that owns the data folder:
+* **Particle tables are stored in a binary form, one file per measurement**
+  (`cols/<name>.bin` beside each flight's `catalog.json`). Whole-number columns
+  (pixel sizes, edge flags, file and image numbers) are small integers; times are
+  full precision; every other measurement is a 16-bit code, on a log scale for
+  wide-ranging positive ones (sizes, areas, aspect ratio: about 0.03% steps) and
+  linear over the flight's range otherwise (1/65,534 of it: e.g. 0.05 µm for sizes up
+  to 3 mm, 15 cm over 10 km of altitude). That is far finer than the images they're
+  measured from, at half the size of 32-bit floats. The browser reads them straight
+  into memory, which is many times quicker than a JSON table for millions of particles.
+* **Memory in the browser** is roughly 60–70 bytes per particle loaded (it was
+  several hundred before converting): integer columns stay integers, older-format
+  tables aren't kept twice, and looking particles up by id uses sorted arrays rather
+  than a map entry per particle. Browsers give a tab a few GB at most, so very large
+  selections (tens of millions of particles) can still be too much: tick fewer flights.
+* **Only the measurements the page needs are downloaded up front:** which particle
+  it is, its time, picture size and edge flag, and the measurements the filters use
+  (the chosen size measure, width, aspect ratio, area ratio, focus, temperature,
+  altitude, and any filters you add): less than half the data. The rest
+  (shown in a particle's details, or exported) arrive one flight at a time, the first
+  time they're needed. Adding a filter or changing the size measure fetches just
+  that column. This matters most away from campus (through an SSH tunnel or VPN).
+* **Flights imported before this** still work, but download every measurement.
+  To convert them (no re-export needed, a few seconds per million particles), as
+  the user that owns the data folder:
   ```
   sudo -u www-data /var/www/cpi/venv/bin/python /var/www/cpi/cpi3v/cpi-classifier/exporter/cpi_export.py --convert-catalogs /var/www/cpi/data
   ```
