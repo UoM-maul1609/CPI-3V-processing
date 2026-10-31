@@ -179,6 +179,49 @@ export async function combine(ids, onProgress = null, need = null) {
   };
   D.allColumns = () => Object.keys(fields);
 
+  /** Every measurement of some particles, for their details or an export, without
+   *  downloading whole columns: a flight can have millions of particles. Returns a Map
+   *  g -> {name: value}. Columns already loaded for a flight are read from memory. */
+  const rowCache = new Map();
+  D.values = async (gs) => {
+    const out = new Map(), byFlight = new Map();
+    for (const g of gs) {
+      if (rowCache.has(g)) { out.set(g, rowCache.get(g)); continue; }
+      const k = fl[g];
+      if (!flights[k].cat.colfiles) continue;               // older exports: everything is loaded already
+      if (!byFlight.has(k)) byFlight.set(k, []);
+      byFlight.get(k).push(g);
+    }
+    for (const [k, list] of byFlight) {
+      const F = flights[k];
+      for (let s = 0; s < list.length; s += 2000) {
+        const part = list.slice(s, s + 2000);
+        const r = await fetch('api/?a=particle_rows', {
+          method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'cpi-classifier' },
+          body: JSON.stringify({ flight: F.id, rows: part.map((g) => g - F.offset) }),
+        });
+        const j = await r.json().catch(() => null);
+        if (!r.ok || !j?.cols) throw new Error(j?.error || `Could not load the measurements for ${F.id}`);
+        part.forEach((g, i) => {
+          const v = {};
+          for (const [name, vals] of Object.entries(j.cols)) v[name] = vals[i] == null ? NaN : vals[i];
+          out.set(g, v);
+          rowCache.set(g, v);
+          if (rowCache.size > 5000) rowCache.delete(rowCache.keys().next().value);
+        });
+      }
+    }
+    return out;
+  };
+  /** A measurement of particle g: from memory if its column is loaded, else from vals. */
+  D.value = (name, g, vals) => {
+    const F = flights[fl[g]];
+    if (F.have.has(name) || !F.cat.colfiles) { const c = col[name]; return c ? c[g] : NaN; }
+    const v = vals?.[name];
+    return v === undefined ? NaN : v;
+  };
+
   // which particle each row is: the file and image index columns, for every flight
   const q = flights.map((_, k) => k);
   await Promise.all(Array.from({ length: Math.min(4, q.length) }, async () => {

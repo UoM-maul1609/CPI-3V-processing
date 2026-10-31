@@ -720,7 +720,7 @@ browser, not in the database.
 * **Scrolling a long grid** keeps only the pictures near what's on screen (a few
   hundred): pictures further away are let go, and fetched again from the browser's
   cache when you scroll back, so memory doesn't grow as you scroll through thousands.
-* **Memory in the browser** is roughly 60–70 bytes per particle loaded (it was
+* **Memory in the browser** is roughly 50–60 bytes per particle loaded (it was
   several hundred before converting): integer columns stay integers, older-format
   tables aren't kept twice, and looking particles up by id uses sorted arrays rather
   than a map entry per particle. Browsers give a tab a few GB at most, so very large
@@ -728,9 +728,10 @@ browser, not in the database.
 * **Only the measurements the page needs are downloaded up front:** which particle
   it is, its time, picture size and edge flag, and the measurements the filters use
   (the chosen size measure, width, aspect ratio, area ratio, focus, temperature,
-  altitude, and any filters you add): less than half the data. The rest
-  (shown in a particle's details, or exported) arrive one flight at a time, the first
-  time they're needed. Adding a filter or changing the size measure fetches just
+  altitude, and any filters you add): less than half the data. The rest (shown in
+  a particle's details, or exported) are read on the server for just those particles
+  (`api/?a=particle_rows`), so even a flight of millions never has them all downloaded.
+  Adding a filter or changing the size measure fetches just
   that column. This matters most away from campus (through an SSH tunnel or VPN).
 * **Flights imported before this** still work, but download every measurement.
   To convert them (no re-export needed, a few seconds per million particles), as

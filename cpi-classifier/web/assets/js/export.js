@@ -318,9 +318,10 @@ export function openExport(C) {
     const bar = progress.querySelector('i'), txt = progress.querySelector('span');
     const zip = new Zip();
     txt.textContent = 'Loading the measurements…';
-    await D.ensure(Object.keys(D.fields), [...new Set(gs.map((g) => D.fl[g]))]).catch(() => {});
+    let vals = new Map();
+    try { vals = await D.values(gs); } catch { /* the measurements not loaded come out blank */ }
     const fields = ['len', 'wid', 'deq', 'len_feret', 'shadow_deq', 'area', 'perimeter', 'aspect', 'area_ratio', 'round', 'orientation', 'focus', 'T_min', 'edge_touch', 'cutoff_pct', 'lat', 'lon', 'alt', 'temp', 'x0', 'y0', 'w', 'h']
-      .filter((f) => D.col[f]);
+      .filter((f) => D.col[f] || D.fields[f]);
     const rows = [['file', 'pid', 'source_id', 'flight', 'project', 'mat_file', 'index', 'class', 'flags', 'votes', 'time_utc', ...fields.map((f) => (D.fields[f]?.unit ? `${f}_${D.fields[f].unit.replace('µ', 'u').replace('²', '2').replace('°', 'deg').replace('%', 'pct')}` : f)), 'pixel_um', 'frame_clipped']];
     const used = new Set();
     let failed = 0;
@@ -342,7 +343,7 @@ export function openExport(C) {
         rows.push([name, pid, sourceId(D, g), F.id, F.meta.campaign || '', D.stem(g), D.roi[g], lab ? lab.id : '',
           o.scope === 'everyone' ? '' : (mine?.flags || []).join(';'),
           votes ? Object.entries(votes).map(([k, v]) => `${k}:${v}`).join(';') : '',
-          fmtTime(D.col.t[g], true), ...fields.map((f) => D.col[f][g]), D.pixel(g), o.scale === 'fixed' ? (clipped ? 1 : 0) : '']);
+          fmtTime(D.col.t[g], true), ...fields.map((f) => D.value(f, g, vals.get(g))), D.pixel(g), o.scale === 'fixed' ? (clipped ? 1 : 0) : '']);
       } catch { failed++; }
       if (i % 10 === 0 || i === gs.length - 1) {
         bar.style.width = ((i + 1) / gs.length * 100).toFixed(1) + '%';

@@ -19,6 +19,49 @@ case 'me':
          'allow_registration' => (bool)($c['allow_registration'] ?? false),
          'needs_code' => ($c['registration_code'] ?? '') !== '']);
 
+case 'particle_rows':
+    // Every measurement of a few particles of one flight, read straight from its column files
+    // (format 3), so the page needn't download whole columns to show one particle's details.
+    // {flight, rows: [row numbers within the flight]} -> {cols: {name: [value per row]}}
+    $b = require_post();
+    $fid = (string)($b['flight'] ?? '');
+    if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/', $fid)) fail(400, 'Bad flight id');
+    $rows = array_slice(array_map('intval', (array)($b['rows'] ?? [])), 0, 2000);
+    // the same folder the page reads its files from (web/data), else the configured one
+    $dd = is_dir(__DIR__ . '/../data/flights') ? __DIR__ . '/../data' : (string)(cfg()['data_dir'] ?? (__DIR__ . '/../data'));
+    $fdir = "$dd/flights/$fid";
+    $cat = is_file("$fdir/catalog.json") ? json_decode((string)file_get_contents("$fdir/catalog.json"), true) : null;
+    if (!$cat || empty($cat['colfiles'])) fail(404, 'No column files for that flight');
+    $n = (int)$cat['n'];
+    $fmt = ['u8' => ['C', 1], 'u16' => ['v', 2], 'u32' => ['V', 4], 'f32' => ['g', 4], 'f64' => ['e', 8], 'q16' => ['v', 2]];
+    $out = [];
+    foreach ($cat['colfiles']['cols'] as $name => $spec) {
+        [$t] = $spec;
+        if (!isset($fmt[$t]) || !preg_match('/^[A-Za-z0-9_]{1,64}$/', (string)$name)) continue;
+        [$code, $size] = $fmt[$t];
+        $fh = @fopen("$fdir/{$cat['colfiles']['dir']}/$name.bin", 'rb');
+        if (!$fh) continue;
+        $vals = [];
+        foreach ($rows as $r) {
+            if ($r < 0 || $r >= $n) { $vals[] = null; continue; }
+            fseek($fh, $r * $size);
+            $raw = fread($fh, $size);
+            if ($raw === false || strlen($raw) < $size) { $vals[] = null; continue; }
+            $v = unpack($code, $raw)[1];
+            if ($t === 'q16') {
+                $p = $spec[2];
+                $span = ((float)$p['hi'] - (float)$p['lo']) ?: 1.0;
+                $v = $v === 65535 ? null : ($p['m'] === 'log' ? ($v === 0 ? 0.0 : exp((float)$p['lo'] + ($v - 1) * $span / 65533)) : (float)$p['lo'] + $v * $span / 65534);
+            } elseif (is_float($v) && !is_finite($v)) {
+                $v = null;
+            }
+            $vals[] = $v;
+        }
+        fclose($fh);
+        $out[$name] = $vals;
+    }
+    out(['cols' => $out]);
+
 case 'scheme':
     header('Cache-Control: no-cache');
     out(['scheme' => scheme()]);

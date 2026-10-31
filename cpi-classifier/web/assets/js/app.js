@@ -1682,6 +1682,8 @@ function renderSingle(st) {
 }
 
 // ---------------------------------------------------------------- inspector
+let inspTimer = 0;
+const inspVals = new Map();     // g -> the particle's other measurements, fetched on demand
 const GROUPS = [['size', 'Size'], ['shape', 'Shape'], ['quality', 'Image quality'], ['position', 'Where and when'], ['instrument', 'Instrument']];
 function renderInspector(g) {
   const el = $('#inspector'); if (!el) return;
@@ -1693,18 +1695,27 @@ function renderInspector(g) {
   const pic = h('div', { class: 'single-pic' }, h('img', { src: D.img(g), alt: '', width: Math.round(w * sc), height: Math.round(hh * sc) }));
   if (S.outline) outlineFor(g).then((pts) => { const svg = outlineSvg(g, pts); if (svg) pic.append(svg); });
   const dl = h('dl', { class: 'kv' });
-  // the less-used measurements arrive for this particle's flight the first time it's looked at
-  const missing = Object.keys(D.fields).some((k) => !F.have.has(k) && k !== 't');
-  if (missing && F.cat?.colfiles) {
+  // the less-used measurements: fetched for just this particle (a flight can have millions)
+  const missing = F.cat?.colfiles && Object.keys(D.fields).some((k) => !F.have.has(k) && k !== 't');
+  const vals = missing ? inspVals.get(g) : null;
+  if (missing && !vals) {
     const myD = D;
-    D.ensure(Object.keys(D.fields), [D.fl[g]]).then((got) => { if (got && D === myD && (hoverG >= 0 ? hoverG : currentG()) === g) renderInspector(g); }).catch(() => {});
+    clearTimeout(inspTimer);
+    inspTimer = setTimeout(() => {
+      if (D !== myD || (hoverG >= 0 ? hoverG : currentG()) !== g) return;
+      D.values([g]).then((m) => {
+        if (!m.has(g)) return;
+        inspVals.set(g, m.get(g)); if (inspVals.size > 200) inspVals.delete(inspVals.keys().next().value);
+        if (D === myD && (hoverG >= 0 ? hoverG : currentG()) === g) renderInspector(g);
+      }).catch(() => {});
+    }, 120);
   }
   for (const [grp, title] of GROUPS) {
     const rows = [];
     if (grp === 'position') rows.push(['Date', fmtTime(D.col.t[g], true).slice(0, 10)], ['Time (UTC)', fmtTime(D.col.t[g])]);
     for (const [k, m] of Object.entries(D.fields)) {
       if (m.group !== grp || k === 't') continue;
-      const v = D.col[k]?.[g];
+      const v = D.value(k, g, vals);
       if (!Number.isFinite(v)) continue;
       let txt = k === 'edge_touch' ? (v ? 'yes' : 'no') : fmtNum(v, m.unit);
       if (k === 'lat' || k === 'lon') txt = v.toFixed(4) + '°';
