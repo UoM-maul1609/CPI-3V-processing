@@ -475,10 +475,25 @@ function projectRow(f, busy) {
 async function openProjectForm(folder, cfgId) {
   const { h } = C;
   let summary, cfg = {};
-  const slow = setTimeout(() => C.toast('Reading the particle catalogue… (a big one takes a minute the first time; after that it opens at once)', 120000), 600);
-  try { summary = (await C.api.adminGet('catsummary', { path: folder.dir })).summary; }
-  catch (e) { clearTimeout(slow); C.toast(e.message, 5000); return; }
-  clearTimeout(slow); document.getElementById('toast')?.classList.remove('show');
+  // a big catalogue is read in the background on the server; ask again until it's done
+  const wait = h('dialog', { class: 'dlg' }, h('div', { class: 'dlg-inner' },
+    h('h3', {}, 'Reading the particle catalogue…'),
+    h('p', { class: 'muted' }, 'A big one can take several minutes the first time; after that it opens at once. You can close this and carry on: it keeps going on the server, and opening the folder again picks it up.'),
+    h('p', { class: 'small', id: 'catwait' }, ''),
+    h('div', { class: 'row-end' }, h('button', { class: 'btn', onclick: () => wait.close() }, 'Close'))));
+  let shown = false;
+  const slow = setTimeout(() => { document.body.append(wait); wait.showModal(); shown = true; }, 600);
+  try {
+    for (;;) {
+      const r = await C.api.adminGet('catsummary', { path: folder.dir });
+      if (r.summary) { summary = r.summary; break; }
+      if (shown && !wait.open) { clearTimeout(slow); wait.remove(); return; }       // closed: leave it running
+      const el = wait.querySelector('#catwait');
+      if (el) el.textContent = `${Math.floor((r.seconds || 0) / 60)} min ${(r.seconds || 0) % 60} s so far` + (r.csv_bytes ? ` · catalogue file ${(r.csv_bytes / 1e9).toFixed(1)} GB` : '');
+      await new Promise((ok) => setTimeout(ok, 3000));
+    }
+  } catch (e) { clearTimeout(slow); wait.remove(); C.toast(e.message, 6000); return; }
+  clearTimeout(slow); if (wait.open) wait.close(); wait.remove();
   if (cfgId) { try { cfg = (await C.api.adminGet('flight_get', { id: cfgId })).config; } catch { cfg = {}; } }
   const inst = cfg.instrument || {};
   const chosen = new Set(cfg.groups || summary.groups.map((g) => g.key));

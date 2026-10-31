@@ -347,12 +347,31 @@ print(json.dumps(r))') . ' 2>&1'));
         $cacheFile = $cacheDir . '/catsummary-' . md5($p) . '.json';
         $cached = is_file($cacheFile) ? read_json_file($cacheFile) : null;
         if ($cached && ($cached['sig'] ?? null) === $sig && is_array($cached['summary'] ?? null)) out(['summary' => $cached['summary'], 'cached' => true]);
-        $code = 0;
-        $o = run_sync(['--catalogue-summary', $p], $code);
-        $j = json_decode(trim((string)substr($o, (int)strrpos("\n" . $o, "\n{"))), true);
-        if ($code !== 0 || !is_array($j)) fail(500, "Couldn't read the particle catalogue: " . $o);
-        write_json_file($cacheFile, ['sig' => $sig, 'summary' => $j]);
-        out(['summary' => $j]);
+        // Not read yet: read it in the background (a big catalogue can take many minutes) and let the
+        // page ask again. Never in this request: it would hold the session, and the whole site would
+        // hang for this person until it finished.
+        if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
+        $base = $cacheDir . '/catsummary-' . md5($p);
+        $run = read_json_file("$base.run.json");
+        $alive = $run && !empty($run['pid']) && file_exists('/proc/' . (int)$run['pid']);
+        if ($run && !$alive) {                                   // finished: pick up its answer
+            $o = (string)@file_get_contents("$base.out");
+            @unlink("$base.run.json");
+            $j = json_decode(trim((string)substr($o, (int)strrpos("\n" . $o, "\n{"))), true);
+            if (!is_array($j) || !isset($j['groups'])) fail(500, "Couldn't read the particle catalogue: " . mb_substr($o, -2000));
+            @unlink("$base.out");
+            write_json_file($cacheFile, ['sig' => $sig, 'summary' => $j]);
+            out(['summary' => $j]);
+        }
+        if (!$alive) {
+            if (!exec_available()) fail(500, 'The server can’t run the importer (shell_exec is disabled)');
+            $cmd = exporter_cmd(['--catalogue-summary', $p]) . ' > ' . escapeshellarg("$base.out") . ' 2>&1';
+            $pid = (int)trim((string)shell_exec('nohup sh -c ' . escapeshellarg($cmd) . ' > /dev/null 2>&1 & echo $!'));
+            $run = ['pid' => $pid, 'started' => time(), 'sig' => $sig];
+            write_json_file("$base.run.json", $run);
+        }
+        $size = is_file($csv) ? filesize($csv) : 0;
+        out(['working' => true, 'seconds' => time() - (int)($run['started'] ?? time()), 'csv_bytes' => $size]);
 
     case 'admin_save_project':
         // A pipeline export: {config, source_dir, mat_dir (relative to raw_root), groups: [keys], import, force}

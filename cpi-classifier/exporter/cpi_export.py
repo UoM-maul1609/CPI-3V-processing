@@ -782,8 +782,9 @@ def group_key(flight, date):
     return (flight or "").strip() or (date or "").strip() or "undated"
 
 
-def read_catalogue(project_dir, name=CATALOGUE_NAME):
-    """Rows of the pipeline catalogue that have a PNG, and a summary per group."""
+def read_catalogue(project_dir, name=CATALOGUE_NAME, keep_rows=True):
+    """Rows of the pipeline catalogue that have a PNG, and a summary per group.
+    keep_rows=False: just the summary (much less memory for a big catalogue)."""
     path = os.path.join(project_dir, name)
     if not os.path.exists(path):
         raise SystemExit(f"No {name} in {project_dir}")
@@ -799,7 +800,20 @@ def read_catalogue(project_dir, name=CATALOGUE_NAME):
             raise SystemExit(f"{name} has no png_relative_path column")
         ip, iflt, idate, imat, iroi, isid, iproj = (ix[k] for k in need)
         get = lambda r, i: r[i] if i is not None and i < len(r) else ""
-        for r in rd:
+
+        def lines():
+            # plain lines split on commas (fast); only lines with quotes go through the csv parser
+            for line in fh:
+                if '"' in line:
+                    while line.count('"') % 2:                # a quoted field running onto the next line
+                        more = fh.readline()
+                        if not more:
+                            break
+                        line += more
+                    yield next(csv.reader([line]))
+                else:
+                    yield line.rstrip("\r\n").split(",")
+        for r in lines():
             # most rows are particles that weren't exported (no PNG): skip them as cheaply as possible
             rel = r[ip].strip() if ip < len(r) else ""
             if not rel:
@@ -812,12 +826,15 @@ def read_catalogue(project_dir, name=CATALOGUE_NAME):
             g["n"] += 1
             mat = get(r, imat)
             g["mats"].add(mat)
-            rows.append((key, mat, int(get(r, iroi) or 0), rel, get(r, isid)))
+            if keep_rows:
+                rows.append((key, mat, int(get(r, iroi) or 0), rel, get(r, isid)))
+        if not keep_rows:
+            rows = range(sum(g["n"] for g in groups.values()))      # only its length is used
     return rows, groups
 
 
 def catalogue_summary(project_dir):
-    rows, groups = read_catalogue(project_dir)
+    rows, groups = read_catalogue(project_dir, keep_rows=False)
     out = []
     for g in sorted(groups.values(), key=lambda g: (g["date"], g["key"])):
         out.append({"key": g["key"], "flight": g["flight"], "date": g["date"], "n": g["n"], "mat_files": len(g["mats"])})
