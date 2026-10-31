@@ -1359,6 +1359,27 @@ function renderStage(keepScroll = false, count = 0) {
 
 // ---- grid
 let io = null;
+// Pictures far from the visible part of the grid are let go (their space is kept), and
+// fetched again (from the browser's cache) on the way back: scrolling through thousands
+// of particles would otherwise keep every decoded picture in memory, and Safari in
+// particular reloads the page when a tab uses too much.
+let farIo = null;
+function watchFar(st) {
+  farIo?.disconnect();
+  const scrolls = /(auto|scroll)/.test(getComputedStyle(st).overflowY);
+  farIo = new IntersectionObserver((ents) => {
+    for (const e of ents) {
+      const img = e.target.querySelector('img'); if (!img) continue;
+      if (e.isIntersecting) {
+        if (img.dataset.src) { img.src = img.dataset.src; delete img.dataset.src; }
+      } else if (!img.dataset.src && img.getAttribute('src')) {
+        if (!img.getAttribute('width')) { img.style.width = img.clientWidth + 'px'; img.style.height = img.clientHeight + 'px'; }
+        img.dataset.src = img.getAttribute('src');
+        img.removeAttribute('src');
+      }
+    }
+  }, { root: scrolls ? st : null, rootMargin: '3000px 0px' });
+}
 function renderGrid(st, count) {
   if (!lsGet('cpi.welcomed', false)) {
     const card = h('div', { class: 'welcome' },
@@ -1381,6 +1402,7 @@ function renderGrid(st, count) {
   const more = h('div', { class: 'more', id: 'more' });
   st.append(more);
   shown = 0;
+  watchFar(st);
   appendTiles(Math.min(count, order.length));
   io?.disconnect();
   // root: the viewport, so it works whether the image area or the whole page scrolls
@@ -1392,7 +1414,7 @@ function appendTiles(k) {
   const end = Math.min(order.length, shown + k);
   const frag = document.createDocumentFragment();
   const maxW = Math.max(200, ($('#stage').clientWidth || 800) - 60);
-  for (let pos = shown; pos < end; pos++) frag.append(tileEl(pos, maxW));
+  for (let pos = shown; pos < end; pos++) { const t = tileEl(pos, maxW); frag.append(t); farIo?.observe(t); }
   grid.append(frag);
   shown = end;
   const more = $('#more');

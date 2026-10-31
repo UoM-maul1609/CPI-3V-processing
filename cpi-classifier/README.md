@@ -717,6 +717,9 @@ browser, not in the database.
   to 3 mm, 15 cm over 10 km of altitude). That is far finer than the images they're
   measured from, at half the size of 32-bit floats. The browser reads them straight
   into memory, which is many times quicker than a JSON table for millions of particles.
+* **Scrolling a long grid** keeps only the pictures near what's on screen (a few
+  hundred): pictures further away are let go, and fetched again from the browser's
+  cache when you scroll back, so memory doesn't grow as you scroll through thousands.
 * **Memory in the browser** is roughly 60–70 bytes per particle loaded (it was
   several hundred before converting): integer columns stay integers, older-format
   tables aren't kept twice, and looking particles up by id uses sorted arrays rather
