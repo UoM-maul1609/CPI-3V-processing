@@ -85,9 +85,11 @@ class BackgroundBank:
         if full is None or full.size == 0:
             return
         try:
-            self.times = np.asarray(full["Time"][0, 0][:, 0], float)
+            self.times = np.asarray(full["Time"][0, 0], float).ravel()
             images = full[0, 0]["IMAGE"][0, :]
             self.frames = [np.asarray(images[j][0, 0]["BG"]) for j in range(len(self.times))]
+            if len(self.frames) != len(self.times):
+                raise ValueError("Background time/image count mismatch")
         except (IndexError, KeyError, ValueError, TypeError):
             self.times, self.frames = np.zeros(0), []
         if len(self.frames):                    # only the backgrounds selected for use (if a selection is in force)
