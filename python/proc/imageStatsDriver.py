@@ -62,10 +62,20 @@ def imageStatsDriver(
     nworkers = min(max(1, int(num_cores)), len(filenames))
     active: dict[int, _Job] = {}
     failures: list[tuple[str, int]] = []
+    deferred: list[_Job] = []   # failed once: retried on their own, once the others are done
     next_file = 0
 
     try:
-        while next_file < len(filenames) or active:
+        while next_file < len(filenames) or active or deferred:
+            # Retry failed files one at a time when nothing else is running: a worker
+            # killed for running out of memory (exit -9) usually succeeds on its own.
+            if next_file >= len(filenames) and not active and deferred:
+                job = deferred.pop(0)
+                retry = job.retries + 1
+                print(f"{job.filename}: retrying on its own ({retry}/{max_retries})", flush=True)
+                command = _worker_command(path1, job.filename, find_particle_edges, cpiv1, 0, edge_options)
+                active[0] = _Job(subprocess.Popen(command), job.filename, job.file_index, retries=retry)
+                continue
             # Fill free worker slots.
             for slot in range(nworkers):
                 if next_file >= len(filenames):
@@ -95,20 +105,11 @@ def imageStatsDriver(
                     continue
 
                 if job.retries < max_retries:
-                    retry = job.retries + 1
-                    print(
-                        f"{job.filename} failed with exit code {returncode}; "
-                        f"retrying ({retry}/{max_retries})"
-                    )
-                    command = _worker_command(
-                        path1, job.filename, find_particle_edges, cpiv1, slot, edge_options
-                    )
-                    active[slot] = _Job(
-                        subprocess.Popen(command),
-                        job.filename,
-                        job.file_index,
-                        retries=retry,
-                    )
+                    why = " (killed: probably out of memory)" if returncode in (-9, 137) else ""
+                    print(f"{job.filename} failed with exit code {returncode}{why}; "
+                          f"will retry it on its own at the end", flush=True)
+                    deferred.append(job)
+                    del active[slot]
                 else:
                     failures.append((job.filename, returncode))
                     del active[slot]
