@@ -136,6 +136,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--only-stats", action="store_true",
                         help="only redo particle statistics on already-converted MAT files "
                              "(run it on a copy of a processed directory to compare edge methods)")
+    parser.add_argument("--resume", choices=("images",),
+                        help="images: skip the ROI conversion and particle statistics (already done, e.g. "
+                             "after a run stopped later on) and go straight to the images and time series")
     parser.add_argument("--no-images", action="store_true",
                         help="skip exporting particle images (the slow PNG/montage step)")
     parser.add_argument("--no-timeseries", action="store_true", help="skip the concentration time series")
@@ -182,7 +185,8 @@ def _assign_backgrounds(path1: str, mat_files, use_v1: bool) -> None:
 
 def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = False,
              cpi_v1: bool = None, images: bool = None, timeseries: bool = None,
-             backgrounds: str = None, max_cutoff: float = None, grayscale: bool = False, background_level: float = 180.) -> None:
+             backgrounds: str = None, max_cutoff: float = None, grayscale: bool = False, background_level: float = 180.,
+             resume_images: bool = False) -> None:
     edge = dict(edge_options, **(edge or {}))
     if classifier:
         raise NotImplementedError("Auto instrument profiles are not yet supported by the classifier timeseries path")
@@ -206,7 +210,29 @@ def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = F
             raise FileNotFoundError(f"No .roi files found in {path1}")
         filename1 = roi_files
 
-    if only_stats:
+    if resume_images:
+        # conversion and particle statistics already done: check every MAT has them
+        import scipy.io as sio
+        report_file = os.path.join(path1, "cpi_processing_report.json")
+        if os.path.exists(report_file):
+            with open(report_file) as f:
+                ok = set(json.load(f).get("sweep2_ok", []))
+            filename1 = [f for f in filename1 if f in ok]
+        missing = []
+        for f in filename1:
+            mat = os.path.join(path1, f.replace(".roi", ".mat"))
+            try:
+                if "dat" not in {v[0] for v in sio.whosmat(mat)}:
+                    missing.append(f)
+            except Exception:
+                missing.append(f)
+        if missing:
+            raise RuntimeError(
+                f"--resume images: {len(missing)} file(s) have no particle statistics yet: "
+                + ", ".join(missing[:10]) + (" ..." if len(missing) > 10 else "")
+                + ". Move them (the .roi and .mat) out of the folder, or run without --resume.")
+        print(f"Resuming at the images with {len(filename1)} processed files", flush=True)
+    elif only_stats:
         if backgrounds:
             _background_selection(path1, backgrounds)
             _assign_backgrounds(path1, filename1, use_v1)
@@ -224,7 +250,7 @@ def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = F
             _run_script("ROIDataDriver.py", "driver", path1, dt, process_sweep1_if_exist, use_v1, "2")
 
     # CPI_SKIP_FAILED_V1: only send successfully converted files downstream.
-    if not only_stats and process_roi_driver:
+    if not only_stats and not resume_images and process_roi_driver:
         report_file = os.path.join(path1, "cpi_processing_report.json")
         if not os.path.exists(report_file):
             raise RuntimeError("Conversion report missing; refusing to use potentially stale MAT files")
@@ -237,7 +263,7 @@ def run_jobs(path1: str, cores: int = num_cores, edge=None, only_stats: bool = F
         if not filename1:
             raise RuntimeError("No ROI files converted successfully; stopping further processing")
 
-    if process_image_stats:
+    if process_image_stats and not resume_images:
         # This driver is intentionally lightweight; each file is still handled
         # by a separate subprocess, up to --cores concurrently.
         from imageStatsDriver import imageStatsDriver
@@ -354,7 +380,7 @@ if __name__ == "__main__":
     run_jobs(args.path, args.cores, edge=edge, only_stats=args.only_stats, cpi_v1=None,
              images=False if args.no_images else None, timeseries=False if args.no_timeseries else None,
              backgrounds=args.backgrounds, max_cutoff=args.max_cutoff, grayscale=args.grayscale,
-             background_level=args.background_level)
+             background_level=args.background_level, resume_images=args.resume == "images")
 
     if args.export_png and not args.only_stats:
         from exportParticles import export
