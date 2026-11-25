@@ -39,6 +39,14 @@ def atomic_savemat(filename, mapping, **kwargs):
     os.close(fd)
     try:
         sio.savemat(tmp, mapping, appendmat=False, **kwargs)
+        # mkstemp makes the file private (0600): give it the permissions of the file it
+        # replaces, or the usual ones for a new file, so the web server can still read it
+        try:
+            mode = os.stat(filename).st_mode & 0o7777
+        except FileNotFoundError:
+            umask = os.umask(0); os.umask(umask)
+            mode = 0o666 & ~umask
+        os.chmod(tmp, mode)
         os.replace(tmp, filename)
     finally:
         if os.path.exists(tmp):

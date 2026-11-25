@@ -47,7 +47,19 @@ def _worker(path1, foc_crit, min_len, cpiv1, classifier, classifierFile, minClas
     from exportImages import exportImages
 
     path1 = normalise_directory(path1)
-    filenames = sorted(f for f in os.listdir(path1) if f.endswith(".roi"))
+    filenames = []
+    for f in sorted(f for f in os.listdir(path1) if f.endswith(".roi")):
+        # only files that were converted and have particle statistics (a ROI file that
+        # failed conversion has no MAT; one with no particles may have no 'dat')
+        mat = os.path.join(path1, f[:-4] + ".mat")
+        try:
+            ok = "dat" in {v[0] for v in sio.whosmat(mat)}
+        except (OSError, ValueError):
+            ok = False
+        if ok:
+            filenames.append(f)
+        else:
+            print(f"WARNING: skipping {f}: no processed MAT file with particle statistics", flush=True)
     cmap_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cmap.mat")
     MAP2 = sio.loadmat(cmap_file, variable_names=["MAP2"])["MAP2"]
 
