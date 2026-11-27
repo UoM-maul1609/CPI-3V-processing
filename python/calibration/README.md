@@ -113,6 +113,7 @@ When stage positions load, the X axis of the focus/size plots switches to
     others.
   * To fit several projects together you don't need them open: use
     Calibration ▸ Fit … from several projects (section 12).
+* **Picking projects from several folders.** Merge, Export several projects' particles, Compare processing runs and Fit … from several projects all ask *"Add project JSON files from another folder?"* after each pick: choose **Yes** to add projects from another folder, **No** to go ahead with those selected.
 * **File ▸ Merge projects into a viewing copy…** makes one new project
   containing everything from two or more projects, for looking at several
   runs together (e.g. focus against d across days). The originals are not

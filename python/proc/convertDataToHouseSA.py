@@ -18,14 +18,19 @@ def convertDataToHouseSA(bytes1, ushort, order, house, cpiv1):
         # CPIView HKver20 has an 11-word header and 38 readings (98 bytes).
         # HKver25 has 13 header words and 40 readings (106 bytes).
         # CPIv1 A1D7 version 30 has 13 header words and 40 readings (106 bytes).
+        # CPI 2.0 (2009) A1D8 version 31 has the same 13-word header (time in
+        # words 11-12) and 49 readings (124 bytes). CPIview reads it with the
+        # version-30 struct (Readings[31] = dead-time count); postProcess picks
+        # the dead-time clock from the image frame-header version (40 = CPI II).
         layouts = {20: {98: (11, 38)}, 25: {106: (13, 40)},
-                   30: {106: (13, 40), 118: (13, 46)}}
+                   30: {106: (13, 40), 118: (13, 46)},
+                   31: {124: (13, 49)}}
         dtype = [
             ('BlockNum', 'uint16'), ('ulItemSize', 'uint32'),
             ('usVersion', 'uint16'), ('ulXtraData', 'uint32'),
             ('bNewData', 'uint16'), ('usChkSumFlag', 'uint16'),
             ('TopReadings', '(3,1)uint16'), ('Time', 'uint32'),
-            ('Readings', '(46,1)uint16'), ('nReadings', 'uint16'),
+            ('Readings', '(49,1)uint16'), ('nReadings', 'uint16'),
             ('order', 'uint32'),
         ]
         records = []

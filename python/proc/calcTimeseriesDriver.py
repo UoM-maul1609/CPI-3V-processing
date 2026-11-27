@@ -135,21 +135,38 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
         # time base, so this path is vectorized.  Retain the legacy interpolation
         # for the older clock representation.
         hk_format = str(np.asarray(HOUSE['format'][0, 0]).ravel()[0]).strip() if 'format' in _field_names(HOUSE) else ('legacy' if cpiv1 else '3v83')
-        if hk_format == 'legacy':
+        # Housekeeping can be absent from a file (e.g. a short file that ended before the first
+        # housekeeping packet): its Time/deadtime arrays are then empty (0 x 0). Read them flat so an
+        # empty table gives an empty array, and skip that file's dead time with a warning instead of
+        # failing the whole time series.
+        _ht = np.asarray(HOUSE["Time"][0, 0], dtype=float)
+        _hd = np.asarray(HOUSE["deadtime"][0, 0], dtype=float)
+        # Same elements as the original [0, :] (times, a row) and [:, 0] (dead times, a column).
+        house_time_raw = _ht[0, :] if _ht.ndim == 2 and _ht.shape[0] else np.ravel(_ht)
+        house_dead_raw = _hd[:, 0] if _hd.ndim == 2 and _hd.shape[1] else np.ravel(_hd)
+        if house_time_raw.size == 0 or house_dead_raw.size != house_time_raw.size:
+            print(f"WARNING: {filename}: no usable housekeeping "
+                  f"({house_time_raw.size} times, {house_dead_raw.size} dead times); dead time taken as 0 "
+                  "for its time windows", flush=True)
+            hk_format = 'none'
+        if hk_format == 'none':
+            pass
+        elif hk_format == 'legacy':
             if image_times.size:
-                house_raw = np.asarray(HOUSE["Time"][0, 0][0, :], dtype=float)
+                house_raw = house_time_raw
                 house_time = (
                     house_raw / 86400.0
                     - np.floor(house_raw / 86400.0)
                     + np.floor(image_times[0])
                 )
-                deadtime = np.asarray(HOUSE["deadtime"][0, 0][:, 0], dtype=float)
+                deadtime = house_dead_raw
                 dead_hist, _ = np.histogram(
                     house_time, bins=time_edges, weights=deadtime
                 )
                 timeser["deadtimes"][:, 0] += dead_hist
         else:
-            image_clock = np.asarray(IMAGE1["Time"][0, 0][0, :], dtype=float)
+            _ic = np.asarray(IMAGE1["Time"][0, 0], dtype=float)
+            image_clock = _ic[0, :] if _ic.ndim == 2 and _ic.shape[0] else np.ravel(_ic)
             if image_times.size >= 2 and image_clock.size >= 2:
                 clock_map = interp1d(
                     image_times,
@@ -157,8 +174,8 @@ def calcTimeseriesDriver(path1, filename1, foc_crit, dt, ds, vel, outputfile, cp
                     kind="linear",
                     fill_value="extrapolate",
                 )
-                house_time = np.asarray(HOUSE["Time"][0, 0][0, :], dtype=float)
-                house_dead = np.asarray(HOUSE["deadtime"][0, 0][:, 0], dtype=float)
+                house_time = house_time_raw
+                house_dead = house_dead_raw
                 for j in range(nt):
                     twin = clock_map(time_edges[j : j + 2])
                     in_window = (house_time >= twin[0]) & (house_time < twin[1])

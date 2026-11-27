@@ -6379,20 +6379,21 @@ class CalibrationWindow(QMainWindow):
         self._sizing_dialog = dialog
         return dialog
 
-    def fit_from_projects_dialog(self):
-        """Collect project JSON files from any number of directories before fitting.
+    def _pick_project_files(self, title, finish_label, minimum=1):
+        """Collect project JSON files from any number of folders.
 
-        Qt's multi-file picker normally selects files from only one directory.
-        Keep the full paths, so each project's particle-position table is
-        resolved beside its own JSON rather than beside the active project.
+        Qt's multi-file picker selects files from only one folder, so keep
+        asking "Add project JSON files from another folder?" until the user
+        says No (done) or Cancel. Returns full, resolved paths in the order
+        picked (duplicates dropped), or None when cancelled. With fewer than
+        ``minimum`` projects at "No", explains and keeps asking.
         """
         files = []
         seen = set()
         folder = str(self.project_file.parent) if self.project_file else ""
         while True:
             chosen, _ = QFileDialog.getOpenFileNames(
-                self, "Add calibration projects (select files in this folder)",
-                folder, "Project JSON (*.json)")
+                self, f"{title} (select files in this folder)", folder, "Project JSON (*.json)")
             for filename in chosen:
                 path = Path(filename).expanduser().resolve()
                 if path not in seen:
@@ -6403,18 +6404,33 @@ class CalibrationWindow(QMainWindow):
             if not files:
                 return None  # Cancel on the first picker.
             response = QMessageBox.question(
-                self, "Fit from multiple folders",
-                f"{len(files)} distinct calibration project(s) selected.\n\n"
-                "Add project JSON files from another folder?\n\n"
-                "Yes: choose more files.  No: fit the selected projects.\n"
-                "Cancel: stop without fitting.",
+                self, title,
+                f"{len(files)} distinct project(s) selected:\n"
+                + "\n".join(f"  {Path(f).parent.name}/{Path(f).name}" for f in files[-8:])
+                + ("\n  …" if len(files) > 8 else "")
+                + "\n\nAdd project JSON files from another folder?\n\n"
+                f"Yes: choose more files.  No: {finish_label}.\nCancel: stop.",
                 QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
                 QMessageBox.No,
             )
             if response == QMessageBox.No:
-                return self.fit_from_projects(files)
+                if len(files) >= minimum:
+                    return files
+                QMessageBox.information(self, title, f"Pick at least {minimum} projects.")
+                continue
             if response != QMessageBox.Yes:
                 return None
+
+    def fit_from_projects_dialog(self):
+        """Collect project JSON files from any number of directories before fitting.
+
+        Keep the full paths, so each project's particle-position table is
+        resolved beside its own JSON rather than beside the active project.
+        """
+        files = self._pick_project_files("Fit from multiple folders", "fit the selected projects")
+        if files is None:
+            return None
+        return self.fit_from_projects(files)
 
     def fit_from_projects(self, files, confirm=True):
         """Fit from the projects' saved particle tables, read live (no copies), recording which were used."""
@@ -6607,12 +6623,8 @@ class CalibrationWindow(QMainWindow):
         self._after_change()
 
     def compare_processing_dialog(self):
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "Projects to compare (the same particles processed different ways)",
-            str(self.project_file.parent) if self.project_file else "", "Project JSON (*.json)")
-        if len(files) < 2:
-            if files:
-                QMessageBox.information(self, "Compare processing runs", "Pick two or more projects.")
+        files = self._pick_project_files("Compare processing runs", "compare the selected projects", minimum=2)
+        if not files:
             return None
         if self.project_file is not None and str(self.project_file.resolve()) in {str(Path(f).resolve()) for f in files}:
             self.save_project()
@@ -6638,13 +6650,8 @@ class CalibrationWindow(QMainWindow):
         return text
 
     def merge_projects_dialog(self):
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "Projects to merge (pick two or more)", str(self.project_file.parent) if self.project_file else "",
-            "Project JSON (*.json)")
+        files = self._pick_project_files("Merge projects", "merge the selected projects", minimum=2)
         if not files:
-            return
-        if len(files) < 2:
-            QMessageBox.information(self, "Merge projects", "Pick at least two projects (Ctrl/⌘-click).")
             return
         start = str(Path(files[0]).with_name("merged_calibration_project.json"))
         output, _ = QFileDialog.getSaveFileName(self, "Merged project (a new file; the originals are not changed)",
@@ -6776,8 +6783,7 @@ class CalibrationWindow(QMainWindow):
         return notes
 
     def combine_projects_dialog(self):
-        files, _ = QFileDialog.getOpenFileNames(self, "Projects to combine", str(self.project_file.parent)
-                                                if self.project_file else "", "Project JSON (*.json)")
+        files = self._pick_project_files("Projects to combine", "export the selected projects")
         if not files:
             return
         output, _ = QFileDialog.getSaveFileName(self, "Combined particle table", "combined_particle_positions.csv",

@@ -7,7 +7,8 @@ per ROI file to preserve the existing homogeneous H dtype.
 import numpy as np
 
 _LEGACY_MARKERS = (0xA1D6, 0xA2D6, 0xA1D7, 0xA1D8)
-_LEGACY_LAYOUT = {20: (98,), 25: (106,), 30: (106, 118)}
+# Version 31 (124 bytes) is the A1D8 packet written by the CPI 2.0 in 2009.
+_LEGACY_LAYOUT = {20: (98,), 25: (106,), 30: (106, 118), 31: (124,)}
 
 
 def detect_housekeeping(words, order):

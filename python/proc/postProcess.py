@@ -66,7 +66,16 @@ def postProcess(bytes1,rois,R,H,I,Header,cpiv1,housekeeping_legacy=None):
         # housekeeping packet times
         HOUSE={'Time' : H['Time'] }
         Rdgs=H['Readings']
-        HOUSE['deadtime']=Rdgs[:,31]*0.000682667
+        # SPEC CPIview (SpecIO/scanspec.pro, read_HTime.pro): dead time is
+        # Readings[31] x scaleFactor. The counting clock is twice as fast on the
+        # CPI II, whose image frames carry frame-header version 40:
+        # 0.000341333 s/count (full scale 2928 counts = 1 s) instead of
+        # 0.000682667 s/count (1464 counts = 1 s). SPEC caps the count at full scale.
+        frame_ver = np.asarray(I['usVersion']) if len(I) else np.array([])
+        cpi2 = frame_ver.size > 0 and np.count_nonzero(frame_ver == 40) > frame_ver.size // 2
+        scale = 0.000341333 if cpi2 else 0.000682667
+        full_scale = 2928 if cpi2 else 1464
+        HOUSE['deadtime'] = np.minimum(Rdgs[:, 31].astype(float), full_scale) * scale
         HOUSE['format'] = 'legacy'
         
     #--------------------------------------------------------------------------
